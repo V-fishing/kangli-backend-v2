@@ -1,0 +1,47 @@
+# 开发环境基础设施:PostgreSQL 16 + Redis 7.2 + MinIO
+# 用法:docker compose up -d  (停:docker compose down)
+services:
+  postgres:
+    image: postgres:16
+    container_name: qms-postgres
+    environment:
+      POSTGRES_DB: qms
+      POSTGRES_USER: qms
+      POSTGRES_PASSWORD: qms
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - qms-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qms -d qms"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2
+    container_name: qms-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - qms-redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+  minio:
+    image: minio/minio:latest
+    container_name: qms-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API(前端 VITE_OSS_BASE 指向此)
+      - "9001:9001"   # 控制台
+    volumes:
+      - qms-minio-data:/data
+    command: server /data --console-address ":9001"
+
+volumes:
+  qms-pg-data:
+  qms-redis-data:
+  qms-minio-data:

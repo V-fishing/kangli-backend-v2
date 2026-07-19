@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.konli.qms</groupId>
+        <artifactId>qms-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>qms-service</artifactId>
+    <name>QMS Service</name>
+    <description>业务逻辑层:Service / impl / dto(com.konli.qms.service.{module})</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.konli.qms</groupId>
+            <artifactId>qms-domain</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- openhtmltopdf:归档报告 PDF 生成(FiaTaskServiceImpl.archive) -->
+        <dependency>
+            <groupId>com.openhtmltopdf</groupId>
+            <artifactId>openhtmltopdf-pdfbox</artifactId>
+        </dependency>
+    </dependencies>
+</project>

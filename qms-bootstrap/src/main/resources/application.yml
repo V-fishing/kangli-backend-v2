@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: konli-qms
+  profiles:
+    active: dev
+  jackson:
+    default-property-inclusion: non_null
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+# MyBatis-Plus(按代码规范文档:snake_case 列 <-> camelCase 字段,逻辑删除 is_deleted)
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 'true'
+      logic-not-delete-value: 'false'
+
+# API 文档(springdoc-openapi 2.6)
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+# 健康检查
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+# JWT(代码规范:自建账号 + JWT;生产 secret 由环境变量注入)
+qms:
+  jwt:
+    secret: konli-qms-dev-secret-change-me-please-at-least-32-bytes
+    expiry: 28800   # 秒,8 小时(避免使用中因 30 分钟过期被强制退出)

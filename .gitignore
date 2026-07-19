@@ -1,0 +1,34 @@
+# ---------- Maven / Spring Boot 构建产物 ----------
+target/
+**/target/
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+
+# Maven 编译状态文件
+**/maven-status/
+
+# ---------- 日志 ----------
+*.log
+logs/
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+*.swp
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+
+# ---------- 本地覆盖配置(可选保留) ----------
+# *.local.yml
+# application-local.yml

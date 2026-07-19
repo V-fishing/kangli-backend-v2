@@ -1,0 +1,35 @@
+# 开发环境配置
+# 数据库/缓存/对象存储由 docker-compose.yml 一键起(docker compose up -d)
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/qms?stringtype=unspecified
+    username: qms
+    password: qms
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # 空壳冒烟:不连库也能启动;stage-1 建库后可改回默认(删除此行)
+      initialization-fail-timeout: -1
+      maximum-pool-size: 10
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+  flyway:
+    enabled: true                       # stage-1:已生成 V01 地基迁移
+    locations: classpath:db/migration
+    default-schema: ops
+    schemas: ops
+    baseline-on-migrate: true
+
+# MinIO 对象存储(stage 后用;前端 .env 已指向 localhost:9000)
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket: qms
+
+logging:
+  level:
+    com.konli.qms: debug
+    org.springframework: info
