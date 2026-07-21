@@ -1,18 +1,25 @@
 # ---------- Maven / Spring Boot 构建产物 ----------
 target/
 **/target/
+build/
+out/
 *.class
 *.jar
 *.war
 *.ear
 *.zip
+# Spring Boot 重新打包时生成的原始 jar 备份
+*.original
 
 # Maven 编译状态文件
 **/maven-status/
+# Maven 包装器下载的临时文件(保留 mvnw / mvnw.cmd,忽略 jar 缓存)
+.mvn/wrapper/maven-wrapper.jar
 
 # ---------- 日志 ----------
 *.log
 logs/
+**/logs/
 
 # ---------- IDE ----------
 .idea/
@@ -24,11 +31,27 @@ logs/
 .classpath
 .settings/
 *.swp
+*.swo
+nbproject/
+nbactions.xml
+nb-configuration.xml
 
 # ---------- 操作系统 ----------
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# ---------- 本地覆盖配置(可选保留) ----------
-# *.local.yml
+# ---------- 运行时 / 临时 ----------
+*.pid
+*.bak
+*.tmp
+*.cache
+
+# ---------- 本地覆盖配置(按需启用) ----------
 # application-local.yml
+# application-*-local.yml
+# *.local.yml
+
+# ---------- 前端构建产物(若前后端同仓时忽略) ----------
+# dist/
+# node_modules/
