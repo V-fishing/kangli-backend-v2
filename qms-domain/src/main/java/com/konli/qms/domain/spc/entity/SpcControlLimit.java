@@ -57,6 +57,10 @@ public class SpcControlLimit {
     @TableField("calc_at")
     private LocalDateTime calcAt;
 
+    /** 是否人工覆盖:true 时该基线优先级高于自动计算,控制图直接采用其 UCL/CL/LCL。 */
+    @TableField("manual")
+    private Boolean manual;
+
     @TableField("is_active")
     private Boolean isActive;
 }

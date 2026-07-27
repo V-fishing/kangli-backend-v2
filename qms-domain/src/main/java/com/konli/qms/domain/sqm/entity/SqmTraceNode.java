@@ -25,6 +25,12 @@ public class SqmTraceNode extends BaseEntity {
     @TableField("root_lot_id")
     private String rootLotId;
 
+    @TableField("root_node_id")
+    private String rootNodeId;            // 所属树的树根节点(无来料批次时以此聚合整棵树)
+
+    @TableField("qualification_type")
+    private String qualificationType;     // 合格 / 资格直通 / 常规
+
     @TableField("parent_node_id")
     private String parentNodeId;
 
@@ -36,6 +42,9 @@ public class SqmTraceNode extends BaseEntity {
 
     @TableField("batch_no")
     private String batchNo;
+
+    @TableField("material_code")
+    private String materialCode;          // 物料号(与 batch_no 组成物料条码; 按物料号正向/召回追溯 Q3 用)
 
     private BigDecimal qty;               // NUMERIC(14,2)
 
@@ -54,6 +63,10 @@ public class SqmTraceNode extends BaseEntity {
 
     @TableField("is_valid")
     private String isValid;               // 是/否
+
+    /** 供应商名称(仅展示用，不存表) */
+    @TableField(exist = false)
+    private String supplierName;
 
     @TableField("invalid_by")
     private String invalidBy;

@@ -20,9 +20,18 @@ public interface NcmDefectRecordService {
     /** 趋势报表:按 day/week/month 聚合,返回 [{period, count, defectRate}] */
     List<Map<String, Object>> trendAnalysis(String granularity, String startTime, String endTime);
 
-    /** 环比同比:period=YYYY-MM,返回 {current, previous, yoy, mom, changeRate} */
-    Map<String, Object> compareAnalysis(String period);
+    /** 环比同比:period=YYYY-MM,type∈{week,month,year,mtd};返回不良率% {current, previous, yoy, curLabel, prevLabel, yoyLabel, unit, mom, changeRate} */
+    Map<String, Object> compareAnalysis(String period, String type);
 
-    /** 实时看板:今日不良数/当前班次不良率/Top5 不良类型/工序热力图/数据新鲜度 */
+    /** 实时看板:今日不良数/当前班次不良率/PPM/Top5 不良类型/工序热力图/数据新鲜度 */
     Map<String, Object> dashboard();
+
+    /** 趋势异常检测(SR-NCM-017):连续5天defectRate上升->写ncm_trend_alert+通知。返回{anomaly,consecutiveIncr,trendPoints} */
+    Map<String, Object> checkTrendAnomaly();
+
+    /** 不良记录一键发起8D(SR-NCM处置决策):创建8D单,source=不良记录。返回8D记录 */
+    Object launch8dFromDefect(String defectId);
+
+    /** 不良记录一键发起CAPA(SR-NCM处置决策):创建CAPA单。返回CAPA记录 */
+    Object launchCapaFromDefect(String defectId);
 }

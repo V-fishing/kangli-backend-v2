@@ -35,6 +35,10 @@ public class SqmAuditPlan extends BaseEntity {
     @TableField("auditor_team")
     private String auditorTeam;
 
+    /** 实际参与审核人(会签执行人),签字后由后端同步,用于「审核组栏」反映真实参与人 */
+    @TableField("actual_auditors")
+    private String actualAuditors;
+
     private String scope;
 
     @TableField("risk_level")
@@ -47,4 +51,12 @@ public class SqmAuditPlan extends BaseEntity {
 
     @TableField("record_id")
     private String recordId;
+
+    /** JSONB -> String 映射(不加 typeHandler),存放各审核类型特有字段。 */
+    @TableField("ext_json")
+    private String extJson;
+
+    /** 来源变更单 id(仅「物料变更审核」类型由变更单提交联动生成时填充,用于双向追溯)。 */
+    @TableField("change_id")
+    private String changeId;
 }

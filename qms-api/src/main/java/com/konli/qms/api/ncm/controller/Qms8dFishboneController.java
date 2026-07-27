@@ -46,7 +46,7 @@ public class Qms8dFishboneController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('ncm.8d.create')")
+    @PreAuthorize("hasAuthority('ncm.8d.delete')")
     public R<Void> delete(@PathVariable String id) {
         qms8dFishboneService.delete(id);
         return R.ok();

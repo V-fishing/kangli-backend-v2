@@ -11,8 +11,7 @@ import java.util.List;
 @Data
 public class CreateSubgroupRequest {
 
-    @NotBlank
-    private String orgId;          // 所属公司
+    private String orgId;          // 所属公司(可选,未传则由后端从登录上下文注入)
 
     @NotBlank
     private String paramId;        // SPC 参数 ID

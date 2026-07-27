@@ -1,6 +1,7 @@
 package com.konli.qms.api.uop.controller;
 
 import com.konli.qms.common.api.R;
+import com.konli.qms.domain.uop.entity.SysButton;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.service.uop.RoleService;
@@ -30,14 +31,14 @@ public class RoleController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('system.role.list')")
+    @PreAuthorize("hasAuthority('system.role.create')")
     public R<Void> save(@RequestBody SysRole role) {
         roleService.save(role);
         return R.ok();
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('system.role.list')")
+    @PreAuthorize("hasAuthority('system.role.delete')")
     public R<Void> delete(@PathVariable String id) {
         roleService.delete(id);
         return R.ok();
@@ -55,6 +56,30 @@ public class RoleController {
     public R<Void> assignButtons(@PathVariable String id, @RequestBody List<String> buttonIds) {
         roleService.assignButtons(id, buttonIds);
         return R.ok();
+    }
+
+    @GetMapping("/buttons")
+    @PreAuthorize("hasAuthority('system.role.list')")
+    public R<List<SysButton>> buttons() {
+        return R.ok(roleService.listButtons());
+    }
+
+    @GetMapping("/{id}/buttons")
+    @PreAuthorize("hasAuthority('system.role.list')")
+    public R<List<SysButton>> roleButtons(@PathVariable String id) {
+        return R.ok(roleService.roleButtons(id));
+    }
+
+    @GetMapping("/{id}/menus")
+    @PreAuthorize("hasAuthority('system.role.list')")
+    public R<List<String>> roleMenus(@PathVariable String id) {
+        return R.ok(roleService.roleMenus(id));
+    }
+
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('system.role.list')")
+    public R<SysRole> getById(@PathVariable String id) {
+        return R.ok(roleService.getById(id));
     }
 
     @PostMapping("/{id}/users")

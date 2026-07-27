@@ -47,6 +47,12 @@ public class DataScopeInterceptor implements InnerInterceptor {
     private final JdbcTemplate jdbcTemplate;
     private volatile Set<String> orgIdTables;
 
+    /**
+     * 全局配置表(org_id 为 NULL 表示全公司共享,不按分公司过滤)。
+     * 如 SPC 判异规则(spc_rule)、系统枚举字典(sys_dict) 等参考/主数据。
+     */
+    private static final Set<String> GLOBAL_TABLES = Set.of("spc_rule", "sys_dict");
+
     @Override
     public void beforeQuery(Executor executor, MappedStatement ms, Object parameter,
                             RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) throws SQLException {
@@ -67,7 +73,7 @@ public class DataScopeInterceptor implements InnerInterceptor {
             List<String> tables = finder.getTableList(stmt);
             boolean touchesTenant = tables.stream()
                     .map(t -> t.toLowerCase().replaceAll("^ops\\.", ""))
-                    .anyMatch(orgIdTables::contains);
+                    .anyMatch(t -> orgIdTables.contains(t) && !GLOBAL_TABLES.contains(t));
             if (!touchesTenant) {
                 return;
             }
@@ -76,7 +82,7 @@ public class DataScopeInterceptor implements InnerInterceptor {
             ps.setWhere(where == null ? cond : new AndExpression(where, cond));
             PluginUtils.mpBoundSql(boundSql).sql(ps.toString());
         } catch (Exception e) {
-            log.debug("[DataScope] SQL 改写跳过(解析失败或非单表): {}", e.getMessage());
+            log.warn("[DataScope] SQL 改写跳过: {}", e.getMessage());
         }
     }
 

@@ -31,6 +31,9 @@ public class SignConfigController {
     @PutMapping
     @PreAuthorize("hasAuthority('fia.std.create')")
     public R<Void> save(@RequestBody FiaSignConfig config) {
+        if (config.getOrgId() == null && CompanyContext.get() != null) {
+            config.setOrgId(CompanyContext.get().orgId());
+        }
         signConfigService.save(config);
         return R.ok();
     }

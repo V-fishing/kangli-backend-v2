@@ -44,7 +44,7 @@ public class SqmSupplierGradeRuleController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('sqm.supplier.create')")
+    @PreAuthorize("hasAuthority('sqm.supplier.delete')")
     public R<Void> delete(@PathVariable String id) {
         sqmSupplierGradeRuleService.delete(id);
         return R.ok();

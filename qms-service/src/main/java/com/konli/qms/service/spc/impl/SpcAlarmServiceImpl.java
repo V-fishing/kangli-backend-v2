@@ -31,6 +31,13 @@ public class SpcAlarmServiceImpl implements SpcAlarmService {
         if (!"待确认".equals(alarm.getStatus())) {
             throw new BusinessException(400, "告警状态不允许关闭(需为待确认)");
         }
+        // SR-SPC-017:关闭必须填写关闭原因与处置措施,否则阻止关闭
+        if (closeReason == null || closeReason.isBlank()) {
+            throw new BusinessException(400, "关闭原因不能为空");
+        }
+        if (disposition == null || disposition.isBlank()) {
+            throw new BusinessException(400, "处置措施不能为空");
+        }
         alarm.setCloseReason(closeReason);
         alarm.setDisposition(disposition);
         alarm.setClosedBy(currentOperator());

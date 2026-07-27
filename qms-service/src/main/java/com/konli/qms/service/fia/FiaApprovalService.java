@@ -15,4 +15,7 @@ public interface FiaApprovalService {
 
     /** 审批:approved=true->已通过, false->已驳回 */
     void approve(String id, String approverId, String opinion, boolean approved);
+
+    /** 清理某任务下所有待审批审批单(重建处置前去重,避免孤儿/重复单) */
+    void removePendingByTask(String taskId);
 }

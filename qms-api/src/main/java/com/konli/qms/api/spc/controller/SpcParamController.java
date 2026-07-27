@@ -51,7 +51,7 @@ public class SpcParamController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('spc.param.create')")
+    @PreAuthorize("hasAuthority('spc.param.delete')")
     public R<Void> delete(@PathVariable String id) {
         spcParamService.delete(id);
         return R.ok();

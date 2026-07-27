@@ -33,6 +33,12 @@ public class SpcCapability {
 
     private BigDecimal ppk;
 
+    private BigDecimal cp;
+
+    private BigDecimal pp;
+
+    private String calcNote;
+
     private String level;
 
     @TableField("sample_count")

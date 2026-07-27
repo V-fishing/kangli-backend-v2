@@ -1,6 +1,8 @@
-# 康立 QMS 后端
+# 康立 QMS 后端（v2）
 
 康立质量过程管理系统(QMS)后端,模块化单体(5 个 Maven 子模块),按《QMS-代码规范文档-V1.0》组织。技术栈版本见《QMS-技术选型与部署方案-V1.5》§4.1。
+
+> 本仓库为后端 **v2** 版本,对应前端 `kangli-fronted-v2`。
 
 Java 21 · Spring Boot 3.3.5 · MyBatis-Plus 3.5.9 · MapStruct 1.5.5 · PostgreSQL 16 · Flyway · Redis 7.2 · MinIO · Spring Security + JWT。
 
@@ -43,21 +45,40 @@ Java 21 · Spring Boot 3.3.5 · MyBatis-Plus 3.5.9 · MapStruct 1.5.5 · Postgre
 
 ## 运行
 
-1. 起开发基础设施(PostgreSQL 16 + Redis 7.2 + MinIO):
-   ```powershell
-   docker compose up -d
-   ```
-2. 启动后端(Flyway 自动建表 + 种子数据):
-   ```powershell
-   mvn -pl qms-bootstrap -am spring-boot:run
-   ```
-   或使用 wrapper:`./mvnw.cmd -pl qms-bootstrap -am spring-boot:run`
+### 环境要求
+- **Java 21**(项目以 `release 21` 编译)
+- **Maven 3.9+**,或直接使用项目自带 wrapper:`mvnw.cmd`(Windows) / `mvnw`(Linux/macOS)
+- **Docker + Docker Compose**(用于本地开发基础设施)
+
+### 1. 起开发基础设施(PostgreSQL 16 + Redis 7.2 + MinIO)
+```powershell
+docker compose up -d
+```
+确认容器健康:`docker ps` 应显示 `qms-postgres`(healthy) / `qms-redis` / `qms-minio`。
+
+### 2. 启动后端(推荐:`package` + `java -jar`)
+先打可执行 jar,再直接运行,稳定且绕开多模块 reactor 的坑:
+```powershell
+# 打包 qms-bootstrap 及其依赖(跳过测试),生成可执行 fat-jar
+mvnw.cmd -pl qms-bootstrap -am package -DskipTests
+
+# 运行
+java -jar qms-bootstrap/target/qms-bootstrap-1.0.0-SNAPSHOT.jar
+```
+> 说明:本项目为多模块 Maven 工程,`spring-boot:run` 在 reactor 模式下会把 `run` 目标作用到父 POM(类型为 `pom`、无 main class),报 `Unable to find a suitable main class`。因此**不推荐**直接用 `mvn spring-boot:run`,务必走 `package` + `java -jar`。若坚持用 `run`,也必须带 `-pl qms-bootstrap -am`。
+
+启动日志关键标志:`Started QmsApplication in ...`、`Tomcat started on port 8080 (http)`。
 
 - 应用首页:http://localhost:8080
 - 健康检查:http://localhost:8080/actuator/health
 - Swagger UI:http://localhost:8080/swagger-ui.html
 
-种子账号:`admin/admin123`(跨公司全量 `dataScope=all`)、`mzuser/user123`(仅梅州本公司)。
+启动后 Flyway 自动校验/执行迁移(38 个迁移, schema `ops`),`DataInitializer` 预置种子数据。运行日志见 `boot.log`(手动重定向)与 `logs/qms.log`。
+
+### 种子账号(密码均为 `123456`)
+- 集团管理员:`admin`(`dataScope=all`,跨公司全量)
+- 梅州(MZ):`mz.operator` / `mz.inspector` / `mz.shiftleader` / `mz.qe` / `mz.sqe` / `mz.qmanager` / `mz.purchaser` / `mz.admin`
+- 深圳(SZ):`sz.operator` / `sz.inspector` / `sz.shiftleader` / `sz.qe` / `sz.sqe` / `sz.qmanager` / `sz.purchaser` / `sz.admin`
 
 > `application-dev.yml` 中 Hikari 设了 `initialization-fail-timeout=-1`,**无库也能起冒烟**;连库后 Flyway 会自动执行迁移。
 
@@ -86,11 +107,11 @@ mvn -pl qms-service test
 
 ## 源码托管
 
-- 仓库:`https://github.com/V-fishing/kangliQMSbackend.git`
+- 仓库:`https://github.com/V-fishing/kangli-backend-v2.git`
 - 克隆:
   ```powershell
-  git clone https://github.com/V-fishing/kangliQMSbackend.git
-  cd kangliQMSbackend
+  git clone https://github.com/V-fishing/kangli-backend-v2.git
+  cd kangli-backend-v2
   ```
 - 提交约定:模块化单体,提交信息建议带模块前缀,如 `feat(spc): 新增控制图接口`、`fix(auth): JWT 过期时间调整`。
 - 本仓库已配置 `.gitignore`,自动忽略 `target/`、`**/target/`、`*.class`、`*.jar`、`*.log`、`logs/`、`.idea/`、`*.iml` 等构建产物与本地文件,**不会**提交编译后的类和日志。

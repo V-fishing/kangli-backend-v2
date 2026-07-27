@@ -49,7 +49,7 @@ public class NcmCorrectiveActionController {
     }
 
     @PostMapping("/{id}/close")
-    @PreAuthorize("hasAuthority('ncm.record.create')")
+    @PreAuthorize("hasAuthority('ncm.corrective.close') or hasAuthority('ncm.record.create')")
     public R<Void> close(@PathVariable String id) {
         ncmCorrectiveActionService.close(id);
         return R.ok();

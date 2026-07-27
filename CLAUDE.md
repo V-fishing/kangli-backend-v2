@@ -15,21 +15,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cd QMS-backend && docker compose up -d
 
 # 构建(全部模块)
-./mvnw.cmd clean install -DskipTests
+./mvnw clean install -DskipTests
 
-# 运行(仅 bootstrap 模块)
-./mvnw.cmd -pl qms-bootstrap -am spring-boot:run
+# 构建改动模块后运行
+# 注意: -am spring-boot:run 会让 goal 落到 reactor 首个模块(qms-parent,pom)而报错
+# 正确姿势:先 install 依赖模块,再单独在 bootstrap 上 run(不加 -am)
+./mvnw -pl qms-bootstrap -am install -DskipTests
+./mvnw -pl qms-bootstrap spring-boot:run
 
 # 运行测试
-./mvnw.cmd test
+./mvnw test
 
 # 单模块测试
-./mvnw.cmd -pl qms-service test
+./mvnw -pl qms-service test
 ```
 
 应用启动后:http://localhost:8080,Swagger:http://localhost:8080/swagger-ui.html,健康检查:http://localhost:8080/actuator/health
 
-种子账号:admin/admin123(跨公司全量)、mzuser/user123(仅梅州)。
+种子账号:`admin/123456`(跨公司全量)、`mzuser/user123`(仅梅州),另有 17 个角色账号(`mz.qe`/`sz.sqe`/…,密码统一 `123456`,详见 `SeedRunner`)。两个 Runner 均幂等,密码以 `SeedRunner` 的 `123456` 为准。
+
+> 备注:`application-dev.yml` Hikari 设 `initialization-fail-timeout=-1`,**无库也能起冒烟**(Flyway/种子在连库后才执行)。生产用 `application-prod.yml`,敏感配置(JWT secret / DB 密码 / MinIO 密钥)走环境变量(Jasypt 加密 / `QMS_JWT_SECRET` 等),勿用 dev 占位值。当前仓库无 `src/test` 单测源,`mvn test` 暂为空跑;验证以 `.qms-test/` 下的 API 脚本 + Swagger 手测为主。
 
 ## Architecture
 
@@ -39,13 +44,27 @@ cd QMS-backend && docker compose up -d
 QMS-backend/
 ├── pom.xml              # 父 POM,版本锁定
 ├── qms-common/          # 基础设施:R<T>、BaseEntity、Security、DataScope、类型处理器
-├── qms-domain/          # 实体 + Mapper(按业务域分包:uop/fia/spc/ncm)
-├── qms-service/         # Service 接口 + 实现(按业务域分包)
+├── qms-domain/          # 实体 + Mapper(按业务域分包:uop/fia/patrol/spc/ncm/sqm/archive)
+├── qms-service/         # Service 接口 + 实现(按业务域分包 + support 工具)
 ├── qms-api/             # Controller + DTO(按业务域分包)
-└── qms-bootstrap/       # 启动类 + application.yml + logback + DataInitializer(种子)
+└── qms-bootstrap/       # 启动类 + application.yml + logback + Flyway 迁移 + DataInitializer/SeedRunner(种子) + schedule(定时任务)
 ```
 
 依赖方向:`bootstrap -> api -> service -> domain -> common`。Service 不能依赖 api 层 DTO(用 service 层 DTO/原始类型代替)。
+
+### 业务域(`com.konli.qms.{api|service|domain}.{module}`)
+
+| 域 | 覆盖 | 规模 |
+|---|---|---|
+| `uop` | 账号/组织/角色/菜单/字典/授权/JWT 登录 | 7 controller |
+| `fia` | 首件检验:任务/审批/拦截配置/签名配置/检验标准/触发类型/检验计划 | 8 |
+| `patrol` | 巡检:路线/任务/异常/记录 | 3 |
+| `spc` | 控制图/子组/参数/控制限/规则/能力/报警/采集任务/通知渠道/全局配置 | 10 |
+| `ncm` | 缺陷字典/缺陷记录/8D/鱼骨图/CAPA/纠正措施/预警升级/BI 报表 | 11 |
+| `sqm` | 供应商/评级/绩效/审计/变更/FMEA/追溯/异常/分析/证书(最大域) | 16 |
+| `archive` | 检验记录归档与查询 | 1 |
+
+`service/support/OrgIdResolver` 为跨域共享工具。各域权限码在 `DataInitializer` 里按域 `seed{Module}Perms()` 注册。
 
 ### 根包 `com.konli.qms`(注意不是 kangli)
 
@@ -70,11 +89,20 @@ QMS-backend/
 
 ### 数据库
 
-- 所有表在 `ops.*` schema,主键 UUIDv7(`DEFAULT ops.gen_uuid_v7()`),Flyway 迁移 V01-V11。
-- 种子数据由 `DataInitializer`(CommandLineRunner)幂等插入:公司、用户、角色、菜单、按钮、权限分配。每次启动先 `permissionLoader.evictAll()` 清缓存。
+- 所有表在 `ops.*` schema,主键 UUIDv7(`DEFAULT ops.gen_uuid_v7()`),Flyway 迁移 V01-V38(V23 跳号),schema 增量演进见 `qms-bootstrap/src/main/resources/db/migration/`。
+- 种子由两个 Runner 幂等插入,启动时先 `permissionLoader.evictAll()` 清权限缓存:
+  - `DataInitializer`(CommandLineRunner):公司、RBAC(角色/菜单/按钮/权限)、各业务域权限码、FIA 检验标准。
+  - `SeedRunner`(ApplicationRunner):17 个角色对齐账号(MZ/SZ × 8 角色 + 跨公司 `admin`),密码统一 `123456`,`orgId=null` -> `dataScope=all`。
 - WECO 8 判异规则 + 8D 阶段配置(D1-D8)+ 156 条字典(sys_dict)由 V07 种子。
 
-### 业务模块模式(从 FIA/SPC/NCM 提炼)
+### 定时任务
+
+`QmsApplication` 标 `@EnableScheduling`。集中式定时任务在 `bootstrap/schedule/`:
+- `RepeatEscalationJob`:`@Scheduled(cron = "0 0 3 * * ?")`,每日 3:00 扫近 30 天 `sqm_incoming_abnormal`,对同供应商+物料 ≥2 次异常的自动创建升级记录、加审核频次、降采购份额(委托 `SqmAbnormalService.checkRepeatEscalation`)。
+
+另有部分 SQM/SPC 服务 impl 内嵌 `@Scheduled`(采集、证书到期、审计等),新增定时任务优先归到 `bootstrap/schedule/` 集中管理。
+
+### 业务模块模式(从 FIA/SPC/NCM/SQM/patrol 提炼)
 
 每个业务模块遵循:
 1. **实体**(qms-domain):extends BaseEntity(有审计字段的表)或 plain(无审计的子表/日志表)。`@TableName("ops.表名")`,`@TableField("snake_case")` 显式映射。

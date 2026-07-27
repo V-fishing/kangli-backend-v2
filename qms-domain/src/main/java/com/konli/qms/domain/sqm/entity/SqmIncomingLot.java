@@ -54,4 +54,10 @@ public class SqmIncomingLot extends BaseEntity {
 
     @TableField("is_key_part")
     private Boolean isKeyPart;            // 决定 SN vs 树状追溯
+    @TableField("used_qty")
+    private BigDecimal usedQty;           // 已投料数量(累加,防超领)
+
+    /** 供应商名称(仅展示用，不存表) */
+    @TableField(exist = false)
+    private String supplierName;
 }

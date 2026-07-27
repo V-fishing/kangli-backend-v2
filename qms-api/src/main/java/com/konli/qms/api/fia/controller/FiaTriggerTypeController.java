@@ -46,7 +46,7 @@ public class FiaTriggerTypeController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('fia.std.create')")
+    @PreAuthorize("hasAuthority('fia.std.delete')")
     public R<Void> delete(@PathVariable String id) {
         fiaTriggerTypeService.delete(id);
         return R.ok();

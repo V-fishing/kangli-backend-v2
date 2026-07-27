@@ -1,9 +1,13 @@
 package com.konli.qms.service.sqm;
 
-import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
+import com.konli.qms.domain.sqm.entity.SqmAbnormalMeasure;
+import com.konli.qms.domain.sqm.entity.SqmAbnormalBatchVerify;
+import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
+import com.konli.qms.domain.sqm.dto.AbnormalRectificationRequest;
 
 import java.util.List;
+import java.util.Map;
 
 /** 来料异常整改单 + FMEA 高风险项。sqm.abnormal.* */
 public interface SqmAbnormalService {
@@ -21,6 +25,12 @@ public interface SqmAbnormalService {
      * 可手动调用,也可后续接定时任务。异常不阻断主流程。
      */
     void checkRepeatEscalation();
+
+    /** 保存整改进度持久化:通知/措施/验证/批验/关闭 (V21)。 */
+    void saveRectification(String id, AbnormalRectificationRequest req);
+
+    /** 加载整改记录(措施+批验) */
+    Map<String, List<?>> loadRectificationDetail(String id);
 
     // ---- FMEA ----
 

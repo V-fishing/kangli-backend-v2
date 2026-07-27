@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
+import java.math.BigDecimal;
 
 /** 标准检测项模板(子表,无审计字段) */
 @Data
@@ -40,4 +41,14 @@ public class FiaInspStdItem {
 
     @TableField("enum_values")
     private String enumValues;
+
+    @TableField("upper_limit")
+    private BigDecimal upperLimit;
+    @TableField("lower_limit")
+    private BigDecimal lowerLimit;
+    @TableField("item_type")
+    private String itemType;
+
+    @TableField("is_deleted")
+    private Boolean isDeleted;
 }

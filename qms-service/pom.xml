@@ -24,6 +24,11 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- openhtmltopdf:归档报告 PDF 生成(FiaTaskServiceImpl.archive) -->
         <dependency>
             <groupId>com.openhtmltopdf</groupId>

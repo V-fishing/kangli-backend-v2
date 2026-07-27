@@ -174,7 +174,7 @@ public class SqmAnalysisServiceImpl implements SqmAnalysisService {
     @Override
     public List<Map<String, Object>> ranking(String period) {
         if (period == null || period.isBlank()) {
-            throw new BusinessException(400, "period 不能为空, 格式: YYYY-MM");
+            period = YearMonth.now().toString();
         }
         try {
             YearMonth.parse(period);

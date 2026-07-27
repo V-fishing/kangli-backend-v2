@@ -30,13 +30,13 @@ public class NcmFilterSchemeController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('ncm.record.list')")
+    @PreAuthorize("hasAuthority('ncm.record.create')")
     public R<NcmFilterScheme> create(@RequestBody NcmFilterScheme scheme) {
         return R.ok(ncmFilterSchemeService.create(scheme));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('ncm.record.list')")
+    @PreAuthorize("hasAuthority('ncm.record.delete')")
     public R<Void> delete(@PathVariable String id) {
         ncmFilterSchemeService.delete(id);
         return R.ok();

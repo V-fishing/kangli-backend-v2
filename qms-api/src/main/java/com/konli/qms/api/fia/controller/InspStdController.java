@@ -1,7 +1,7 @@
 package com.konli.qms.api.fia.controller;
 
-import com.konli.qms.api.fia.dto.CreateInspStdRequest;
-import com.konli.qms.api.fia.dto.FiaStdItemRequest;
+import com.konli.qms.domain.fia.dto.CreateInspStdRequest;
+import com.konli.qms.domain.fia.dto.FiaStdItemRequest;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.fia.entity.FiaInspStd;
 import com.konli.qms.domain.fia.entity.FiaInspStdItem;
@@ -76,14 +76,13 @@ public class InspStdController {
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('fia.std.create')")
-    public R<Void> update(@PathVariable String id, @RequestBody FiaInspStd std) {
-        std.setId(id);
-        inspStdService.update(std);
+    public R<Void> update(@PathVariable String id, @Valid @RequestBody CreateInspStdRequest req) {
+        inspStdService.update(id, req);
         return R.ok();
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('fia.std.create')")
+    @PreAuthorize("hasAuthority('fia.std.delete')")
     public R<Void> delete(@PathVariable String id) {
         inspStdService.delete(id);
         return R.ok();

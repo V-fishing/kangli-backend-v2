@@ -46,6 +46,7 @@ desktop.ini
 *.bak
 *.tmp
 *.cache
+temp_test/
 
 # ---------- 本地覆盖配置(按需启用) ----------
 # application-local.yml

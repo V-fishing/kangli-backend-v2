@@ -2,6 +2,7 @@ package com.konli.qms.api.spc.controller;
 
 import com.konli.qms.api.spc.dto.CreateSubgroupRequest;
 import com.konli.qms.common.api.R;
+import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.konli.qms.service.spc.dto.SpcSubgroupVo;
@@ -41,7 +42,11 @@ public class SpcSubgroupController {
     @PreAuthorize("hasAuthority('spc.subgroup.create')")
     public R<SpcSubgroup> create(@Valid @RequestBody CreateSubgroupRequest req) {
         SpcSubgroup sg = new SpcSubgroup();
-        sg.setOrgId(req.getOrgId());
+        String orgId = req.getOrgId();
+        if ((orgId == null || orgId.isBlank()) && CompanyContext.get() != null) {
+            orgId = CompanyContext.get().orgId();
+        }
+        sg.setOrgId(orgId);
         sg.setParamId(req.getParamId());
         sg.setSubgroupTime(req.getSubgroupTime());
         sg.setShift(req.getShift());

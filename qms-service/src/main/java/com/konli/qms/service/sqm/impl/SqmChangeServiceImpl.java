@@ -3,21 +3,39 @@ package com.konli.qms.service.sqm.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
-import com.konli.qms.domain.fia.entity.FiaInspStd;
-import com.konli.qms.domain.fia.mapper.FiaInspStdMapper;
+import com.konli.qms.common.security.DataScopeGuard;
+import com.konli.qms.domain.sqm.entity.SqmAuditPlan;
 import com.konli.qms.domain.sqm.entity.SqmChangeApproval;
 import com.konli.qms.domain.sqm.entity.SqmChangeOrder;
 import com.konli.qms.domain.sqm.mapper.SqmChangeApprovalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
+import com.konli.qms.domain.uop.entity.SysUser;
+import com.konli.qms.domain.uop.mapper.SysUserMapper;
+import com.konli.qms.service.sqm.SqmAuditService;
+import com.konli.qms.service.sqm.SqmChangeStrictInspectService;
+import com.konli.qms.domain.sqm.entity.SqmChangeStrictInspect;
+import com.konli.qms.service.fia.impl.FiaStdVersionService;
+import com.konli.qms.domain.sqm.entity.SqmSupplier;
+import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.sqm.SqmChangeService;
+import com.konli.qms.service.sqm.dto.SqmChangeOrderListVo;
 import com.konli.qms.service.sqm.dto.SqmChangeOrderVo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -26,11 +44,78 @@ public class SqmChangeServiceImpl implements SqmChangeService {
 
     private final SqmChangeOrderMapper sqmChangeOrderMapper;
     private final SqmChangeApprovalMapper sqmChangeApprovalMapper;
-    private final FiaInspStdMapper fiaInspStdMapper;
+    private final SysUserMapper sysUserMapper;
+    private final PasswordEncoder passwordEncoder;
+    private final SqmAuditService sqmAuditService;
+    private final JdbcTemplate jdbcTemplate;
+    private final SqmChangeStrictInspectService sqmChangeStrictInspectService;
+    private final FiaStdVersionService fiaStdVersionService;
+    private final SqmSupplierMapper sqmSupplierMapper;
+    private final NotificationService notificationService;
+
+    /**
+     * 解析当前用户所属组织;当为空/超管哨兵(ROOT)/非法时,回退取默认组织。
+     * 与 FMEA/供应商模块对齐,避免 admin(orgId=null) 触发 NOT NULL 约束 -> 500。
+     */
+    private String currentOrgId() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = (u != null) ? u.orgId() : null;
+        if (orgId == null || orgId.isBlank() || "ROOT".equals(orgId)) {
+            return resolveDefaultOrgId();
+        }
+        return orgId;
+    }
+
+    private String resolveDefaultOrgId() {
+        try {
+            String id = jdbcTemplate.queryForObject(
+                    "SELECT id::text FROM ops.sys_org WHERE org_code='MZ' LIMIT 1", String.class);
+            if (id != null) {
+                return id;
+            }
+        } catch (Exception ignored) {
+            // 忽略
+        }
+        try {
+            return jdbcTemplate.queryForObject("SELECT id::text FROM ops.sys_org LIMIT 1", String.class);
+        } catch (Exception e) {
+            log.warn("resolveDefaultOrgId failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
 
     @Override
-    public List<SqmChangeOrder> list() {
-        return sqmChangeOrderMapper.selectList(null);
+    public List<SqmChangeOrderListVo> list() {
+        List<SqmChangeOrder> orders = sqmChangeOrderMapper.selectList(
+                new LambdaQueryWrapper<SqmChangeOrder>().orderByDesc(SqmChangeOrder::getApplyDate));
+        return orders.stream().map(this::toListVo).collect(Collectors.toList());
+    }
+
+    private SqmChangeOrderListVo toListVo(SqmChangeOrder o) {
+        SqmChangeOrderListVo v = new SqmChangeOrderListVo();
+        v.setId(o.getId());
+        v.setChangeNo(o.getChangeNo());
+        v.setTitle(o.getTitle());
+        v.setSupplierId(o.getSupplierId());
+        v.setSupplierName(supplierName(o.getSupplierId()));
+        v.setPartNo(o.getPartNo());
+        v.setChangeType(o.getChangeType());
+        v.setUrgency(o.getUrgency());
+        v.setStatus(o.getStatus());
+        v.setApplicant(o.getApplicant());
+        v.setApplyDate(o.getApplyDate() == null ? null : o.getApplyDate().toString());
+        v.setReason(o.getReason());
+        v.setVerifyReport(o.getVerifyReport());
+        v.setRiskFile(o.getRiskFile());
+        v.setRiskPreMark(o.getRiskPreMark());
+        return v;
+    }
+
+    private String supplierName(String supplierId) {
+        if (supplierId == null) return "—";
+        SqmSupplier s = sqmSupplierMapper.selectById(supplierId);
+        return s != null ? s.getName() : "—";
     }
 
     @Override
@@ -41,21 +126,79 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         }
         SqmChangeOrderVo vo = new SqmChangeOrderVo();
         vo.setOrder(order);
-        vo.setApprovals(sqmChangeApprovalMapper.selectList(
+        List<SqmChangeApproval> approvals = sqmChangeApprovalMapper.selectList(
                 new LambdaQueryWrapper<SqmChangeApproval>()
                         .eq(SqmChangeApproval::getChangeId, id)
-                        .orderByAsc(SqmChangeApproval::getSeqOrder)));
+                        .orderByAsc(SqmChangeApproval::getSeqOrder));
+        resolveOperators(approvals);
+        vo.setApprovals(approvals);
         return vo;
+    }
+
+    @Override
+    public Map<String, SqmChangeOrderVo> batchDetail(List<String> ids) {
+        Map<String, SqmChangeOrderVo> map = new LinkedHashMap<>();
+        if (ids == null || ids.isEmpty()) {
+            return map;
+        }
+        List<SqmChangeOrder> orders = sqmChangeOrderMapper.selectBatchIds(ids);
+        List<SqmChangeApproval> allApprovals = sqmChangeApprovalMapper.selectList(
+                new LambdaQueryWrapper<SqmChangeApproval>()
+                        .in(SqmChangeApproval::getChangeId, ids)
+                        .orderByAsc(SqmChangeApproval::getSeqOrder));
+        Map<String, List<SqmChangeApproval>> approvalMap = allApprovals.stream()
+                .collect(Collectors.groupingBy(SqmChangeApproval::getChangeId));
+        for (SqmChangeOrder order : orders) {
+            SqmChangeOrderVo vo = new SqmChangeOrderVo();
+            vo.setOrder(order);
+            List<SqmChangeApproval> apps = approvalMap.getOrDefault(order.getId(), Collections.emptyList());
+            resolveOperators(apps);
+            vo.setApprovals(apps);
+            map.put(order.getId(), vo);
+        }
+        return map;
     }
 
     @Override
     @Transactional
     public SqmChangeOrder create(SqmChangeOrder order) {
+        // 注入租户上下文与必填默认值(表中 org_id/apply_date/source/urgency 均为 NOT NULL,前端不传)
+        order.setOrgId(currentOrgId());
         order.setChangeNo("ECN-" + System.currentTimeMillis());
         order.setStatus("待申请");
+        // 供应商为物料变更单必要主体,DB 列 NOT NULL;缺 supplierId 给出明确 400 而非 DB 约束 500
+        if (order.getSupplierId() == null || order.getSupplierId().isBlank()) {
+            throw new BusinessException(400, "供应商不能为空");
+        }
+        // 物料编码也为 NOT NULL 列;若未指定置为占位值(后续可由用户补填)
+        if (order.getPartNo() == null || order.getPartNo().isBlank()) {
+            order.setPartNo("TBD-" + order.getChangeNo());
+        }
+        if (order.getApplyDate() == null) {
+            order.setApplyDate(LocalDate.now());
+        }
+        if (order.getSource() == null || order.getSource().isBlank()) {
+            order.setSource("门户提报");
+        }
+        if (order.getUrgency() == null || order.getUrgency().isBlank()) {
+            order.setUrgency("中");
+        }
+        if (order.getStrictFlag() == null) {
+            order.setStrictFlag(false);
+        }
+        if (order.getReceiveFrozen() == null) {
+            order.setReceiveFrozen(false);
+        }
+        // SR-SCM:高风险(riskPreMark=高)强制加严检验+小批试产
+        if ("高".equals(order.getRiskPreMark())) {
+            order.setStrictFlag(true);
+        }
         sqmChangeOrderMapper.insert(order);
-        // 预建三方并行会签记录(quality/purchase/rd)
-        String[][] roles = {{"quality", "质量"}, {"purchase", "采购"}, {"rd", "研发"}};
+        // 预建三方依次签字会签记录:采购(seq=1) -> 研发(seq=2) -> 质量(seq=3,一票否决)
+        String[][] roles = {
+                {"purchase", "采购", "1"},
+                {"rd", "研发", "2"},
+                {"quality", "质量", "3"}};
         for (String[] role : roles) {
             SqmChangeApproval ap = new SqmChangeApproval();
             ap.setOrgId(order.getOrgId());
@@ -64,7 +207,7 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             ap.setRoleLabel(role[1]);
             ap.setStatus("pending");
             ap.setHasVeto("quality".equals(role[0]));
-            ap.setSeqOrder(0);
+            ap.setSeqOrder(Integer.parseInt(role[2]));
             sqmChangeApprovalMapper.insert(ap);
         }
         return order;
@@ -80,10 +223,45 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         if (!"待申请".equals(order.getStatus())) {
             throw new BusinessException(400, "变更单当前状态为 " + order.getStatus() + ",无法提交");
         }
-        SqmChangeOrder upd = new SqmChangeOrder();
-        upd.setId(id);
-        upd.setStatus("审批中");
-        sqmChangeOrderMapper.updateById(upd);
+        DataScopeGuard.ensureOwner(order.getOrgId());
+        // 用已加载实体更新(带 @Version,乐观锁生效);返回 0 行表示并发冲突
+        order.setStatus("审批中");
+        order.setReceiveFrozen(true); // SR-SCM:提交即冻结收货
+        if (sqmChangeOrderMapper.updateById(order) == 0) {
+            throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+        }
+        // 物料变更申请提交后联动: 自动生成"物料变更审核"审核计划(由供应商发起,进入供应商物料变更管理流程)
+        createMaterialChangeAudit(order);
+        // 提交后通知三方(采购/研发/质量)待审批
+        notifySubmitted(order);
+    }
+
+    /**
+     * 物料变更联动: 供应商物料变更申请提交后,自动生成一条「物料变更审核」审核计划。
+     * 该计划进入审核模块由质量/采购/研发执行现场审核,完成后流入供应商物料变更管理流程(试产验证等)。
+     * 异常(如审核服务不可用)不阻断变更主流程。
+     */
+    private void createMaterialChangeAudit(SqmChangeOrder order) {
+        try {
+            SqmAuditPlan plan = new SqmAuditPlan();
+            plan.setOrgId(order.getOrgId());
+            plan.setSupplierId(order.getSupplierId());
+            plan.setAuditType("物料变更审核");
+            plan.setPlanDate(LocalDate.now());
+            plan.setAuditLead("质量");
+            plan.setAuditorTeam("质量,采购,研发");
+            plan.setScope("物料变更[" + order.getChangeNo() + "] " + (order.getTitle() == null ? "" : order.getTitle()));
+            plan.setRiskLevel(order.getRiskPreMark() != null ? order.getRiskPreMark()
+                    : (order.getUrgency() != null ? order.getUrgency() : "中"));
+            plan.setStatus("待执行");
+            // 双向追溯: 关联来源变更单(保留标准 UUID 格式, 与变更单列表 API 返回的 id 一致)
+            plan.setChangeId(order.getId() == null ? null : String.valueOf(order.getId()));
+            sqmAuditService.createPlanInNewTx(plan);
+            log.info("物料变更提交联动生成审核计划成功, changeId={}, auditType=物料变更审核, planNo={}",
+                    order.getId(), plan.getPlanNo());
+        } catch (Exception e) {
+            log.warn("物料变更提交联动生成审核计划失败, changeId={}: {}", order.getId(), e.getMessage(), e);
+        }
     }
 
     @Override
@@ -96,105 +274,231 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         if (!"审批中".equals(order.getStatus())) {
             throw new BusinessException(400, "变更单当前状态为 " + order.getStatus() + ",无法审批");
         }
-        // 查当前角色的会签记录
-        SqmChangeApproval approval = sqmChangeApprovalMapper.selectOne(
-                new LambdaQueryWrapper<SqmChangeApproval>()
-                        .eq(SqmChangeApproval::getChangeId, id)
-                        .eq(SqmChangeApproval::getApprovalRole, approvalRole));
-        if (approval == null) {
-            throw new BusinessException(404, "未找到该角色的会签记录:" + approvalRole);
-        }
+        DataScopeGuard.ensureOwner(order.getOrgId());
 
-        // 更新会签记录
-        approval.setStatus(approved ? "done" : "rejected");
-        approval.setOperator(currentOperator());
-        approval.setOperateDate(LocalDateTime.now());
-        approval.setOpinion(opinion);
-        sqmChangeApprovalMapper.updateById(approval);
-
-        // 重新查所有会签,判断整体结论
+        // 强制串行:当前必须由 seqOrder 最小且未审批的节点处理(采购 -> 研发 -> 质量)
         List<SqmChangeApproval> all = sqmChangeApprovalMapper.selectList(
                 new LambdaQueryWrapper<SqmChangeApproval>()
-                        .eq(SqmChangeApproval::getChangeId, id));
-
-        boolean anyRejectedWithVeto = all.stream()
-                .anyMatch(a -> "rejected".equals(a.getStatus()) && Boolean.TRUE.equals(a.getHasVeto()));
-        boolean allDone = all.stream().allMatch(a -> "done".equals(a.getStatus()));
-
-        SqmChangeOrder upd = new SqmChangeOrder();
-        upd.setId(id);
-        if (anyRejectedWithVeto) {
-            // 任一 rejected 且 hasVeto=true -> 已驳回
-            upd.setStatus("已驳回");
-            sqmChangeOrderMapper.updateById(upd);
-        } else if (allDone) {
-            // 全部 done -> 已批准
-            upd.setStatus("已批准");
-            sqmChangeOrderMapper.updateById(upd);
-            // 变更批准后联动 FIA 检验标准(旧标准停用 + 新版本草稿,待质量审核后生效)
-            syncFiaStd(order);
+                        .eq(SqmChangeApproval::getChangeId, id)
+                        .orderByAsc(SqmChangeApproval::getSeqOrder));
+        SqmChangeApproval expected = all.stream()
+                .filter(a -> "pending".equals(a.getStatus()))
+                .min(Comparator.comparingInt(a -> a.getSeqOrder() == null ? 99 : a.getSeqOrder()))
+                .orElse(null);
+        if (expected == null) {
+            throw new BusinessException(400, "无待审批节点");
         }
-        // 其余情况(任一 rejected 且 hasVeto=false 或仍在等待)继续等其他角色,order.status 保持"审批中"
+        if (!expected.getApprovalRole().equals(approvalRole)) {
+            throw new BusinessException(400,
+                    "请按 采购→研发→质量 顺序审批:当前应由【" + expected.getRoleLabel() + "】审批");
+        }
+
+        // 更新当前会签记录
+        expected.setStatus(approved ? "done" : "rejected");
+        expected.setOperator(currentOperator());
+        expected.setOperateDate(LocalDateTime.now());
+        expected.setOpinion(opinion);
+        sqmChangeApprovalMapper.updateById(expected);
+
+        // 任一驳回 -> 立即终止(质量一票否决在末位自然生效)
+        if (!approved) {
+            order.setStatus("已驳回");
+            if (sqmChangeOrderMapper.updateById(order) == 0) {
+                throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+            }
+            notifyRejected(order, expected.getRoleLabel());
+            return;
+        }
+
+        // 全部通过 -> 已批准
+        List<SqmChangeApproval> fresh = sqmChangeApprovalMapper.selectList(
+                new LambdaQueryWrapper<SqmChangeApproval>()
+                        .eq(SqmChangeApproval::getChangeId, id));
+        boolean allDone = fresh.stream().allMatch(a -> "done".equals(a.getStatus()));
+        if (allDone) {
+            order.setStatus("已批准");
+            if (sqmChangeOrderMapper.updateById(order) == 0) {
+                throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+            }
+            // 变更批准后联动 FIA 检验标准(旧标准停用 + 新版本草稿,待质量审核后生效)
+            try {
+                fiaStdVersionService.syncVersion(order);
+            } catch (Exception e) {
+                log.warn("变更联动FIA标准失败, changeId={}: {}", order.getId(), e.getMessage(), e);
+            }
+            // 变更→来料加严检验联动:批准后自动创建3批加严检验(独立事务,失败不影响审批)
+            try {
+                SqmChangeStrictInspect si = new SqmChangeStrictInspect();
+                si.setOrgId(order.getOrgId());
+                si.setChangeId(order.getId());
+                si.setStrictNo("ST-" + System.currentTimeMillis());
+                si.setInspectType("加严");
+                si.setAqlLevel("II");
+                si.setSeq(1);
+                si.setTotalSeq(3);
+                sqmChangeStrictInspectService.createInNewTx(si);
+            } catch (Exception ignored) {}
+            notifyApproved(order);
+        } else {
+            // 通知下一位审批人
+            SqmChangeApproval next = fresh.stream()
+                    .filter(a -> "pending".equals(a.getStatus()))
+                    .min(Comparator.comparingInt(a -> a.getSeqOrder() == null ? 99 : a.getSeqOrder()))
+                    .orElse(null);
+            if (next != null) {
+                notifyNext(order, next.getApprovalRole());
+            }
+        }
     }
 
     @Override
+    public void verifySign(String changeId, String approvalRole, String username, String password) {
+        if (username == null || username.isBlank() || password == null) {
+            throw new BusinessException(400, "签名用户名与口令不能为空");
+        }
+        // 1) 校验签名用户存在且口令正确(与首件检验录入一致:PasswordEncoder 比对)
+        SysUser u = sysUserMapper.selectOne(
+                new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, username.trim()));
+        if (u == null) {
+            throw new BusinessException(400, "签名用户不存在: " + username);
+        }
+        if (!passwordEncoder.matches(password, u.getPasswordHash())) {
+            throw new BusinessException(400, "签名口令错误,电子签名校验未通过");
+        }
+        // 2) 校验该会签角色属于本变更单(防止越权签名)
+        SqmChangeApproval ap = sqmChangeApprovalMapper.selectOne(
+                new LambdaQueryWrapper<SqmChangeApproval>()
+                        .eq(SqmChangeApproval::getChangeId, changeId)
+                        .eq(SqmChangeApproval::getApprovalRole, approvalRole));
+        if (ap == null) {
+            throw new BusinessException(404, "未找到该角色的会签记录: " + approvalRole);
+        }
+    }
+
     @Transactional
     public void close(String id) {
         SqmChangeOrder order = sqmChangeOrderMapper.selectById(id);
         if (order == null) {
             throw new BusinessException(404, "变更单不存在");
         }
-        SqmChangeOrder upd = new SqmChangeOrder();
-        upd.setId(id);
-        upd.setStatus("已关闭");
-        sqmChangeOrderMapper.updateById(upd);
+        DataScopeGuard.ensureOwner(order.getOrgId());
+        order.setStatus("已关闭");
+        order.setReceiveFrozen(false); // SR-SCM:关闭即解冻收货,恢复正常
+        if (sqmChangeOrderMapper.updateById(order) == 0) {
+            throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+        }
+    }
+
+    /** SR-SCM:加严检验不合格->回滚变更(恢复冻结+标记退货) */
+    @Override
+    @Transactional
+    public void rollback(String id, String reason) {
+        SqmChangeOrder order = sqmChangeOrderMapper.selectById(id);
+        if (order == null) throw new BusinessException(404, "变更单不存在");
+        DataScopeGuard.ensureOwner(order.getOrgId());
+        order.setReceiveFrozen(true);
+        order.setStatus("已回滚");
+        if (sqmChangeOrderMapper.updateById(order) == 0) {
+            throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+        }
     }
 
     private String currentOperator() {
         CompanyContext.CurrentUser u = CompanyContext.get();
-        return u == null ? "系统" : u.userId();
+        return u == null ? "系统" : u.username();
     }
 
     /**
-     * 变更批准后联动 FIA 检验标准:
-     * 匹配 material = partNo 且 status='生效' 的标准,旧标准置为'停用',同时新建一条草稿版本
-     * (std_version 递增 v2->v3,prev_version_id 指向旧 id),待质量审核后生效。
-     * 异常不阻断主流程。
+     * 历史签字人字段曾存为 userId(无连字符 UUID),详情展示时解析为真实姓名;
+     * 非 UUID 的值(姓名/"系统")原样返回。
      */
-    private void syncFiaStd(SqmChangeOrder order) {
+    private void resolveOperators(List<SqmChangeApproval> approvals) {
+        if (approvals == null) return;
+        for (SqmChangeApproval a : approvals) {
+            a.setOperator(resolveOperator(a.getOperator()));
+        }
+    }
+
+    private String resolveOperator(String op) {
+        if (op == null || op.isBlank()) return op;
+        if (!op.matches("[0-9a-fA-F-]{32,36}")) return op; // 已是姓名/"系统"等
+        // sys_user.id 为 uuid 类型,需先转 text 再做 REPLACE 比较
+        SysUser u = sysUserMapper.selectOne(
+            new LambdaQueryWrapper<SysUser>().apply("REPLACE(id::text,'-','') = REPLACE({0},'-','')", op));
+        if (u != null) {
+            return (u.getRealName() != null && !u.getRealName().isBlank()) ? u.getRealName() : u.getUsername();
+        }
+        return op;
+    }
+
+    // ===== 审批流程站内通知 =====
+
+    /** 供应商提交变更后通知三方(采购/研发/质量)。 */
+    private void notifySubmitted(SqmChangeOrder order) {
+        String title = "物料变更待审批";
+        String content = String.format(
+                "供应商【%s】发起物料变更《%s》(单号 %s,料号 %s)。请按 采购→研发→质量 顺序审批。",
+                supplierName(order.getSupplierId()), order.getTitle(),
+                order.getChangeNo(), order.getPartNo());
+        notificationService.notifyRoles(List.of("purchaser", "rd", "sqe"),
+                title, content, "sqm_change", order.getId(), "/sqm/change", order.getApplicant());
+    }
+
+    /** 通知下一位审批人。 */
+    private void notifyNext(SqmChangeOrder order, String role) {
+        String title = "物料变更待您审批";
+        String content = String.format("《%s》(单号 %s) 前序审批已通过,现轮到【%s】审批。",
+                order.getTitle(), order.getChangeNo(), roleLabel(role));
+        notificationService.notifyRoles(List.of(roleCode(role)),
+                title, content, "sqm_change", order.getId(), "/sqm/change", null);
+    }
+
+    private void notifyApproved(SqmChangeOrder order) {
+        String title = "物料变更已批准";
+        String content = String.format("《%s》(单号 %s) 已通过 采购→研发→质量 三方审批,正式生效。",
+                order.getTitle(), order.getChangeNo());
+        notifyPartiesAndApplicant(order, title, content);
+    }
+
+    private void notifyRejected(SqmChangeOrder order, String roleLabel) {
+        String title = "物料变更被驳回";
+        String content = String.format("《%s》(单号 %s) 被【%s】驳回。",
+                order.getTitle(), order.getChangeNo(), roleLabel);
+        notifyPartiesAndApplicant(order, title, content);
+    }
+
+    private void notifyPartiesAndApplicant(SqmChangeOrder order, String title, String content) {
+        notificationService.notifyRoles(List.of("purchaser", "rd", "sqe"),
+                title, content, "sqm_change", order.getId(), "/sqm/change", null);
+        String applicantId = applicantUserId(order.getApplicant());
+        notificationService.notifyUser(applicantId, title, content, "sqm_change", order.getId(), "/sqm/change");
+    }
+
+    private String roleLabel(String role) {
+        return switch (role) {
+            case "purchase" -> "采购";
+            case "rd" -> "研发";
+            case "quality" -> "质量";
+            default -> role;
+        };
+    }
+
+    private String roleCode(String role) {
+        return switch (role) {
+            case "purchase" -> "purchaser";
+            case "rd" -> "rd";
+            case "quality" -> "sqe";
+            default -> role;
+        };
+    }
+
+    private String applicantUserId(String username) {
+        if (username == null) return null;
         try {
-            if (order.getPartNo() == null || order.getPartNo().isBlank()) {
-                return;
-            }
-            List<FiaInspStd> stds = fiaInspStdMapper.selectList(
-                    new LambdaQueryWrapper<FiaInspStd>()
-                            .eq(FiaInspStd::getMaterial, order.getPartNo())
-                            .eq(FiaInspStd::getStatus, "生效"));
-            for (FiaInspStd old : stds) {
-                // 旧标准停用(软更新)
-                FiaInspStd upd = new FiaInspStd();
-                upd.setId(old.getId());
-                upd.setStatus("停用");
-                fiaInspStdMapper.updateById(upd);
-                // 新版本(草稿,待质量审核后生效)
-                FiaInspStd next = new FiaInspStd();
-                next.setOrgId(order.getOrgId());
-                next.setCode(old.getCode());
-                next.setMaterial(old.getMaterial());
-                next.setProcName(old.getProcName());
-                String oldVer = old.getStdVersion() == null ? "v0" : old.getStdVersion();
-                int verNum = 0;
-                String digits = oldVer.replaceAll("\\D", "");
-                if (!digits.isEmpty()) {
-                    verNum = Integer.parseInt(digits);
-                }
-                next.setStdVersion("v" + (verNum + 1));
-                next.setStatus("草稿");
-                next.setPrevVersionId(old.getId());
-                fiaInspStdMapper.insert(next);
-            }
+            return jdbcTemplate.queryForObject(
+                    "SELECT id::text FROM ops.sys_user WHERE username = ?", String.class, username);
         } catch (Exception e) {
-            log.warn("变更联动FIA标准失败, changeId={}: {}", order.getId(), e.getMessage(), e);
+            return null;
         }
     }
 }

@@ -52,4 +52,8 @@ public class SqmAuditRecord extends BaseEntity {
 
     @TableField("archive_id")
     private String archiveId;
+
+    /** JSONB -> String 映射(不加 typeHandler),存放审核记录类型特有字段。 */
+    @TableField("ext_json")
+    private String extJson;
 }

@@ -3,6 +3,7 @@ package com.konli.qms.api.spc.controller;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.spc.entity.SpcRule;
 import com.konli.qms.service.spc.SpcRuleService;
+import com.konli.qms.service.spc.dto.SpcRuleTriggerVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,5 +34,12 @@ public class SpcRuleController {
     public R<Void> toggle(@PathVariable String id, @RequestParam boolean enabled) {
         spcRuleService.toggle(id, enabled);
         return R.ok();
+    }
+
+    /** 看板"判异规则触发次数":每条规则命中异常子组的数量。 */
+    @GetMapping("/triggers")
+    @PreAuthorize("hasAuthority('spc.rule.list')")
+    public R<List<SpcRuleTriggerVo>> triggers() {
+        return R.ok(spcRuleService.ruleTriggers());
     }
 }

@@ -51,7 +51,7 @@ public class NcmDefectDictController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('ncm.defect.create')")
+    @PreAuthorize("hasAuthority('ncm.defect.delete')")
     public R<Void> delete(@PathVariable String id) {
         ncmDefectDictService.delete(id);
         return R.ok();

@@ -45,7 +45,7 @@ public class PatlTaskController {
     }
 
     @PostMapping("/{id}/records")
-    @PreAuthorize("hasAuthority('patl.task.create')")
+    @PreAuthorize("hasAuthority('patl.task.record')")
     public R<Void> submitRecord(@PathVariable String id, @RequestBody SubmitRecordRequest req) {
         patlTaskService.submitRecord(id, req.getCheckpointId(), req.getCheckpointName(),
                 req.getResult(), req.getRemark(), currentOperator());
@@ -53,7 +53,7 @@ public class PatlTaskController {
     }
 
     @PostMapping("/{id}/close")
-    @PreAuthorize("hasAuthority('patl.task.create')")
+    @PreAuthorize("hasAuthority('patl.task.close')")
     public R<Void> close(@PathVariable String id) {
         patlTaskService.close(id);
         return R.ok();

@@ -1,6 +1,7 @@
 package com.konli.qms.service.spc;
 
 import com.konli.qms.domain.spc.entity.SpcRule;
+import com.konli.qms.service.spc.dto.SpcRuleTriggerVo;
 
 import java.util.List;
 
@@ -10,4 +11,7 @@ public interface SpcRuleService {
     List<SpcRule> list();
 
     void toggle(String id, boolean enabled);
+
+    /** 看板"判异规则触发次数":每条规则命中异常子组的数量。 */
+    List<SpcRuleTriggerVo> ruleTriggers();
 }

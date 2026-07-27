@@ -2,13 +2,11 @@
 # 数据库/缓存/对象存储由 docker-compose.yml 一键起(docker compose up -d)
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/qms?stringtype=unspecified
+    url: jdbc:postgresql://localhost:5432/qms?stringtype=unspecified&characterEncoding=UTF-8
     username: qms
     password: qms
     driver-class-name: org.postgresql.Driver
     hikari:
-      # 空壳冒烟:不连库也能启动;stage-1 建库后可改回默认(删除此行)
-      initialization-fail-timeout: -1
       maximum-pool-size: 10
   data:
     redis:
@@ -28,6 +26,11 @@ minio:
   access-key: minioadmin
   secret-key: minioadmin
   bucket: qms
+
+# JWT(开发默认 secret,可通过 QMS_JWT_SECRET 环境变量覆盖;切勿用于生产)
+qms:
+  jwt:
+    secret: konli-qms-dev-default-secret-change-me-please-32bytes
 
 logging:
   level:

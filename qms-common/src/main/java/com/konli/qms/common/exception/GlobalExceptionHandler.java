@@ -4,6 +4,7 @@ import com.konli.qms.common.api.R;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -59,6 +60,13 @@ public class GlobalExceptionHandler {
     public R<Void> handleAccessDenied(AccessDeniedException e) {
         log.warn("权限不足: {}", e.getMessage());
         return R.fail(403, "无权限");
+    }
+
+    /** 缺必填参数:返回 400 友好提示,不被兜底吞成 500 */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public R<Void> handleMissingParam(MissingServletRequestParameterException e) {
+        log.warn("缺少必填参数: {}", e.getParameterName());
+        return R.fail(400, "缺少必填参数: " + e.getParameterName());
     }
 
     /** 兜底:未预期异常 */

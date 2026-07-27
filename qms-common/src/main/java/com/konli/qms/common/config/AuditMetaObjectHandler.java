@@ -26,6 +26,16 @@ public class AuditMetaObjectHandler implements MetaObjectHandler {
             this.strictInsertFill(metaObject, "createdBy", String.class, operator);
             this.strictInsertFill(metaObject, "updatedBy", String.class, operator);
         }
+        // 自动填充多租户关键字段 orgId(RLS):实体含 orgId 且未显式赋值时,取当前登录用户所属公司。
+        // 兼容各业务 Entity 自行声明 orgId(未加 @TableField(fill)) 的情况,故用非严格填充。
+        if (metaObject.hasGetter("orgId") && metaObject.hasSetter("orgId")
+                && metaObject.getValue("orgId") == null) {
+            CompanyContext.CurrentUser u = CompanyContext.get();
+            // ROOT/全量管理员无归属公司,不要写入非法 uuid(否则 org_id 列插入 500)
+            if (u != null && u.orgId() != null && !"ROOT".equals(u.orgId())) {
+                metaObject.setValue("orgId", u.orgId());
+            }
+        }
     }
 
     @Override

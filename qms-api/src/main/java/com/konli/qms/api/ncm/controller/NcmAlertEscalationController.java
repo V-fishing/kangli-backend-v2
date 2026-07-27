@@ -45,7 +45,7 @@ public class NcmAlertEscalationController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('ncm.record.create')")
+    @PreAuthorize("hasAuthority('ncm.record.delete')")
     public R<Void> delete(@PathVariable String id) {
         ncmAlertEscalationService.delete(id);
         return R.ok();

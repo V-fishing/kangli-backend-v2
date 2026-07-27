@@ -26,6 +26,14 @@ public class QmsCapa extends BaseEntity {
     @TableField("abnormal_id")
     private String abnormalId;
 
+    /** 通用来源单据 ID（内审不符合项 / 不良趋势异常记录 等未单独建字段的触发来源）。 */
+    @TableField("source_ref_id")
+    private String sourceRefId;
+
+    /** 来源类型（如 审核不符合项 / 不良记录 / 8D / 来料异常），用于详情页/弹窗跳转。 */
+    @TableField("source_type")
+    private String sourceType;
+
     private String issue;
 
     @TableField("trigger_stage")

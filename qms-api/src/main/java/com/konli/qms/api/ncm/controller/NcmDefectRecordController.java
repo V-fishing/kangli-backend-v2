@@ -66,17 +66,39 @@ public class NcmDefectRecordController {
         return R.ok(ncmDefectRecordService.trendAnalysis(granularity, startTime, endTime));
     }
 
-    /** 环比同比:period=YYYY-MM,返回 {current, previous, yoy, mom, changeRate} */
+    /** 环比同比:period=YYYY-MM,type∈{week,month,year,mtd};返回不良率% */
     @GetMapping("/analysis/compare")
     @PreAuthorize("hasAuthority('ncm.record.list')")
-    public R<Map<String, Object>> compareAnalysis(@RequestParam String period) {
-        return R.ok(ncmDefectRecordService.compareAnalysis(period));
+    public R<Map<String, Object>> compareAnalysis(@RequestParam String period,
+                                                  @RequestParam(required = false, defaultValue = "month") String type) {
+        return R.ok(ncmDefectRecordService.compareAnalysis(period, type));
     }
 
-    /** 实时看板:今日不良数/当前班次不良率/Top5 不良类型/工序热力图/数据新鲜度 */
+    /** 实时看板:今日不良数/当前班次不良率/PPM/Top5 不良类型/工序热力图/数据新鲜度 */
     @GetMapping("/dashboard")
     @PreAuthorize("hasAuthority('ncm.record.list')")
     public R<Map<String, Object>> dashboard() {
         return R.ok(ncmDefectRecordService.dashboard());
+    }
+
+    /** 趋势异常检测(SR-NCM-017):连续5天defectRate上升->标红预警+通知 */
+    @PostMapping("/analysis/check-anomaly")
+    @PreAuthorize("hasAuthority('ncm.record.list')")
+    public R<Map<String, Object>> checkTrendAnomaly() {
+        return R.ok(ncmDefectRecordService.checkTrendAnomaly());
+    }
+
+    /** 不良记录一键发起8D(跨模块:defect->8D) */
+    @PostMapping("/defect-records/{id}/launch-8d")
+    @PreAuthorize("hasAuthority('ncm.8d.create')")
+    public R<Object> launch8dFromDefect(@PathVariable String id) {
+        return R.ok(ncmDefectRecordService.launch8dFromDefect(id));
+    }
+
+    /** 不良记录一键发起CAPA(跨模块:defect->CAPA) */
+    @PostMapping("/defect-records/{id}/launch-capa")
+    @PreAuthorize("hasAuthority('ncm.capa.create')")
+    public R<Object> launchCapaFromDefect(@PathVariable String id) {
+        return R.ok(ncmDefectRecordService.launchCapaFromDefect(id));
     }
 }

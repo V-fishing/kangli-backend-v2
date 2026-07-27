@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
+import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.entity.SqmSupplierGradeRule;
 import com.konli.qms.domain.sqm.entity.SqmSupplierPerformance;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierGradeRuleMapper;
+import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierPerformanceMapper;
 import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,7 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
     private final SqmSupplierPerformanceMapper sqmSupplierPerformanceMapper;
     private final SqmIncomingLotMapper sqmIncomingLotMapper;
     private final SqmSupplierGradeRuleMapper gradeRuleMapper;
+    private final SqmSupplierMapper sqmSupplierMapper;
 
     @Override
     public List<SqmSupplierPerformance> list(String supplierId) {
@@ -90,7 +93,15 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
         BigDecimal score = incomingPassRate.add(deliveryTimelyRate)
                 .divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
 
+        // orgId 优先取当前登录用户;当为空/超管哨兵(ROOT)/非法 UUID 时,回退取供应商自身 orgId
         String orgId = currentOrgId();
+        if (!isValidUuid(orgId)) {
+            SqmSupplier supplier = sqmSupplierMapper.selectById(supplierId);
+            if (supplier == null) {
+                throw new BusinessException(404, "供应商不存在");
+            }
+            orgId = supplier.getOrgId();
+        }
 
         // 删除该供应商该周期旧记录(UNIQUE(supplier_id, period)),再插入
         sqmSupplierPerformanceMapper.delete(
@@ -148,5 +159,18 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
     private String currentOrgId() {
         CompanyContext.CurrentUser u = CompanyContext.get();
         return u == null ? null : u.orgId();
+    }
+
+    /** 判断字符串是否为合法 UUID(排除 null/空/超管哨兵 ROOT 等)。 */
+    private static boolean isValidUuid(String s) {
+        if (s == null || s.isBlank()) {
+            return false;
+        }
+        try {
+            java.util.UUID.fromString(s);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 }

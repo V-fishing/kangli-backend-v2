@@ -12,4 +12,7 @@ public interface SpcControlLimitService {
     SpcControlLimit getActive(String paramId);
 
     SpcControlLimit calc(String paramId);
+
+    /** 人工覆盖:写入 manual=true 的基线并置为 active,旧基线置为非 active。优先于自动计算。 */
+    SpcControlLimit saveManual(String paramId, SpcControlLimit limits);
 }

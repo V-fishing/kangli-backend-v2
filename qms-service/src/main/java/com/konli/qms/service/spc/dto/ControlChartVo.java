@@ -13,4 +13,7 @@ public class ControlChartVo {
     private List<SpcSubgroup> subgroups;
 
     private SpcControlLimit limit;
+
+    /** 异常点标记(前端"异常点与判异规则命中"列表 / 控制图着色);无异常时为 null/空。 */
+    private List<ControlChartMark> marks;
 }

@@ -46,6 +46,12 @@ public class SqmChangeOrder extends BaseEntity {
     @TableField("risk_pre_mark")
     private String riskPreMark;           // 高/中/低
 
+    @TableField("verify_report")
+    private String verifyReport;          // 验证报告附件(评估资料之一)
+
+    @TableField("risk_file")
+    private String riskFile;              // 风险评估附件(评估资料之一)
+
     private String source;                // 门户提报/主数据自动检测
 
     @TableField("receive_frozen")

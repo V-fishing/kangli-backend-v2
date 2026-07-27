@@ -2,11 +2,13 @@ package com.konli.qms.service.uop.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.security.PermissionLoader;
+import com.konli.qms.domain.uop.entity.SysButton;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.domain.uop.entity.SysRoleButton;
 import com.konli.qms.domain.uop.entity.SysRoleMenu;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.entity.SysUserRole;
+import com.konli.qms.domain.uop.mapper.SysButtonMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleButtonMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleMenuMapper;
@@ -24,6 +26,7 @@ import java.util.List;
 public class RoleServiceImpl implements RoleService {
 
     private final SysRoleMapper sysRoleMapper;
+    private final SysButtonMapper sysButtonMapper;
     private final SysRoleMenuMapper sysRoleMenuMapper;
     private final SysRoleButtonMapper sysRoleButtonMapper;
     private final SysUserRoleMapper sysUserRoleMapper;
@@ -104,5 +107,33 @@ public class RoleServiceImpl implements RoleService {
             return List.of();
         }
         return sysUserMapper.selectBatchIds(userIds);
+    }
+
+    @Override
+    public List<SysButton> listButtons() {
+        return sysButtonMapper.selectList(null);
+    }
+
+    @Override
+    public List<SysButton> roleButtons(String roleId) {
+        List<SysRoleButton> rbs = sysRoleButtonMapper.selectList(
+                new LambdaQueryWrapper<SysRoleButton>().eq(SysRoleButton::getRoleId, roleId));
+        List<String> ids = rbs.stream().map(SysRoleButton::getButtonId).toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return sysButtonMapper.selectBatchIds(ids);
+    }
+
+    @Override
+    public List<String> roleMenus(String roleId) {
+        List<SysRoleMenu> rms = sysRoleMenuMapper.selectList(
+                new LambdaQueryWrapper<SysRoleMenu>().eq(SysRoleMenu::getRoleId, roleId));
+        return rms.stream().map(SysRoleMenu::getMenuId).toList();
+    }
+
+    @Override
+    public SysRole getById(String id) {
+        return sysRoleMapper.selectById(id);
     }
 }

@@ -8,7 +8,11 @@ import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 
-/** 首件检验任务(校验单)。双签名:inspector_id(检验人)+ reviewer_id(复核人,V08 加)。 */
+/**
+ * 首件检验任务(校验单)。
+ * source = FACTORY(产线首件) | SUPPLIER(供应商来料首件)，区分两套业务场景。
+ * 双签名:inspector_id(检验人)+ reviewer_id(复核人,V08 加)。
+ */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @TableName("ops.fia_task")
@@ -16,6 +20,10 @@ public class FiaTask extends BaseEntity {
 
     @TableField("org_id")
     private String orgId;
+
+    /** 来源: FACTORY(产线首件) / SUPPLIER(供应商来料首件) */
+    @TableField("source")
+    private String source;
 
     private String code;
     @TableField("wo_no")
@@ -32,6 +40,12 @@ public class FiaTask extends BaseEntity {
     private String stdId;
     @TableField("std_version")
     private String stdVersion;
+    @TableField("part_no")
+    private String partNo;
+    @TableField("supplier_id")
+    private String supplierId;
+    @TableField("lot_id")
+    private String lotId;
     private String aql;
     @TableField("sample_size")
     private Integer sampleSize;

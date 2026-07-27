@@ -46,6 +46,18 @@ public class SpcParam extends BaseEntity {
     @TableField("chart_type")
     private String chartType;
 
+    /** CPK 标准差算法:within(组内,默认) / overall(整体)。 */
+    @TableField("sigma_method")
+    private String sigmaMethod;
+
+    /** 控制限/能力指数 σ 倍数(默认 3,可配 2 / 2.5 等)。 */
+    @TableField("sigma_k")
+    private BigDecimal sigmaK;
+
+    /** CPK 自动滚动更新周期:批次 / 日 / 周,null 表示不自动更新。 */
+    @TableField("cpk_period")
+    private String cpkPeriod;
+
     @TableField("is_active")
     private Boolean isActive;
 }

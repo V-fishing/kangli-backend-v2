@@ -19,6 +19,11 @@
             <groupId>com.konli.qms</groupId>
             <artifactId>qms-common</artifactId>
         </dependency>
+        <!-- 校验注解(@NotBlank 等)仅用于请求 DTO,domain 仅需 API -->
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

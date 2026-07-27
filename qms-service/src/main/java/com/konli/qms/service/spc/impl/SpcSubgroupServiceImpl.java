@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.spc.entity.SpcAlarm;
+import com.konli.qms.domain.spc.entity.SpcGlobalConfig;
 import com.konli.qms.domain.spc.entity.SpcControlLimit;
 import com.konli.qms.domain.spc.entity.SpcMeasurement;
 import com.konli.qms.domain.spc.entity.SpcParam;
@@ -15,11 +16,17 @@ import com.konli.qms.domain.spc.mapper.SpcMeasurementMapper;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.spc.mapper.SpcRuleMapper;
 import com.konli.qms.domain.spc.mapper.SpcSubgroupMapper;
+import com.konli.qms.service.spc.SpcNotifyChannelService;
 import com.konli.qms.service.spc.SpcSubgroupService;
+import com.konli.qms.service.spc.SpcGlobalConfigService;
+import com.konli.qms.service.spc.SpcCapabilityService;
+import com.konli.qms.service.spc.dto.ControlChartMark;
 import com.konli.qms.service.spc.dto.ControlChartVo;
+import com.konli.qms.service.spc.dto.SpcHistogramVo;
 import com.konli.qms.service.spc.dto.SpcSubgroupVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -28,10 +35,15 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
+
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SpcSubgroupServiceImpl implements SpcSubgroupService {
 
     private final SpcSubgroupMapper spcSubgroupMapper;
@@ -40,6 +52,9 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
     private final SpcRuleMapper spcRuleMapper;
     private final SpcAlarmMapper spcAlarmMapper;
     private final SpcControlLimitMapper spcControlLimitMapper;
+    private final SpcNotifyChannelService spcNotifyChannelService;
+    private final SpcGlobalConfigService spcGlobalConfigService;
+    private final SpcCapabilityService spcCapabilityService;
 
     @Override
     public List<SpcSubgroup> list() {
@@ -71,25 +86,121 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         }
         List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(w);
 
-        // 当前激活控制限(无则返回 null,前端自适应)
+        // 当前激活控制限:优先人工覆盖(manual=true),其次自动基线;active 且最新一条
         SpcControlLimit limit = spcControlLimitMapper.selectOne(
                 new LambdaQueryWrapper<SpcControlLimit>()
                         .eq(SpcControlLimit::getParamId, paramId)
                         .eq(SpcControlLimit::getIsActive, true)
+                        .orderByDesc(SpcControlLimit::getManual)
+                        .orderByDesc(SpcControlLimit::getCalcAt)
                         .last("LIMIT 1"));
+
+        // 异常点 marks:遍历子组,把 create 时已落库的判异结果(is_outlier/outlier_rule)映射为
+        // 前端"异常点与判异规则命中"列表/控制图着色所需结构
+        Map<String, String> ruleLevelMap = spcRuleMapper.selectList(null).stream()
+                .collect(Collectors.toMap(SpcRule::getRuleCode, SpcRule::getLevel, (a, b) -> a));
+        List<ControlChartMark> marks = new ArrayList<>();
+        for (int idx = 0; idx < subgroups.size(); idx++) {
+            SpcSubgroup sg = subgroups.get(idx);
+            if (Boolean.TRUE.equals(sg.getIsOutlier()) && sg.getOutlierRule() != null) {
+                ControlChartMark mk = new ControlChartMark();
+                mk.setI(idx);
+                mk.setRule(sg.getOutlierRule());
+                mk.setLevel(ruleLevelMap.getOrDefault(sg.getOutlierRule(), "预警"));
+                marks.add(mk);
+            }
+        }
 
         ControlChartVo vo = new ControlChartVo();
         vo.setSubgroups(subgroups);
         vo.setLimit(limit);
+        vo.setMarks(marks);
         return vo;
     }
 
     @Override
+    public SpcHistogramVo getHistogram(String paramId) {
+        SpcHistogramVo vo = new SpcHistogramVo();
+        vo.setBins(List.of());
+        vo.setFreq(List.of());
+        if (paramId == null || paramId.isBlank()) {
+            return vo;
+        }
+        SpcParam param = spcParamMapper.selectById(paramId);
+        if (param == null) {
+            return vo;
+        }
+        List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(
+                new LambdaQueryWrapper<SpcSubgroup>()
+                        .eq(SpcSubgroup::getParamId, paramId)
+                        .orderByAsc(SpcSubgroup::getSubgroupTime));
+        List<Double> values = subgroups.stream()
+                .map(SpcSubgroup::getXbar)
+                .filter(Objects::nonNull)
+                .map(BigDecimal::doubleValue)
+                .toList();
+        if (values.isEmpty()) {
+            return vo;
+        }
+        // 均值与整体标准差 σ
+        double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double variance = values.stream().mapToDouble(v -> (v - mean) * (v - mean)).sum() / (values.size() - 1);
+        double sigma = Math.sqrt(variance);
+        double min = values.stream().mapToDouble(Double::doubleValue).min().orElse(0);
+        double max = values.stream().mapToDouble(Double::doubleValue).max().orElse(0);
+        int binCount = 12;
+        if (min == max || sigma == 0) {
+            vo.setBins(List.of(mean));
+            vo.setFreq(List.of((long) values.size()));
+            vo.setNormalFreq(List.of((double) values.size()));
+        } else {
+            double width = (max - min) / binCount;
+            List<Double> bins = new ArrayList<>();
+            List<Long> freq = new ArrayList<>(Collections.nCopies(binCount, 0L));
+            for (int i = 0; i < binCount; i++) {
+                bins.add(min + (i + 0.5) * width);
+            }
+            for (double v : values) {
+                int idx = (int) ((v - min) / width);
+                if (idx >= binCount) idx = binCount - 1;
+                if (idx < 0) idx = 0;
+                freq.set(idx, freq.get(idx) + 1);
+            }
+            vo.setBins(bins);
+            vo.setFreq(freq);
+            // 正态拟合曲线(频次量级):normalFreq_i = pdf(bin_i) * total * binWidth
+            double total = values.size();
+            List<Double> normalFreq = new ArrayList<>();
+            for (Double b : bins) {
+                double pdf = Math.exp(-0.5 * Math.pow((b - mean) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI));
+                normalFreq.add(pdf * total * width);
+            }
+            vo.setNormalFreq(normalFreq);
+        }
+        vo.setMean(mean);
+        vo.setSigma(sigma);
+        vo.setUsl(param.getSpecUpper() != null ? param.getSpecUpper().doubleValue() : null);
+        vo.setLsl(param.getSpecLower() != null ? param.getSpecLower().doubleValue() : null);
+        return vo;
+    }
+
+    /** 独立事务创建子组:联动场景(FIA->SPC)失败时不回滚调用方主事务。 */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SpcSubgroup createInNewTx(SpcSubgroup subgroup, List<BigDecimal> values) {
+        return create(subgroup, values);
+    }
+
     @Transactional
     public SpcSubgroup create(SpcSubgroup subgroup, List<BigDecimal> values) {
         SpcParam param = spcParamMapper.selectById(subgroup.getParamId());
         if (param == null) {
             throw new BusinessException(400, "SPC 参数不存在");
+        }
+        // 兜底 orgId：集团管理员(dataScope=all)无归属 org 时，使用参数所属组织，
+        // 避免 org_id 非空外键约束导致插入 500（前端集团总览视图 orgId 为空）。
+        if (subgroup.getOrgId() == null || subgroup.getOrgId().isBlank()) {
+            subgroup.setOrgId(param.getOrgId());
         }
         if (values == null || values.isEmpty()) {
             throw new BusinessException(400, "测量值不能为空");
@@ -145,21 +256,67 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             spcMeasurementMapper.insert(m);
         }
 
-        // 命中规则 -> 生成告警
+        // 命中规则 -> 生成告警(SR-SPC-018:30分钟内同参数已报过则抑制,仅控制图标记)
         if (triggered != null) {
-            SpcAlarm alarm = new SpcAlarm();
-            alarm.setOrgId(subgroup.getOrgId());
-            alarm.setCode("AL-" + System.currentTimeMillis());
-            alarm.setParamId(subgroup.getParamId());
-            alarm.setParamName(param.getParamName());
-            alarm.setCurrentValue(xbar);
-            alarm.setTriggeredRule(triggered[0]);
-            alarm.setLevel(triggered[1]);
-            alarm.setAlarmTime(LocalDateTime.now());
-            alarm.setStatus("待确认");
-            alarm.setWoNo(subgroup.getWoNo());
-            alarm.setBatchNo(subgroup.getBatchNo());
-            spcAlarmMapper.insert(alarm);
+            int suppressMin = 30;
+            try {
+                SpcGlobalConfig gc = spcGlobalConfigService.get(subgroup.getOrgId());
+                if (gc != null && gc.getSuppressMinutes() != null) {
+                    suppressMin = gc.getSuppressMinutes();
+                }
+            } catch (Exception ignored) {
+            }
+            LocalDateTime since = LocalDateTime.now().minusMinutes(suppressMin);
+            // SR-SPC-018:仅"同级"重复抑制;级别升级(如预警->报警)视为新告警,不抑制
+            Long recent = spcAlarmMapper.selectCount(
+                    new LambdaQueryWrapper<SpcAlarm>()
+                            .eq(SpcAlarm::getParamId, subgroup.getParamId())
+                            .eq(SpcAlarm::getLevel, triggered[1])
+                            .ge(SpcAlarm::getAlarmTime, since));
+            if (recent != null && recent > 0) {
+                // 抑制重复报警:不建新 alarm、不推送(子组已标记 is_outlier,控制图可见)
+                log.info("[SPC抑制] 参数 {} 近 {} 分钟已报过同级({})告警,抑制重复报警(子组已标记触发点)",
+                        param.getParamName(), suppressMin, triggered[1]);
+            } else {
+                // 首次/超出抑制窗 -> 建 alarm + 推送通知
+                SpcAlarm alarm = new SpcAlarm();
+                alarm.setOrgId(subgroup.getOrgId());
+                alarm.setCode("AL-" + System.currentTimeMillis());
+                alarm.setParamId(subgroup.getParamId());
+                alarm.setParamName(param.getParamName());
+                alarm.setCurrentValue(xbar);
+                alarm.setTriggeredRule(triggered[0]);
+                alarm.setLevel(triggered[1]);
+                alarm.setAlarmTime(LocalDateTime.now());
+                alarm.setStatus("待确认");
+                alarm.setWoNo(subgroup.getWoNo());
+                alarm.setBatchNo(subgroup.getBatchNo());
+                spcAlarmMapper.insert(alarm);
+                // 报警触发后推送通知(按启用渠道生成推送记录,失败不影响报警本身)
+                try {
+                    spcNotifyChannelService.send(alarm);
+                } catch (Exception ignored) {
+                    // 通知异常不回滚报警
+                }
+            }
+        }
+
+        // 批次周期 CPK 自动滚动:新 batchNo 出现时,对刚结束的批次生成 CPK 快照(历史判定冻结)
+        try {
+            if ("批次".equals(param.getCpkPeriod()) && subgroup.getBatchNo() != null && !subgroup.getBatchNo().isBlank()) {
+                SpcSubgroup prev = spcSubgroupMapper.selectOne(
+                        new LambdaQueryWrapper<SpcSubgroup>()
+                                .eq(SpcSubgroup::getParamId, param.getId())
+                                .ne(SpcSubgroup::getId, subgroup.getId())
+                                .orderByDesc(SpcSubgroup::getSubgroupTime)
+                                .last("LIMIT 1"));
+                if (prev != null && prev.getBatchNo() != null
+                        && !prev.getBatchNo().equals(subgroup.getBatchNo())) {
+                    spcCapabilityService.calc(param.getId(), "批次", prev.getBatchNo());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[SPC CPK快照] 批次边界快照计算失败(忽略): {}", e.getMessage());
         }
 
         return subgroup;
@@ -200,6 +357,9 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         // 按时间正序(oldest -> newest)排列历史子组
         List<SpcSubgroup> chrono = new ArrayList<>(recent);
         Collections.reverse(chrono);
+
+        // SR-SPC-015:同时触发预警和报警时仅展示报警(高级别)。先记预警,遇报警立即返回。
+        String[] winner = null;
 
         for (SpcRule rule : rules) {
             String code = rule.getRuleCode();
@@ -346,10 +506,16 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             }
 
             if (triggered) {
-                return new String[]{code, rule.getLevel()};
+                // SR-SPC-015:报警(高级别)立即返回;预警仅记录,继续找报警
+                if ("报警".equals(rule.getLevel())) {
+                    return new String[]{code, rule.getLevel()};
+                }
+                if (winner == null) {
+                    winner = new String[]{code, rule.getLevel()};
+                }
             }
         }
-        return null;
+        return winner;
     }
 
     private BigDecimal avg(List<BigDecimal> list) {

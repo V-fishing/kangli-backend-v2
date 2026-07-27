@@ -36,14 +36,14 @@ public class OrgController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('system.org.list')")
+    @PreAuthorize("hasAuthority('system.org.create')")
     public R<Void> save(@RequestBody SysOrg org) {
         orgService.save(org);
         return R.ok();
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('system.org.list')")
+    @PreAuthorize("hasAuthority('system.org.delete')")
     public R<Void> delete(@PathVariable String id) {
         orgService.delete(id);
         return R.ok();

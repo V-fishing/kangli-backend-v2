@@ -3,6 +3,7 @@ package com.konli.qms.service.fia.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
+import com.konli.qms.domain.fia.entity.FiaApproval;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
 import com.konli.qms.domain.fia.entity.FiaInspStd;
@@ -21,13 +22,21 @@ import com.konli.qms.domain.spc.entity.SpcSubgroup;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.mapper.SysUserMapper;
+import com.konli.qms.service.fia.FiaApprovalService;
 import com.konli.qms.service.fia.FiaTaskService;
+import static com.konli.qms.common.enums.QmsEnums.*;
+import com.konli.qms.service.fia.FiaWoLockService;
+import com.konli.qms.service.ncm.NcmDefectRecordService;
+import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
+import com.konli.qms.service.sqm.SqmTraceService;
+import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.service.fia.SignConfigService;
 import com.konli.qms.service.fia.dto.FiaTaskVo;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,9 +50,18 @@ import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.regex.Pattern;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -61,6 +79,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final PasswordEncoder passwordEncoder;
     private final SpcParamMapper spcParamMapper;
     private final SpcSubgroupService spcSubgroupService;
+    private final FiaApprovalService fiaApprovalService;
+    private final FiaWoLockService fiaWoLockService;
+    private final JdbcTemplate jdbcTemplate;
+    private final NcmDefectRecordService ncmDefectRecordService;
+    private final SqmTraceService sqmTraceService;
 
     @Override
     public List<FiaTask> list() {
@@ -68,26 +91,125 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     @Override
+    public List<FiaTask> listBySource(String source) {
+        return fiaTaskMapper.selectList(
+                new LambdaQueryWrapper<FiaTask>().eq(FiaTask::getSource, source));
+    }
+
+    @Override
     public FiaTaskVo get(String id) {
+        FiaTask task = null;
+        // 优先按主键(UUID)查询；若传入的是校验单号(code,如 FA-...),PostgreSQL 的 uuid 列
+        // 会把非法字符串当作 uuid 解析而抛 invalid input syntax,这里捕获后回退按 code 查询。
+        try {
+            task = fiaTaskMapper.selectById(id);
+        } catch (Exception ignored) {
+            task = null;
+        }
+        if (task == null) {
+            task = fiaTaskMapper.selectOne(
+                    new LambdaQueryWrapper<FiaTask>().eq(FiaTask::getCode, id));
+        }
         FiaTaskVo vo = new FiaTaskVo();
-        vo.setTask(fiaTaskMapper.selectById(id));
-        vo.setItems(fiaInspItemMapper.selectList(
-                new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, id).orderByAsc(FiaInspItem::getSeq)));
+        vo.setTask(task);
+        if (task != null) {
+            vo.setItems(fiaInspItemMapper.selectList(
+                    new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, task.getId()).orderByAsc(FiaInspItem::getSeq)));
+        }
         return vo;
+    }
+
+    /** 校验标准：优先按 UUID 主键查询；传入编码(如 STD-001)时按 code 兜底，避免向 UUID 列传入非法值导致 500 */
+    private static final Pattern UUID_RE =
+            Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+    private FiaInspStd resolveInspStd(String stdId) {
+        if (stdId == null || stdId.isBlank()) {
+            return null;
+        }
+        FiaInspStd std = isUuid(stdId) ? fiaInspStdMapper.selectById(stdId) : null;
+        if (std == null) {
+            std = fiaInspStdMapper.selectOne(
+                    new LambdaQueryWrapper<FiaInspStd>().eq(FiaInspStd::getCode, stdId));
+        }
+        return std;
+    }
+
+    private static boolean isUuid(String s) {
+        return s != null && UUID_RE.matcher(s).matches();
+    }
+
+    @Override
+    public FiaInspStd matchStd(String orgId, String partNo, String supplierId, String procName) {
+        if (partNo == null || partNo.isBlank()) {
+            return null;
+        }
+        // 1) 物料编码 + 工序(标准由工厂自有标准库判定,与供应商无关)
+        FiaInspStd std = fiaInspStdMapper.selectOne(
+                stdQuery(orgId, partNo, procName));
+        if (std != null) {
+            return std;
+        }
+        // 2) 仅物料编码
+        std = fiaInspStdMapper.selectOne(
+                stdQuery(orgId, partNo, null));
+        if (std != null) {
+            return std;
+        }
+        // 3) 兜底:通用默认标准(保证来料全量覆盖,避免漏料而无法建单/判定)
+        return fiaInspStdMapper.selectOne(
+                new LambdaQueryWrapper<FiaInspStd>()
+                        .eq(FiaInspStd::getOrgId, orgId)
+                        .eq(FiaInspStd::getStatus, "生效")
+                        .eq(FiaInspStd::getIsDefault, true)
+                        .eq(FiaInspStd::getIsDeleted, false)
+                        .last("LIMIT 1"));
+    }
+
+    private LambdaQueryWrapper<FiaInspStd> stdQuery(String orgId, String partNo, String procName) {
+        LambdaQueryWrapper<FiaInspStd> w = new LambdaQueryWrapper<>();
+        w.eq(FiaInspStd::getOrgId, orgId)
+                .eq(FiaInspStd::getStatus, "生效")
+                .eq(FiaInspStd::getPartNo, partNo)
+                .eq(FiaInspStd::getIsDeleted, false);
+        if (procName != null && !procName.isBlank()) {
+            w.eq(FiaInspStd::getProcName, procName);
+        }
+        w.last("LIMIT 1");
+        return w;
     }
 
     @Override
     @Transactional
     public FiaTask create(FiaTask task) {
-        FiaInspStd std = fiaInspStdMapper.selectById(task.getStdId());
+        // 默认 source=FACTORY (产线首件), 若未显式设置
+        if (task.getSource() == null || task.getSource().isBlank()) {
+            task.setSource("FACTORY");
+        }
+        FiaInspStd std = resolveInspStd(task.getStdId());
+        // 自动匹配:stdId 为空时按(物料+工序)从标准库匹配
+        if (std == null && task.getProductName() != null && task.getProcName() != null) {
+            std = fiaInspStdMapper.selectOne(
+                    new LambdaQueryWrapper<FiaInspStd>()
+                            .eq(FiaInspStd::getMaterial, task.getProductName())
+                            .eq(FiaInspStd::getProcName, task.getProcName())
+                            .eq(FiaInspStd::getStatus, "生效"));
+            if (std != null) task.setStdId(std.getId());
+        }
+        // 来料批次驱动:按 物料编码 + 供应商 + 工序 自动匹配标准库
+        if (std == null && task.getPartNo() != null && !task.getPartNo().isBlank()) {
+            std = matchStd(task.getOrgId(), task.getPartNo(), task.getSupplierId(), task.getProcName());
+            if (std != null) task.setStdId(std.getId());
+        }
         if (std == null) {
-            throw new BusinessException(400, "检验标准不存在");
+            throw new BusinessException(400, "检验标准不存在(物料=" + task.getProductName()
+                    + ",工序=" + task.getProcName() + ",物料编码=" + task.getPartNo() + ")");
         }
         task.setCode("FA-" + System.currentTimeMillis());
         task.setStdVersion(std.getStdVersion());
-        task.setAql(std.getAql());
+        if (task.getAql() == null) task.setAql(std.getAql());
         if (task.getStatus() == null) {
-            task.setStatus("待检");
+            task.setStatus(FiaTaskStatus.PENDING);
         }
         task.setIsOverdue(false);
         task.setSlaDueAt(LocalDateTime.now().plusHours(2));
@@ -111,12 +233,57 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         log(task, 1, "创建任务", "系统");
         log(task, 2, "标准调取(" + std.getCode() + ")", "系统");
+        // SR-FIA-022/026:首件任务创建即锁定工单(首件未完成),在制品待处理、禁止流转
+        try {
+            fiaWoLockService.lockOnCreate(task.getOrgId(), task.getWoNo(), task.getCode());
+        } catch (Exception e) {
+            log.warn("[FIA] 工单锁定失败 woNo={}: {}", task.getWoNo(), e.getMessage());
+        }
+        // SR-FIA-006 前置:推送待检通知给检验员/班组长(写 notification_log)
+        try {
+            notifyPending(task);
+        } catch (Exception e) {
+            log.warn("[FIA] 待检通知写入失败 taskId={}: {}", task.getId(), e.getMessage());
+        }
         return task;
+    }
+
+    /** 写入待检通知到 notification_log(一期站内通知,角色广播给检验员/班组长)。 */
+    private void notifyPending(FiaTask task) {
+        String content = String.format("首件检验待检:校验单 %s,工单 %s,产线 %s,工序 %s,SLA %s",
+                task.getCode(), task.getWoNo(), task.getLineName(), task.getProcName(),
+                task.getSlaDueAt() != null ? task.getSlaDueAt().toString() : "-");
+        jdbcTemplate.update(
+                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) " +
+                        "VALUES (?, 'FIA_TASK_PENDING', ?, '站内', ?, ?, '提醒', '已发送', now())",
+                java.util.UUID.fromString(task.getOrgId()), task.getCode(),
+                "检验员/班组长", content);
+    }
+
+    /** 将前端传入的标识(可能是主键 UUID,也可能是校验单号 code)解析为真实主键;解析失败返回 null */
+    private String resolveTaskId(String input) {
+        if (input == null) return null;
+        FiaTask t;
+        // 主键是 PG uuid 类型,传入 code(如 FA-...)会被当作 uuid 解析而抛异常,这里捕获后回退按 code 查。
+        try {
+            t = fiaTaskMapper.selectById(input);
+        } catch (Exception ignored) {
+            t = null;
+        }
+        if (t == null) {
+            t = fiaTaskMapper.selectOne(
+                    new LambdaQueryWrapper<FiaTask>().eq(FiaTask::getCode, input));
+        }
+        return t != null ? t.getId() : null;
     }
 
     @Override
     @Transactional
     public void enterResults(String taskId, List<FiaInspItem> items) {
+        String realId = resolveTaskId(taskId);
+        if (realId == null) {
+            throw new BusinessException(400, "任务不存在");
+        }
         for (FiaInspItem it : items) {
             FiaInspItem upd = new FiaInspItem();
             upd.setId(it.getId());
@@ -124,16 +291,20 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             upd.setJudge(it.getJudge());
             fiaInspItemMapper.updateById(upd);
         }
-        FiaTask task = new FiaTask();
-        task.setId(taskId);
-        task.setStatus("进行中");
-        fiaTaskMapper.updateById(task);
-        log(fiaTaskMapper.selectById(taskId), 3, "检验录入", currentOperator());
+        // 仅在首次录入(待检)时置为FiaTaskStatus.IN_PROGRESS;已处于签名流转中(待复核/待批准)的任务补充录入时
+        // 保持当前状态,避免把状态错误地重置回FiaTaskStatus.IN_PROGRESS而打断分级签名。
+        FiaTask task = fiaTaskMapper.selectById(realId);
+        if (task != null && (task.getStatus() == null || FiaTaskStatus.PENDING.equals(task.getStatus()))) {
+            task.setStatus(FiaTaskStatus.IN_PROGRESS);
+            fiaTaskMapper.updateById(task);
+        }
+        log(fiaTaskMapper.selectById(realId), 3, "检验录入", currentOperator());
     }
 
     @Override
     public void signInspector(String taskId, String password, String itemId) {
-        FiaTask task = fiaTaskMapper.selectById(taskId);
+        String realId = resolveTaskId(taskId);
+        FiaTask task = realId == null ? null : fiaTaskMapper.selectById(realId);
         if (task == null) {
             throw new BusinessException(400, "任务不存在");
         }
@@ -145,11 +316,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             return;
         }
         // 整单签名:原逻辑(设 inspectorId + 状态 -> 待复核)
-        if (!"进行中".equals(task.getStatus())) {
+        if (!FiaTaskStatus.IN_PROGRESS.equals(task.getStatus())) {
             throw new BusinessException(400, "任务状态不允许检验签名(需为进行中)");
         }
         task.setInspectorId(currentOperator());
-        task.setStatus("待复核");
+        task.setStatus(FiaTaskStatus.WAIT_REVIEW);
         fiaTaskMapper.updateById(task);
         log(task, 4, "检验人签名", currentOperator());
     }
@@ -157,7 +328,8 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     @Override
     @Transactional
     public void signReviewer(String taskId, String password, String itemId) {
-        FiaTask task = fiaTaskMapper.selectById(taskId);
+        String realId = resolveTaskId(taskId);
+        FiaTask task = realId == null ? null : fiaTaskMapper.selectById(realId);
         if (task == null) {
             throw new BusinessException(400, "任务不存在");
         }
@@ -168,7 +340,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             return;
         }
         // 整单签名:原逻辑
-        if (!"待复核".equals(task.getStatus())) {
+        if (!FiaTaskStatus.WAIT_REVIEW.equals(task.getStatus())) {
             throw new BusinessException(400, "任务状态不允许复核签名(需为待复核)");
         }
         task.setReviewerId(currentOperator());
@@ -178,6 +350,12 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             task.setStatus("待批准");
             fiaTaskMapper.updateById(task);
             log(task, 5, "复核人签名(待批准)", currentOperator());
+        } else if (needsApproval(task)) {
+            // 需审批路径:签名成功后创建审批单,任务置FiaTaskStatus.IN_APPROVAL挂起
+            createApprovalForTask(task);
+            task.setStatus(FiaTaskStatus.IN_APPROVAL);
+            fiaTaskMapper.updateById(task);
+            log(task, 5, "复核人签名-待审批", currentOperator());
         } else {
             completeAndArchive(task, 5, "复核人签名");
         }
@@ -186,20 +364,257 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     @Override
     @Transactional
     public void signApprover(String taskId, String password) {
-        FiaTask task = fiaTaskMapper.selectById(taskId);
+        String realId = resolveTaskId(taskId);
+        FiaTask task = realId == null ? null : fiaTaskMapper.selectById(realId);
         if (task == null || !"待批准".equals(task.getStatus())) {
-            throw new BusinessException(400, "任务状态不允许批准签名(需为待批准)");
+            throw new BusinessException(400, "任务不存在或任务状态不允许批准签名(需为待批准)");
         }
         verifyPassword(task.getOrgId(), password);
         task.setApproverId(currentOperator());
         task.setApprovedAt(LocalDateTime.now());
-        completeAndArchive(task, 6, "批准人签名");
+        if (needsApproval(task)) {
+            // 需审批路径:签名成功后创建审批单,任务置FiaTaskStatus.IN_APPROVAL挂起
+            createApprovalForTask(task);
+            task.setStatus(FiaTaskStatus.IN_APPROVAL);
+            fiaTaskMapper.updateById(task);
+            log(task, 6, "批准人签名-待审批", currentOperator());
+        } else {
+            completeAndArchive(task, 6, "批准人签名");
+        }
+    }
+
+    /**
+     * 处置/放行路径:退货/返工/让步接收/紧急放行/豁免开工。
+     * 仅记录处置路径到任务,审批单在签名成功后由 signReviewer/signApprover 创建,
+     * 确保签名失败不会留下孤儿审批单。
+     */
+    @Override
+    @Transactional
+    public void setDisposition(String taskId, String disposition, String remark) {
+        FiaTask task = fiaTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new BusinessException(400, "首件任务不存在");
+        }
+        // 按 source 校验 disposition 枚举
+        Set<String> allowed;
+        if ("SUPPLIER".equals(task.getSource())) {
+            allowed = Set.of(SupplierDisposition.ACCEPT, FactoryDisposition.RETURN, FactoryDisposition.CONCESSION, SupplierDisposition.SORT);
+        } else {
+            allowed = Set.of(FactoryDisposition.RETURN, FactoryDisposition.REWORK, FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY, FactoryDisposition.EXEMPTION);
+        }
+        if (disposition == null || !allowed.contains(disposition)) {
+            throw new BusinessException(400, "处置路径 [" + disposition + "] 不适用于 source=" + task.getSource() + "，允许: " + String.join("/", allowed));
+        }
+        task.setDisposition(disposition);
+        task.setRemark(remark);
+        fiaTaskMapper.updateById(task);
+
+        int seq = fiaTaskLogMapper.selectCount(
+                new LambdaQueryWrapper<FiaTaskLog>().eq(FiaTaskLog::getTaskId, taskId)
+        ).intValue() + 1;
+        log(task, seq, "处置-" + disposition, currentOperator());
+    }
+
+    /** 是否需质量主管审批的处置/放行路径 */
+    private boolean needsApproval(FiaTask task) {
+        return task.getDisposition() != null
+                && APPROVAL_DISPOSITIONS.contains(task.getDisposition());
+    }
+
+    /** 签名成功后创建审批单(先清去重,再建新单),确保无孤儿审批记录 */
+    private void createApprovalForTask(FiaTask task) {
+        fiaApprovalService.removePendingByTask(task.getId());
+        FiaApproval approval = new FiaApproval();
+        approval.setOrgId(task.getOrgId());
+        approval.setApprovalType(task.getDisposition());
+        approval.setWoNo(task.getWoNo());
+        approval.setTaskId(task.getId());
+        String remark = task.getRemark();
+        approval.setReason(remark == null || remark.isBlank() ? (task.getDisposition() + "申请") : remark);
+        approval.setApplicantId(currentOperator());
+        approval.setStatus("待审批");
+        approval.setApplyAt(LocalDateTime.now());
+        fiaApprovalService.create(approval);
+    }
+
+    private static final Set<String> APPROVAL_DISPOSITIONS = Set.of(FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY, FactoryDisposition.EXEMPTION);
+
+    /**
+     * 审批通过后的放行:归档 + 首件CTQ数据写入SPC基准(已获批准,无论判定是否合格)。
+     * 仅当任务处于FiaTaskStatus.IN_APPROVAL才执行,幂等安全。
+     */
+    @Override
+    @Transactional
+    public void releaseAfterApproval(String taskId) {
+        FiaTask task = fiaTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new BusinessException(400, "首件任务不存在");
+        }
+        if (!FiaTaskStatus.IN_APPROVAL.equals(task.getStatus())) {
+            return; // 幂等:非审批中(已放行/已驳回)直接返回,避免重复归档
+        }
+        task.setStatus(FiaTaskStatus.COMPLETED);
+        task.setSubmittedAt(LocalDateTime.now());
+        task.setOverallJudge(computeJudge(task.getId()));
+        fiaTaskMapper.updateById(task);
+        archive(task);
+        log(task, 7, "审批通过-放行归档", "系统");
+        log(task, 8, "归档报告", "系统");
+        // 审批放行:已获批准,无论判定是否合格均将CTQ数据写入SPC基准
+        try {
+            syncToSpc(task);
+        } catch (Exception e) {
+            log.warn("FIA->SPC 联动失败(审批放行), taskId={}: {}", task.getId(), e.getMessage(), e);
+        }
+        // 审批放行亦触发 FIA->来料追溯 联动(合格免审直录物料表)
+        if (InspResult.PASS.equals(task.getOverallJudge())) {
+            try {
+                syncToTrace(task, 10);
+            } catch (Exception e) {
+                log.warn("FIA->来料追溯 联动失败(审批放行), taskId={}: {}", task.getId(), e.getMessage(), e);
+            }
+        }
+        // SR-FIA-025:放行审批通过 -> 工单解锁(紧急放行/让步接收/豁免 留痕 + 追溯标签)
+        try {
+            FiaApproval ap = fiaApprovalService.list().stream()
+                    .filter(a -> task.getId().equals(a.getTaskId()) && "已通过".equals(a.getStatus()))
+                    .findFirst().orElse(null);
+            String approverId = ap != null ? ap.getApproverId() : null;
+            String reason = ap != null ? ap.getApproveOpinion() : null;
+            String traceTag = "REL-" + task.getCode() + "-" + (System.currentTimeMillis() % 100000);
+            fiaWoLockService.unlockByApproval(task.getOrgId(), task.getWoNo(), approverId, reason, traceTag, task.getCode());
+            log(task, 9, "工单放行解锁-" + task.getDisposition(), "系统");
+        } catch (Exception e) {
+            log.warn("[FIA] 放行解锁联动失败 taskId={}: {}", task.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 审批驳回:任务置FiaTaskStatus.REJECTED,不放行不归档。仅FiaTaskStatus.IN_APPROVAL可驳回,幂等安全。
+     */
+    @Override
+    @Transactional
+    public void rejectTask(String taskId) {
+        FiaTask task = fiaTaskMapper.selectById(taskId);
+        if (task == null) {
+            throw new BusinessException(400, "首件任务不存在");
+        }
+        if (!FiaTaskStatus.IN_APPROVAL.equals(task.getStatus())) {
+            return;
+        }
+        task.setStatus(FiaTaskStatus.REJECTED);
+        fiaTaskMapper.updateById(task);
+        log(task, 7, "审批驳回-不放行", "系统");
     }
 
     @Override
     public FiaArchivedReport getArchive(String taskId) {
+        String realId = resolveTaskId(taskId);
+        if (realId == null) return null;
         return fiaArchivedReportMapper.selectOne(
-                new LambdaQueryWrapper<FiaArchivedReport>().eq(FiaArchivedReport::getTaskId, taskId));
+                new LambdaQueryWrapper<FiaArchivedReport>().eq(FiaArchivedReport::getTaskId, realId));
+    }
+
+    @Override
+    public List<Map<String, Object>> listArchives() {
+        CompanyContext.CurrentUser _u = CompanyContext.get();
+        boolean isAdmin = CompanyContext.isAdmin();
+        String orgId = (_u != null) ? _u.orgId() : null;
+        // 注意:root 的 JWT orgId="ROOT"(非 uuid),不能直接用于 uuid 列过滤,故管理员跳过该条件。
+        LambdaQueryWrapper<FiaArchivedReport> qw = new LambdaQueryWrapper<FiaArchivedReport>()
+                .orderByDesc(FiaArchivedReport::getArchiveDate);
+        if (!isAdmin && orgId != null && !orgId.isBlank() && !"ROOT".equals(orgId)) {
+            qw.eq(FiaArchivedReport::getOrgId, orgId);
+        }
+        List<FiaArchivedReport> reports = fiaArchivedReportMapper.selectList(qw);
+        if (reports.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<String> taskIds = reports.stream().map(FiaArchivedReport::getTaskId).collect(Collectors.toSet());
+        List<FiaTask> tasks = fiaTaskMapper.selectBatchIds(taskIds);
+        Map<String, FiaTask> taskMap = tasks.stream()
+                .collect(Collectors.toMap(FiaTask::getId, t -> t, (a, b) -> a));
+
+        Set<String> userIds = new HashSet<>();
+        Set<String> stdIds = new HashSet<>();
+        for (FiaTask t : tasks) {
+            if (t.getInspectorId() != null) userIds.add(t.getInspectorId());
+            if (t.getReviewerId() != null) userIds.add(t.getReviewerId());
+            if (t.getStdId() != null) stdIds.add(t.getStdId());
+        }
+        Map<String, String> userNameMap = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            for (SysUser u : sysUserMapper.selectBatchIds(userIds)) {
+                userNameMap.put(u.getId(), u.getRealName());
+            }
+        }
+        Map<String, String> stdCodeMap = new HashMap<>();
+        if (!stdIds.isEmpty()) {
+            for (FiaInspStd s : fiaInspStdMapper.selectBatchIds(stdIds)) {
+                stdCodeMap.put(s.getId(), s.getCode());
+            }
+        }
+
+        DateTimeFormatter df = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        List<Map<String, Object>> res = new ArrayList<>();
+        for (FiaArchivedReport r : reports) {
+            FiaTask t = taskMap.get(r.getTaskId());
+            Map<String, Object> m = new HashMap<>();
+            m.put("rpt", r.getReportNo());
+            m.put("wo", r.getWoNo() != null ? r.getWoNo() : (t != null ? t.getWoNo() : ""));
+            m.put("prod", t != null ? t.getProductName() : "");
+            m.put("proc", t != null ? t.getProcName() : "");
+            m.put("d", r.getArchiveDate() != null ? r.getArchiveDate().format(df) : "");
+            m.put("retainUntil", r.getRetentionUntil() != null ? r.getRetentionUntil().format(df) : "");
+            m.put("std", t != null && t.getStdId() != null
+                    ? stdCodeMap.getOrDefault(t.getStdId(), t.getStdId()) + " v" + (t.getStdVersion() != null ? t.getStdVersion() : "")
+                    : "");
+            m.put("aql", t != null ? t.getAql() : "");
+            m.put("sample", t != null
+                    ? (t.getSampleSize() != null ? t.getSampleSize() : "") + "/" + (t.getSampleCount() != null ? t.getSampleCount() : "")
+                    : "");
+            m.put("batch", t != null ? t.getBatchNo() : "");
+            m.put("inspector", t != null && t.getInspectorId() != null ? userNameMap.getOrDefault(t.getInspectorId(), t.getInspectorId()) : "");
+            m.put("reviewer", t != null && t.getReviewerId() != null ? userNameMap.getOrDefault(t.getReviewerId(), t.getReviewerId()) : "");
+            m.put("conclusion", t != null ? t.getOverallJudge() : "");
+            m.put("st", r.getStatus());
+            m.put("perm", "质量/审计可阅");
+            m.put("hash", r.getReportHash());
+            m.put("taskId", r.getTaskId());
+            res.add(m);
+        }
+        return res;
+    }
+
+    @Override
+    public List<Map<String, Object>> getTaskLog(String taskId) {
+        CompanyContext.CurrentUser _u = CompanyContext.get();
+        boolean isAdmin = CompanyContext.isAdmin();
+        String orgId = (_u != null) ? _u.orgId() : null;
+        String realId = resolveTaskId(taskId);
+        if (realId == null) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<FiaTaskLog> qw = new LambdaQueryWrapper<FiaTaskLog>()
+                .eq(FiaTaskLog::getTaskId, realId)
+                .orderByAsc(FiaTaskLog::getNodeSeq);
+        // 管理员(dataScope=all)看全部公司;普通用户按 org_id 过滤。
+        // 注意:root 的 JWT orgId="ROOT"(非 uuid),不能直接用于 uuid 列过滤,故管理员跳过该条件。
+        if (!isAdmin && orgId != null) {
+            qw.eq(FiaTaskLog::getOrgId, orgId);
+        }
+        List<FiaTaskLog> logs = fiaTaskLogMapper.selectList(qw);
+        DateTimeFormatter tf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        List<Map<String, Object>> res = new ArrayList<>();
+        for (FiaTaskLog l : logs) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("node", l.getNodeName());
+            m.put("t", l.getOpTime() != null ? l.getOpTime().format(tf) : "");
+            m.put("o", l.getOperator());
+            m.put("done", l.getIsDone());
+            res.add(m);
+        }
+        return res;
     }
 
     // ---- 可配置签名:密码校验 + 锁定 ----
@@ -214,10 +629,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         String userId = currentOperator();
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
-            throw new BusinessException(401, "用户不存在");
+            throw new BusinessException(400, "用户不存在");
         }
         if (user.getLockUntil() != null && user.getLockUntil().isAfter(LocalDateTime.now())) {
-            throw new BusinessException(401, "账号已锁定,请稍后再试");
+            throw new BusinessException(400, "账号已锁定,请稍后再试");
         }
         if (password == null || !passwordEncoder.matches(password, user.getPasswordHash())) {
             int fail = (user.getFailCount() == null ? 0 : user.getFailCount()) + 1;
@@ -229,10 +644,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
                 int lockMin = config.getLockMinutes() == null ? 5 : config.getLockMinutes();
                 upd.setLockUntil(LocalDateTime.now().plusMinutes(lockMin));
                 sysUserMapper.updateById(upd);
-                throw new BusinessException(401, "密码错误次数过多,已锁定" + lockMin + "分钟");
+                throw new BusinessException(400, "密码错误次数过多,已锁定" + lockMin + "分钟");
             }
             sysUserMapper.updateById(upd);
-            throw new BusinessException(401, "密码错误(剩余" + (lockAfter - fail) + "次)");
+            throw new BusinessException(400, "密码错误(剩余" + (lockAfter - fail) + "次)");
         }
         if (user.getFailCount() != null && user.getFailCount() > 0) {
             SysUser upd = new SysUser();
@@ -244,11 +659,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     private void completeAndArchive(FiaTask task, int logSeq, String logName) {
-        task.setStatus("已完成");
+        task.setStatus(FiaTaskStatus.COMPLETED);
         task.setSubmittedAt(LocalDateTime.now());
         task.setOverallJudge(computeJudge(task.getId()));
         // 拦截生产:首件不合格时设 disposition=拦截(记录级,不阻断 MES;一期不接 MES)
-        if (!"合格".equals(task.getOverallJudge())) {
+        if (!InspResult.PASS.equals(task.getOverallJudge())) {
             if (task.getDisposition() == null || task.getDisposition().isEmpty()) {
                 task.setDisposition("拦截");
             }
@@ -258,17 +673,52 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         log(task, logSeq, logName, currentOperator());
         log(task, logSeq + 1, "归档报告", "系统");
         // 拦截生产日志 + 告警(归档日志之后)
-        if (!"合格".equals(task.getOverallJudge())) {
+        if (!InspResult.PASS.equals(task.getOverallJudge())) {
             log(task, logSeq + 2, "拦截生产-首件不合格", "系统");
             log.warn("FIA拦截生产: code={}, woNo={}, judge={}", task.getCode(), task.getWoNo(), task.getOverallJudge());
         }
         // FIA->SPC 联动:仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
-        if ("合格".equals(task.getOverallJudge())) {
+        if (InspResult.PASS.equals(task.getOverallJudge())) {
             try {
                 syncToSpc(task);
             } catch (Exception e) {
                 log.warn("FIA->SPC 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
             }
+            // FIA->来料追溯 联动:合格免审直录物料表(同产品幂等复用,不重复录入)
+            try {
+                syncToTrace(task, logSeq + 5);
+            } catch (Exception e) {
+                log.warn("FIA->来料追溯 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+            }
+        }
+        // SR-FIA-024:合格完成 -> 自动解锁工单;SR-FIA-022:不合格 -> 强化锁定(首件不合格)
+        try {
+            if (InspResult.PASS.equals(task.getOverallJudge())) {
+                fiaWoLockService.unlockAutoInNewTx(task.getOrgId(), task.getWoNo(), task.getCode());
+                log(task, logSeq + 3, "工单自动解锁", "系统");
+            } else {
+                fiaWoLockService.lockOnFailInNewTx(task.getOrgId(), task.getWoNo(), task.getCode());
+                log(task, logSeq + 3, "工单锁定-首件不合格", "系统");
+                // FIA→NCM 联动:首件不合格自动创建不良记录
+                try {
+                    NcmDefectRecord def = new NcmDefectRecord();
+                    def.setOrgId(task.getOrgId());
+                    def.setWoNo(task.getWoNo());
+                    def.setProcessCode(task.getProcName());
+                    def.setDefectCount(1);
+                    def.setBatchTotal(1);
+                    def.setSource("首件检验");
+                    def.setDefectDictCode("D001");
+                    def.setSeverity("一般");
+                    ncmDefectRecordService.create(def);
+                    log(task, logSeq + 4, "FIA→NCM联动-不良记录", "系统");
+                    log.info("[FIA→NCM] 首件不合格 {} 自动创建不良记录", task.getCode());
+                } catch (Exception ex) {
+                    log.warn("[FIA→NCM] 联动失败 taskId={}: {}", task.getId(), ex.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[FIA] 工单锁定/解锁联动失败 taskId={}: {}", task.getId(), e.getMessage());
         }
     }
 
@@ -324,7 +774,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
                 sg.setWoNo(task.getWoNo());
                 sg.setBatchNo(task.getBatchNo());
                 sg.setDataSource("fia");
-                spcSubgroupService.create(sg, values);
+                spcSubgroupService.createInNewTx(sg, values);
             } catch (Exception e) {
                 // 单个参数失败不影响其他参数,整体异常由上层 try-catch 兜底
                 log.warn("FIA->SPC 联动:SPC 参数 {} 创建子组失败: {}", param.getId(), e.getMessage(), e);
@@ -332,15 +782,57 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
     }
 
+    /**
+     * FIA->来料追溯 联动:首件合格后,将同产品(同 partNo + supplier + org,无则按
+     * partName 兜底)免审直接登记到来料追溯模块的物料表(自动建 incoming 根节点),
+     * 不再走 IQC 重复抽检/审核抽样。已存在同产品批次时直接复用,实现"后续相同产品免审
+     * 直录"。异常由调用方 try-catch,不阻断 FIA 主流程。
+     */
+    private void syncToTrace(FiaTask task, int baseSeq) {
+        if (!InspResult.PASS.equals(task.getOverallJudge())) {
+            return;
+        }
+        String partNo = task.getPartNo();
+        String partName = task.getProductName();
+        if ((partNo == null || partNo.isBlank()) && (partName == null || partName.isBlank())) {
+            return; // 无产品标识,无法登记
+        }
+        // 来料批次要求 part_no 非空:缺失时用 partName 兜底,避免非空约束冲突导致复核签名整笔回滚
+        if (partNo == null || partNo.isBlank()) {
+            partNo = partName;
+        }
+        // 同产品已登记过来料追溯:免审直接关联,不重复建批次
+        SqmIncomingLot exist = sqmTraceService.findExistingLot(
+                task.getOrgId(), partNo, partName, task.getSupplierId());
+        if (exist != null) {
+            log(task, baseSeq, "FIA→来料追溯(免审复用已有批次)", "系统");
+            return;
+        }
+        SqmIncomingLot lot = new SqmIncomingLot();
+        lot.setOrgId(task.getOrgId());
+        lot.setPartNo(partNo);
+        lot.setPartName(partName);
+        lot.setSupplierId(task.getSupplierId());
+        lot.setLotNo("FIA-" + (task.getCode() != null ? task.getCode() : String.valueOf(System.currentTimeMillis())));
+        lot.setQty(task.getSampleCount() != null ? new BigDecimal(task.getSampleCount()) : BigDecimal.ONE);
+        lot.setUnit("PCS");
+        lot.setIncomingDate(LocalDate.now());
+        lot.setInspectResult(InspResult.PASS);
+        lot.setInspectType("正常");
+        lot.setIqcPass(true);
+        sqmTraceService.createLot(lot);
+        log(task, baseSeq, "FIA→来料追溯(免审直录物料表)", "系统");
+    }
+
     private String computeJudge(String taskId) {
         List<FiaInspItem> items = fiaInspItemMapper.selectList(
                 new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, taskId));
-        boolean anyCtqFail = items.stream().anyMatch(i -> Boolean.TRUE.equals(i.getIsCtq()) && "不合格".equals(i.getJudge()));
-        boolean anyFail = items.stream().anyMatch(i -> "不合格".equals(i.getJudge()));
+        boolean anyCtqFail = items.stream().anyMatch(i -> Boolean.TRUE.equals(i.getIsCtq()) && InspResult.FAIL.equals(i.getJudge()));
+        boolean anyFail = items.stream().anyMatch(i -> InspResult.FAIL.equals(i.getJudge()));
         if (anyCtqFail) {
-            return "不合格";
+            return InspResult.FAIL;
         }
-        return anyFail ? "警告" : "合格";
+        return anyFail ? "警告" : InspResult.PASS;
     }
 
     private void archive(FiaTask task) {

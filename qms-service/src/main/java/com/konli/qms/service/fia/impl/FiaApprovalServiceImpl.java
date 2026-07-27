@@ -1,11 +1,14 @@
 package com.konli.qms.service.fia.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.fia.entity.FiaApproval;
 import com.konli.qms.domain.fia.mapper.FiaApprovalMapper;
 import com.konli.qms.service.fia.FiaApprovalService;
+import com.konli.qms.service.fia.FiaTaskService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +20,7 @@ import java.util.List;
 public class FiaApprovalServiceImpl implements FiaApprovalService {
 
     private final FiaApprovalMapper fiaApprovalMapper;
+    private final ApplicationContext applicationContext;
 
     @Override
     public List<FiaApproval> list() {
@@ -57,6 +61,25 @@ public class FiaApprovalServiceImpl implements FiaApprovalService {
         approval.setApproveAt(LocalDateTime.now());
         approval.setStatus(approved ? "已通过" : "已驳回");
         fiaApprovalMapper.updateById(approval);
+        // 联动首件任务:通过=放行(归档+写SPC基准);驳回=不放行
+        String taskId = approval.getTaskId();
+        if (taskId != null && !taskId.isBlank()) {
+            FiaTaskService fiaTaskService = applicationContext.getBean(FiaTaskService.class);
+            if (approved) {
+                fiaTaskService.releaseAfterApproval(taskId);
+            } else {
+                fiaTaskService.rejectTask(taskId);
+            }
+        }
+    }
+
+    @Override
+    @Transactional
+    public void removePendingByTask(String taskId) {
+        fiaApprovalMapper.delete(
+                new LambdaQueryWrapper<>(FiaApproval.class)
+                        .eq(FiaApproval::getTaskId, taskId)
+                        .eq(FiaApproval::getStatus, "待审批"));
     }
 
     private String currentOperator() {

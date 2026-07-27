@@ -44,7 +44,7 @@ public class SqmAuditFreqRuleController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('sqm.audit.create')")
+    @PreAuthorize("hasAuthority('sqm.audit.delete')")
     public R<Void> delete(@PathVariable String id) {
         sqmAuditFreqRuleService.delete(id);
         return R.ok();

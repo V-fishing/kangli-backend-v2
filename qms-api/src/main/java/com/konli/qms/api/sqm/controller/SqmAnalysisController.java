@@ -50,7 +50,7 @@ public class SqmAnalysisController {
     /** 供应商绩效排名:period=YYYY-MM,按 score 降序 */
     @GetMapping("/performance/ranking")
     @PreAuthorize("hasAuthority('sqm.supplier.list')")
-    public R<List<Map<String, Object>>> ranking(@RequestParam String period) {
+    public R<List<Map<String, Object>>> ranking(@RequestParam(required = false) String period) {
         return R.ok(sqmAnalysisService.ranking(period));
     }
 }

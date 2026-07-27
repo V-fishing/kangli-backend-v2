@@ -5,6 +5,7 @@ import com.konli.qms.service.spc.SpcDashboardService;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.konli.qms.service.spc.dto.ControlChartVo;
 import com.konli.qms.service.spc.dto.SpcDashboardVo;
+import com.konli.qms.service.spc.dto.SpcHistogramVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,6 +29,13 @@ public class SpcChartController {
                                           @RequestParam(required = false) String startTime,
                                           @RequestParam(required = false) String endTime) {
         return R.ok(spcSubgroupService.getControlChart(paramId, startTime, endTime));
+    }
+
+    /** 过程能力直方图:基于参数子组均值分箱(不传 paramId 时返回空)。 */
+    @GetMapping("/histogram")
+    @PreAuthorize("hasAuthority('spc.param.list')")
+    public R<SpcHistogramVo> histogram(@RequestParam(required = false) String paramId) {
+        return R.ok(spcSubgroupService.getHistogram(paramId));
     }
 
     /** SPC 看板:Cpk 分布 / 待确认告警 / 今日采集完成率。 */

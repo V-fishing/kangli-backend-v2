@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -20,6 +21,12 @@ public class FiaInterceptConfigServiceImpl implements FiaInterceptConfigService 
         if (orgId == null) {
             return defaultConfig(null);
         }
+        // 超级管理员(orgId=ROOT)按全局配置(org_id IS NULL)处理，避免把 ROOT 当作 uuid 查询
+        if (isRoot(orgId)) {
+            List<FiaInterceptConfig> list = fiaInterceptConfigMapper.selectList(
+                    new LambdaQueryWrapper<FiaInterceptConfig>().isNull(FiaInterceptConfig::getOrgId));
+            return list.isEmpty() ? defaultConfig(null) : list.get(0);
+        }
         FiaInterceptConfig c = fiaInterceptConfigMapper.selectOne(
                 new LambdaQueryWrapper<FiaInterceptConfig>().eq(FiaInterceptConfig::getOrgId, orgId));
         return c == null ? defaultConfig(orgId) : c;
@@ -27,14 +34,26 @@ public class FiaInterceptConfigServiceImpl implements FiaInterceptConfigService 
 
     @Override
     public void save(FiaInterceptConfig config) {
-        FiaInterceptConfig existing = fiaInterceptConfigMapper.selectOne(
-                new LambdaQueryWrapper<FiaInterceptConfig>().eq(FiaInterceptConfig::getOrgId, config.getOrgId()));
+        boolean root = isRoot(config.getOrgId());
+        LambdaQueryWrapper<FiaInterceptConfig> w = new LambdaQueryWrapper<>();
+        if (root || config.getOrgId() == null) {
+            w.isNull(FiaInterceptConfig::getOrgId);
+        } else {
+            w.eq(FiaInterceptConfig::getOrgId, config.getOrgId());
+        }
+        FiaInterceptConfig existing = fiaInterceptConfigMapper.selectOne(w);
         if (existing == null) {
+            if (root || config.getOrgId() == null) config.setOrgId(null);
             fiaInterceptConfigMapper.insert(config);
         } else {
             config.setId(existing.getId());
+            config.setOrgId(existing.getOrgId());
             fiaInterceptConfigMapper.updateById(config);
         }
+    }
+
+    private boolean isRoot(String orgId) {
+        return orgId != null && "ROOT".equals(orgId);
     }
 
     private FiaInterceptConfig defaultConfig(String orgId) {

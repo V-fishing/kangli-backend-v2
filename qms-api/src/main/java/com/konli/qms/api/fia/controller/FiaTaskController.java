@@ -1,12 +1,19 @@
 package com.konli.qms.api.fia.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.api.fia.dto.CreateFiaTaskRequest;
 import com.konli.qms.api.fia.dto.InspItemResultRequest;
 import com.konli.qms.api.fia.dto.SignRequest;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
+import com.konli.qms.domain.fia.entity.FiaInspPlan;
+import com.konli.qms.domain.fia.entity.FiaInspStd;
 import com.konli.qms.domain.fia.entity.FiaTask;
+import com.konli.qms.domain.fia.mapper.FiaInspPlanMapper;
+import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
+import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
+import com.konli.qms.service.fia.AqlSamplingUtil;
 import com.konli.qms.service.fia.FiaDashboardService;
 import com.konli.qms.service.fia.FiaTaskService;
 import com.konli.qms.service.fia.dto.FiaTaskVo;
@@ -17,10 +24,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -35,6 +44,8 @@ public class FiaTaskController {
 
     private final FiaTaskService fiaTaskService;
     private final FiaDashboardService fiaDashboardService;
+    private final FiaInspPlanMapper fiaInspPlanMapper;
+    private final SqmIncomingLotMapper sqmIncomingLotMapper;
 
     /** FIA 看板:今日任务/完成数、合格率、超时数、状态分布、近7天趋势。 */
     @GetMapping("/dashboard")
@@ -55,8 +66,19 @@ public class FiaTaskController {
         return R.ok(fiaTaskService.get(id));
     }
 
+    /** 来料批次驱动:按 物料编码 + 供应商 + 工序 从标准库自动匹配检验标准 */
+    @GetMapping("/match-std")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<FiaInspStd> matchStd(@RequestParam String orgId,
+                                  @RequestParam String partNo,
+                                  @RequestParam(required = false) String supplierId,
+                                  @RequestParam(required = false) String procName) {
+        return R.ok(fiaTaskService.matchStd(orgId, partNo, supplierId, procName));
+    }
+
     @PostMapping
     @PreAuthorize("hasAuthority('fia.task.create')")
+    @com.konli.qms.common.audit.Auditable(module = "FIA", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'首件任务:' + #req.woNo")
     public R<FiaTask> create(@Valid @RequestBody CreateFiaTaskRequest req) {
         FiaTask task = new FiaTask();
         task.setOrgId(req.getOrgId());
@@ -66,8 +88,12 @@ public class FiaTaskController {
         task.setProcName(req.getProcName());
         task.setTriggerType(req.getTriggerType());
         task.setStdId(req.getStdId());
+        task.setPartNo(req.getPartNo());
+        task.setSupplierId(req.getSupplierId());
+        task.setLotId(req.getLotId());
         task.setBatchNo(req.getBatchNo());
         task.setIsUrgent(req.getIsUrgent());
+        task.setRemark(req.getRemark());
         return R.ok(fiaTaskService.create(task));
     }
 
@@ -89,23 +115,33 @@ public class FiaTaskController {
     }
 
     @PostMapping("/{id}/sign-inspector")
-    @PreAuthorize("hasAuthority('fia.task.submit')")
+    @PreAuthorize("hasAuthority('fia.sign.inspector')")
     public R<Void> signInspector(@PathVariable String id, @RequestBody SignRequest req) {
         fiaTaskService.signInspector(id, req.getPassword(), req.getItemId());
         return R.ok();
     }
 
     @PostMapping("/{id}/sign-reviewer")
-    @PreAuthorize("hasAuthority('fia.task.submit')")
+    @PreAuthorize("hasAuthority('fia.sign.reviewer')")
     public R<Void> signReviewer(@PathVariable String id, @RequestBody SignRequest req) {
         fiaTaskService.signReviewer(id, req.getPassword(), req.getItemId());
         return R.ok();
     }
 
     @PostMapping("/{id}/sign-approver")
-    @PreAuthorize("hasAuthority('fia.task.submit')")
+    @PreAuthorize("hasAuthority('fia.sign.approver')")
     public R<Void> signApprover(@PathVariable String id, @RequestBody SignRequest req) {
         fiaTaskService.signApprover(id, req.getPassword());
+        return R.ok();
+    }
+
+    /** 不合格处理路径:退货/返工/让步接收;让步接收自动发起审批单 */
+    @PostMapping("/{id}/disposition")
+    @PreAuthorize("hasAuthority('fia.task.disposition')")
+    public R<Void> setDisposition(@PathVariable String id,
+                                  @RequestParam String disposition,
+                                  @RequestParam(required = false) String remark) {
+        fiaTaskService.setDisposition(id, disposition, remark);
         return R.ok();
     }
 
@@ -113,5 +149,105 @@ public class FiaTaskController {
     @PreAuthorize("hasAuthority('fia.task.list')")
     public R<FiaArchivedReport> getArchive(@PathVariable String id) {
         return R.ok(fiaTaskService.getArchive(id));
+    }
+
+    @GetMapping("/archives")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<List<Map<String, Object>>> listArchives() {
+        return R.ok(fiaTaskService.listArchives());
+    }
+
+    @GetMapping("/{id}/log")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<List<Map<String, Object>>> getTaskLog(@PathVariable String id) {
+        return R.ok(fiaTaskService.getTaskLog(id));
+    }
+
+    /** 来料批次→自动拆分检验任务:按检验计划匹配标准+AQL,批量建单 */
+    @PostMapping("/batch-by-lot")
+    @PreAuthorize("hasAuthority('fia.task.create')")
+    public R<Map<String, Object>> batchCreateByLot(@RequestBody Map<String, String> body) {
+        String lotNo = body.get("lotNo");
+        String orgId = body.get("orgId");
+        if (lotNo == null || lotNo.isBlank()) return R.fail(400, "lotNo 不能为空");
+
+        SqmIncomingLot lot = sqmIncomingLotMapper.selectOne(
+                new LambdaQueryWrapper<SqmIncomingLot>().eq(SqmIncomingLot::getLotNo, lotNo));
+        if (lot == null) return R.fail(404, "批次不存在: " + lotNo);
+
+        // 按物料分类查检验计划(优先 物料编码 + 供应商,回退仅物料编码)
+        String partNo = lot.getPartNo();
+        List<FiaInspPlan> plans = fiaInspPlanMapper.selectList(
+                new LambdaQueryWrapper<FiaInspPlan>()
+                        .eq(FiaInspPlan::getMaterialCategory, partNo)
+                        .eq(FiaInspPlan::getIsActive, true)
+                        .eq(lot.getSupplierId() != null, FiaInspPlan::getSupplierId, lot.getSupplierId()));
+        if (plans.isEmpty()) {
+            // 没匹配到→用 partNo 作为分类再试(忽略供应商)
+            plans = fiaInspPlanMapper.selectList(
+                    new LambdaQueryWrapper<FiaInspPlan>()
+                            .like(FiaInspPlan::getMaterialCategory, partNo)
+                            .eq(FiaInspPlan::getIsActive, true));
+        }
+        if (plans.isEmpty()) {
+            // 兜底:通用默认检验计划(保证任何来料都能建单,实现全量覆盖)
+            FiaInspPlan def = fiaInspPlanMapper.selectOne(
+                    new LambdaQueryWrapper<FiaInspPlan>()
+                            .eq(FiaInspPlan::getIsActive, true)
+                            .eq(FiaInspPlan::getIsDefault, true)
+                            .last("LIMIT 1"));
+            if (def != null) {
+                plans.add(def);
+            }
+        }
+
+        List<Map<String, Object>> created = new ArrayList<>();
+        int matched = 0, missing = 0;
+
+        for (FiaInspPlan plan : plans) {
+            FiaTask task = new FiaTask();
+            task.setOrgId(orgId != null ? orgId : lot.getOrgId());
+            task.setWoNo(lot.getLotNo());
+            task.setLineName("来料检验");
+            task.setProductName(lot.getPartName() != null ? lot.getPartName() : lot.getPartNo());
+            task.setProcName(plan.getProcName());
+            task.setTriggerType("来料入库");
+            task.setStdId(plan.getStdId());
+            task.setPartNo(lot.getPartNo());
+            task.setSupplierId(lot.getSupplierId());
+            task.setLotId(lot.getId());
+            task.setBatchNo(lot.getLotNo());
+            task.setRemark("IQC自动生成: " + plan.getPlanName());
+
+            // AQL 抽样
+            if (lot.getQty() != null && plan.getAql() != null) {
+                AqlSamplingUtil.SamplePlan sp = AqlSamplingUtil.calc(lot.getQty().intValue(), plan.getAql());
+                task.setAql(plan.getAql().toPlainString());
+                task.setSampleSize(sp.sampleSize);
+            }
+
+            try {
+                FiaTask createdTask = fiaTaskService.create(task);
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("taskId", createdTask.getId());
+                m.put("code", createdTask.getCode());
+                m.put("procName", plan.getProcName());
+                m.put("stdId", plan.getStdId());
+                m.put("sampleSize", task.getSampleSize());
+                created.add(m);
+                matched++;
+            } catch (Exception e) {
+                missing++;
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("lotNo", lotNo);
+        result.put("partNo", partNo);
+        result.put("plansFound", plans.size());
+        result.put("tasksCreated", matched);
+        result.put("tasksFailed", missing);
+        result.put("tasks", created);
+        return R.ok(result);
     }
 }

@@ -1,5 +1,6 @@
 package com.konli.qms.service.fia;
 
+import com.konli.qms.domain.fia.dto.CreateInspStdRequest;
 import com.konli.qms.domain.fia.entity.FiaInspStd;
 import com.konli.qms.domain.fia.entity.FiaInspStdItem;
 import com.konli.qms.service.fia.dto.InspStdVo;
@@ -14,7 +15,7 @@ public interface InspStdService {
 
     FiaInspStd create(FiaInspStd std, List<FiaInspStdItem> items);
 
-    void update(FiaInspStd std);
+    void update(String id, CreateInspStdRequest req);
 
     void delete(String id);
 }

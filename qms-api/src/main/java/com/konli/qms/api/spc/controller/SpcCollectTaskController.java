@@ -42,6 +42,21 @@ public class SpcCollectTaskController {
         return R.ok();
     }
 
+    /** SR-SPC-003:手动标记采集缺失 -> status='缺失' + 告警班组长(停产不告警)。 */
+    @PostMapping("/{id}/mark-missing")
+    @PreAuthorize("hasAuthority('spc.subgroup.create')")
+    public R<Void> markMissing(@PathVariable String id, @RequestBody(required = false) DowntimeRequest req) {
+        spcCollectTaskService.markMissing(id, req == null ? null : req.getReason());
+        return R.ok();
+    }
+
+    /** SR-SPC-003:手动触发到期未录入扫描(定时任务每 60s 自动执行,此接口便于即时验证)。 */
+    @PostMapping("/scan-missing")
+    @PreAuthorize("hasAuthority('spc.subgroup.create')")
+    public R<Integer> scanMissing() {
+        return R.ok(spcCollectTaskService.scanOverdueMissing());
+    }
+
     /** 采集任务计划停机请求(是否计划停机 + 原因)。内嵌 DTO 以保持每项 5 文件。 */
     @Data
     public static class DowntimeRequest {

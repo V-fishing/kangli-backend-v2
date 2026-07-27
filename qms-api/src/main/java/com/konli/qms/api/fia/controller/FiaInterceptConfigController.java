@@ -32,6 +32,9 @@ public class FiaInterceptConfigController {
     @PutMapping
     @PreAuthorize("hasAuthority('fia.std.create')")
     public R<Void> save(@RequestBody FiaInterceptConfig config) {
+        if (config.getOrgId() == null && CompanyContext.get() != null) {
+            config.setOrgId(CompanyContext.get().orgId());
+        }
         fiaInterceptConfigService.save(config);
         return R.ok();
     }

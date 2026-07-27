@@ -16,6 +16,12 @@ public class FiaInspStd extends BaseEntity {
     private String orgId;
 
     private String code;
+    @TableField("std_name")
+    private String stdName;
+    @TableField("part_no")
+    private String partNo;
+    @TableField("supplier_id")
+    private String supplierId;
     private String material;
     @TableField("proc_name")
     private String procName;
@@ -31,4 +37,6 @@ public class FiaInspStd extends BaseEntity {
     private String status;          // 草稿/生效/停用
     @TableField("prev_version_id")
     private String prevVersionId;
+    @TableField("is_default")
+    private Boolean isDefault;      // 通用默认标准(兜底,保证来料全量覆盖)
 }

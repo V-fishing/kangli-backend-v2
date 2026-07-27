@@ -1,41 +1,103 @@
 package com.konli.qms.common.audit;
 
+import com.konli.qms.common.security.CompanyContext;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.core.DefaultParameterNameDiscoverer;
+import org.springframework.expression.Expression;
+import org.springframework.expression.ExpressionParser;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
+import org.springframework.expression.spel.support.StandardEvaluationContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.lang.reflect.Method;
+import java.time.LocalDateTime;
+
 /**
- * 审计切面(代码规范文档§2.1)。拦截 {@link Auditable} 标注的写操作,记录模块/动作/操作人/耗时/结果。
- *
- * <p>当前 stage-4 仅落日志;后续 stage 接入 SecurityContext 取操作人 + 异步写入独立审计库。</p>
+ * 审计切面 — 拦截 @Auditable 标注的方法并持久化到 ops.sys_audit_log。
+ * 操作人从 CompanyContext 取(由 JwtAuthenticationFilter 注入)。
+ * 审计落库失败不阻断业务。
  */
 @Slf4j
 @Aspect
 @Component
+@RequiredArgsConstructor
 public class AuditAspect {
+
+    private final JdbcTemplate jdbc;
+    private static final ExpressionParser PARSER = new SpelExpressionParser();
+    private static final DefaultParameterNameDiscoverer DISCOVERER = new DefaultParameterNameDiscoverer();
 
     @Around("@annotation(auditable)")
     public Object around(ProceedingJoinPoint pjp, Auditable auditable) throws Throwable {
+        String module   = auditable.module();
+        String action   = auditable.action();
+        String method   = pjp.getSignature().toShortString();
         String operator = currentOperator();
         long start = System.currentTimeMillis();
-        log.info("[AUDIT] module={}, action={}, method={}, operator={}",
-                auditable.module(), auditable.action(), pjp.getSignature().toShortString(), operator);
+
+        Object result = null;
+        String status = null;
+        String error = null;
         try {
-            Object result = pjp.proceed();
-            log.info("[AUDIT] module={}, action={}, cost={}ms, result=success",
-                    auditable.module(), auditable.action(), System.currentTimeMillis() - start);
-            return result;
+            result = pjp.proceed();
+            status = "SUCCESS";
         } catch (Throwable e) {
-            log.warn("[AUDIT] module={}, action={}, cost={}ms, result=fail, error={}",
-                    auditable.module(), auditable.action(), System.currentTimeMillis() - start, e.getMessage());
+            status = "FAIL";
+            error = e.getMessage();
             throw e;
+        } finally {
+            long cost = System.currentTimeMillis() - start;
+            String recordId = "SUCCESS".equals(status) ? eval(auditable.recordExpr(), pjp, result) : null;
+            String detail   = "SUCCESS".equals(status) ? eval(auditable.detailExpr(), pjp, result) : null;
+            persist(module, action, method, operator, recordId, detail, status, error, cost);
+        }
+        return result;
+    }
+
+    private String currentOperator() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        return u != null ? u.username() : "anonymous";
+    }
+
+    private String eval(String expr, ProceedingJoinPoint pjp, Object result) {
+        if (expr == null || expr.isBlank()) return null;
+        try {
+            Method method = ((MethodSignature) pjp.getSignature()).getMethod();
+            StandardEvaluationContext ctx = new StandardEvaluationContext();
+            String[] names = DISCOVERER.getParameterNames(method);
+            Object[] args  = pjp.getArgs();
+            if (names != null) {
+                for (int i = 0; i < names.length && i < args.length; i++) ctx.setVariable(names[i], args[i]);
+            }
+            for (int i = 0; i < args.length; i++) {
+                ctx.setVariable("p" + i, args[i]);
+                ctx.setVariable("a" + i, args[i]);
+            }
+            ctx.setVariable("result", result);
+            Object val = PARSER.parseExpression(expr).getValue(ctx);
+            return val != null ? val.toString() : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 
-    /** TODO stage:接入 Spring Security 取当前用户 ID */
-    private String currentOperator() {
-        return "system";
+    private void persist(String module, String action, String method, String operator,
+                         String recordId, String detail, String status, String error, long cost) {
+        try {
+            jdbc.update(
+                "INSERT INTO ops.sys_audit_log (module, action, method, operator_name, "
+                + "record_id, detail, status, error, cost_ms, created_at) "
+                + "VALUES (?,?,?,?,?::uuid,?,?,?,?,?)",
+                module, action, method, operator, recordId, detail, status, error, cost, LocalDateTime.now());
+        } catch (Exception ex) {
+            log.warn("[AUDIT] 落库失败(不阻断业务): {}", ex.getMessage());
+        }
+        log.info("[AUDIT] {} | {} | {} | {}ms | {}", module, action, status, cost, operator);
     }
 }

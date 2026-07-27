@@ -93,7 +93,7 @@ public class PatlRouteController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('patl.route.create')")
+    @PreAuthorize("hasAuthority('patl.route.delete')")
     public R<Void> delete(@PathVariable String id) {
         patlRouteService.delete(id);
         return R.ok();

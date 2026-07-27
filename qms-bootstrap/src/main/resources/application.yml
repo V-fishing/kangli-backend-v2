@@ -1,6 +1,8 @@
 spring:
   application:
     name: konli-qms
+  main:
+    allow-circular-references: false
   profiles:
     active: dev
   jackson:
@@ -12,6 +14,11 @@ server:
   port: 8080
   servlet:
     context-path: /
+    # 强制请求/响应以 UTF-8 编解码,避免非 UTF-8 默认字符集的 JDK 下中文乱码
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
 
 # MyBatis-Plus(按代码规范文档:snake_case 列 <-> camelCase 字段,逻辑删除 is_deleted)
 mybatis-plus:
@@ -44,5 +51,5 @@ management:
 # JWT(代码规范:自建账号 + JWT;生产 secret 由环境变量注入)
 qms:
   jwt:
-    secret: konli-qms-dev-secret-change-me-please-at-least-32-bytes
+    secret: konli-qms-local-default-secret-change-me-32bytes   # 不入库;本地兜底默认值,dev/prod 见 application-*.yml
     expiry: 28800   # 秒,8 小时(避免使用中因 30 分钟过期被强制退出)

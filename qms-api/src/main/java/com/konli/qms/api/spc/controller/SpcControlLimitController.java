@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -31,5 +32,13 @@ public class SpcControlLimitController {
     @PreAuthorize("hasAuthority('spc.param.list')")
     public R<SpcControlLimit> calc(@RequestParam String paramId) {
         return R.ok(spcControlLimitService.calc(paramId));
+    }
+
+    /** 人工覆盖控制限:优先级高于自动计算。 */
+    @PostMapping("/manual")
+    @PreAuthorize("hasAuthority('spc.param.list')")
+    public R<SpcControlLimit> saveManual(@RequestParam String paramId,
+                                         @RequestBody SpcControlLimit limits) {
+        return R.ok(spcControlLimitService.saveManual(paramId, limits));
     }
 }

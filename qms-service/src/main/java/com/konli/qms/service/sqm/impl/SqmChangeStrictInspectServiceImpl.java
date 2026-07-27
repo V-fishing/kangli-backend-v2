@@ -2,11 +2,14 @@ package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
+import com.konli.qms.domain.sqm.entity.SqmChangeOrder;
 import com.konli.qms.domain.sqm.entity.SqmChangeStrictInspect;
+import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeStrictInspectMapper;
 import com.konli.qms.service.sqm.SqmChangeStrictInspectService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -16,6 +19,7 @@ import java.util.List;
 public class SqmChangeStrictInspectServiceImpl implements SqmChangeStrictInspectService {
 
     private final SqmChangeStrictInspectMapper sqmChangeStrictInspectMapper;
+    private final SqmChangeOrderMapper sqmChangeOrderMapper;
 
     @Override
     public List<SqmChangeStrictInspect> list(String changeId) {
@@ -42,8 +46,21 @@ public class SqmChangeStrictInspectServiceImpl implements SqmChangeStrictInspect
         if (inspect.getRestored() == null) {
             inspect.setRestored(false);
         }
+        // 兜底填充 org_id(表 NOT NULL):手动新增批次时前端未传,从变更单取
+        if (inspect.getOrgId() == null && inspect.getChangeId() != null) {
+            SqmChangeOrder order = sqmChangeOrderMapper.selectById(inspect.getChangeId());
+            if (order != null) {
+                inspect.setOrgId(order.getOrgId());
+            }
+        }
         sqmChangeStrictInspectMapper.insert(inspect);
         return inspect;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SqmChangeStrictInspect createInNewTx(SqmChangeStrictInspect inspect) {
+        return this.create(inspect);
     }
 
     @Override
