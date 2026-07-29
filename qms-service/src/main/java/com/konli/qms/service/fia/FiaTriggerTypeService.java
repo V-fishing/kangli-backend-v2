@@ -1,5 +1,6 @@
 package com.konli.qms.service.fia;
 
+import com.konli.qms.domain.fia.dto.TriggerTypeStat;
 import com.konli.qms.domain.fia.entity.FiaTriggerType;
 
 import java.util.List;
@@ -17,4 +18,7 @@ public interface FiaTriggerTypeService {
 
     /** 启用/停用 */
     void toggle(String id, boolean enabled);
+
+    /** 触发类型统计:合并触发类型列表与首件任务聚合计数(组织隔离) */
+    List<TriggerTypeStat> stats();
 }

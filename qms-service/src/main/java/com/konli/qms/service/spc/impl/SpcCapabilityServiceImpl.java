@@ -10,10 +10,15 @@ import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.spc.mapper.SpcSubgroupMapper;
 import com.konli.qms.service.spc.SpcCapabilityService;
 import com.konli.qms.service.spc.dto.SpcSupplierCpkVo;
+import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -24,6 +29,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SpcCapabilityServiceImpl implements SpcCapabilityService {
@@ -32,6 +38,7 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
     private final SpcParamMapper spcParamMapper;
     private final SpcSubgroupMapper spcSubgroupMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final SqmSupplierPerformanceService sqmSupplierPerformanceService;
 
     @Override
     public List<SpcCapability> list() {
@@ -58,7 +65,7 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SpcCapability calc(String paramId, String periodType, String periodValue) {
         CapResult r = compute(paramId);
 
@@ -99,14 +106,40 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
         } else {
             spcCapabilityMapper.insert(cap);
         }
-        // SPC CPK→供应商绩效联动:能力等级(充足/尚可/不足)更新供应商质量评分
-        try {
-            String perfPeriod = periodValue != null ? periodValue : YearMonth.now().toString();
-            jdbcTemplate.update(
-                    "UPDATE ops.sqm_supplier_performance SET quality_score = ? WHERE param_id = ? AND period = ?",
-                    r.cpk, paramId, perfPeriod);
-        } catch (Exception ignored) {}
+        // SPC CPK→供应商绩效联动:按能力等级(充足/尚可/不足)折算 0-100 质量分,
+        // 写入 sqm_supplier_performance.quality_score 并加权重算总分与等级。
+        // 放到 afterCommit 执行:联动失败不影响主事务(CPK 落库)提交。
+        final String supplierId = r.param.getSupplierId();
+        final BigDecimal qualityScore = levelToQualityScore(r.level);
+        final String perfPeriod = periodValue != null ? periodValue : YearMonth.now().toString();
+        if (supplierId != null && !supplierId.isBlank() && qualityScore != null) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        sqmSupplierPerformanceService.applySpcQualityScore(supplierId, perfPeriod, qualityScore);
+                    } catch (Exception e) {
+                        log.warn("SPC CPK→供应商绩效联动失败(已忽略), supplierId={}, period={}: {}",
+                                supplierId, perfPeriod, e.getMessage());
+                    }
+                }
+            });
+        }
         return cap;
+    }
+
+    /** 能力等级 → 质量分:充足 90 / 尚可 75 / 不足 60;其他(无法计算/样本过少等)返回 null 表示不联动。 */
+    private static BigDecimal levelToQualityScore(String level) {
+        if ("充足".equals(level)) {
+            return new BigDecimal("90");
+        }
+        if ("尚可".equals(level)) {
+            return new BigDecimal("75");
+        }
+        if ("不足".equals(level)) {
+            return new BigDecimal("60");
+        }
+        return null;
     }
 
     /**

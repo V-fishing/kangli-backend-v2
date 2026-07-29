@@ -105,6 +105,7 @@ public class InspStdServiceImpl implements InspStdService {
                 it.setUnit(ir.getUnit());
                 it.setValueType(ir.getValueType());
                 it.setEnumValues(ir.getEnumValues());
+                it.setPassValues(ir.getPassValues());
                 it.setIsDeleted(false);
                 fiaInspStdItemMapper.insert(it);
             }

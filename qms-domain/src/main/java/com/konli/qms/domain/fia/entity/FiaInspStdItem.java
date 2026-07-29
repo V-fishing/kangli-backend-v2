@@ -42,6 +42,9 @@ public class FiaInspStdItem {
     @TableField("enum_values")
     private String enumValues;
 
+    @TableField("pass_values")
+    private String passValues;        // 合格值(逗号分隔);枚举型实测命中即判合格
+
     @TableField("upper_limit")
     private BigDecimal upperLimit;
     @TableField("lower_limit")

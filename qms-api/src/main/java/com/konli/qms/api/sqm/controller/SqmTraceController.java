@@ -52,8 +52,8 @@ public class SqmTraceController {
 
     @GetMapping("/lots")
     @PreAuthorize("hasAuthority('sqm.trace.list')")
-    public R<List<SqmIncomingLot>> listLots() {
-        return R.ok(sqmTraceService.listLots());
+    public R<List<SqmIncomingLot>> listLots(@RequestParam(required = false) String keyword) {
+        return R.ok(sqmTraceService.listLots(keyword));
     }
 
     /**

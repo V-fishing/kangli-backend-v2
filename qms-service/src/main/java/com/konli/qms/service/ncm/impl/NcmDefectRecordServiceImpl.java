@@ -7,8 +7,10 @@ import com.konli.qms.domain.ncm.entity.NcmDefectDict;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.domain.ncm.mapper.NcmDefectDictMapper;
 import com.konli.qms.domain.ncm.mapper.NcmDefectRecordMapper;
+import com.konli.qms.domain.ncm.entity.NcmCorrectiveAction;
 import com.konli.qms.service.ncm.Ncm8dService;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.NcmCorrectiveActionService;
 import com.konli.qms.service.ncm.NcmDefectRecordService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +40,7 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
     private final NcmDefectDictMapper ncmDefectDictMapper;
     private final Ncm8dService ncm8dService;
     private final NcmCapaService ncmCapaService;
+    private final NcmCorrectiveActionService ncmCorrectiveActionService;
 
     @Override
     public List<NcmDefectRecord> list() {
@@ -47,6 +50,13 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
     @Override
     public NcmDefectRecord get(String id) {
         return ncmDefectRecordMapper.selectById(id);
+    }
+
+    @Override
+    public NcmDefectRecord getByDefectNo(String defectNo) {
+        return ncmDefectRecordMapper.selectOne(
+                new LambdaQueryWrapper<NcmDefectRecord>()
+                        .eq(NcmDefectRecord::getDefectNo, defectNo));
     }
 
     @Override
@@ -550,5 +560,18 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
         capa.setDueDate(LocalDate.now().plusDays(30));
         ncmCapaService.create(capa);
         return capa;
+    }
+
+    @Override
+    public Object launchCaFromDefect(String defectId) {
+        NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
+        if (def == null) throw new BusinessException(400, "缺陷记录不存在");
+        NcmCorrectiveAction ca = new NcmCorrectiveAction();
+        ca.setOrgId(def.getOrgId());
+        ca.setDefectNo(def.getDefectNo());
+        ca.setIssue("不良:" + def.getDefectNo() + " 工序:" + (def.getProcessCode() != null ? def.getProcessCode() : "-"));
+        ca.setOwner(def.getOperatorId() != null ? def.getOperatorId() : "质量团队");
+        ca.setDueDate(LocalDate.now().plusDays(7));
+        return ncmCorrectiveActionService.create(ca);
     }
 }

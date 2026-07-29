@@ -9,6 +9,9 @@ public interface NcmCorrectiveActionService {
 
     List<NcmCorrectiveAction> list();
 
+    /** 按关联不良单号查询纠正措施。 */
+    List<NcmCorrectiveAction> listByDefectNo(String defectNo);
+
     NcmCorrectiveAction get(String id);
 
     NcmCorrectiveAction create(NcmCorrectiveAction action);

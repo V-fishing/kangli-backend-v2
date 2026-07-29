@@ -2,6 +2,7 @@ package com.konli.qms.api.uop.controller;
 
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.uop.entity.SysButton;
+import com.konli.qms.domain.uop.entity.SysDataScope;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.service.uop.RoleService;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -26,8 +28,8 @@ public class RoleController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('system.role.list')")
-    public R<List<SysRole>> list() {
-        return R.ok(roleService.list());
+    public R<List<SysRole>> list(@RequestParam(required = false) String orgId) {
+        return R.ok(roleService.list(orgId));
     }
 
     @PostMapping
@@ -93,5 +95,18 @@ public class RoleController {
     @PreAuthorize("hasAuthority('system.role.list')")
     public R<List<SysUser>> users(@PathVariable String id) {
         return R.ok(roleService.users(id));
+    }
+
+    @PostMapping("/{id}/data-scopes")
+    @PreAuthorize("hasAuthority('system.role.assign')")
+    public R<Void> assignDataScopes(@PathVariable String id, @RequestBody List<SysDataScope> scopes) {
+        roleService.assignDataScopes(id, scopes);
+        return R.ok();
+    }
+
+    @GetMapping("/{id}/data-scopes")
+    @PreAuthorize("hasAuthority('system.role.list')")
+    public R<List<SysDataScope>> dataScopes(@PathVariable String id) {
+        return R.ok(roleService.getDataScopes(id));
     }
 }

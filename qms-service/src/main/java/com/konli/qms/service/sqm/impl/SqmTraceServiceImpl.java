@@ -3,6 +3,7 @@ package com.konli.qms.service.sqm.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
+import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.domain.sqm.entity.SqmKeyPartSn;
 import com.konli.qms.domain.sqm.entity.SqmTraceNode;
@@ -60,8 +61,15 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private final JdbcTemplate jdbcTemplate;
 
     @Override
-    public List<SqmIncomingLot> listLots() {
-        List<SqmIncomingLot> lots = sqmIncomingLotMapper.selectList(null);
+    public List<SqmIncomingLot> listLots(String keyword) {
+        LambdaQueryWrapper<SqmIncomingLot> qw = new LambdaQueryWrapper<>();
+        if (keyword != null && !keyword.isBlank()) {
+            String like = "%" + keyword.trim() + "%";
+            qw.and(w -> w.like(SqmIncomingLot::getLotNo, like)
+                         .or().like(SqmIncomingLot::getPartNo, like)
+                         .or().like(SqmIncomingLot::getPartName, like));
+        }
+        List<SqmIncomingLot> lots = sqmIncomingLotMapper.selectList(qw);
         if (!lots.isEmpty()) {
             Map<String, String> supplierNameMap = buildSupplierNameMap();
             for (SqmIncomingLot lot : lots) {
@@ -194,6 +202,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 "FROM ops.sqm_trace_node n " +
                 "LEFT JOIN ops.sqm_incoming_lot l ON n.root_lot_id = l.id " +
                 "LEFT JOIN ops.sqm_supplier s ON n.supplier_id = s.id " +
+                "LEFT JOIN ops.sqm_trace_product_detail pd ON pd.node_id = n.id " +
                 "WHERE n.is_deleted = false");
         List<Object> args = new ArrayList<>();
         if (resolvedOrgId != null && !resolvedOrgId.isBlank()) {
@@ -226,8 +235,9 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             }
         }
         if (keyword != null && !keyword.isBlank()) {
-            fromWhere.append(" AND (n.node_name ILIKE ? OR n.batch_no ILIKE ? OR n.material_code ILIKE ? OR COALESCE(s.name,'') ILIKE ?)");
+            fromWhere.append(" AND (n.node_name ILIKE ? OR n.batch_no ILIKE ? OR n.material_code ILIKE ? OR COALESCE(s.name,'') ILIKE ? OR COALESCE(pd.product_name,'') ILIKE ?)");
             String like = "%" + keyword.trim() + "%";
+            args.add(like);
             args.add(like);
             args.add(like);
             args.add(like);
@@ -369,23 +379,56 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
     @Override
     public TraceFullTreeVO getFullTraceTree(String rootLotId) {
-        String sql = "WITH RECURSIVE trace_tree AS (" +
-                "  SELECT * FROM ops.sqm_trace_node WHERE root_lot_id = ?::uuid AND is_deleted = false" +
-                "    AND id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false)" +
+        // 1) 收集连通节点 id: 沿 link 上溯到根再下溯, 用路径数组防环(避免 link 成环导致 CTE 死循环)
+        String idSql = "WITH RECURSIVE up AS (" +
+                "  SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node" +
+                "    WHERE root_lot_id = ?::uuid AND is_deleted = false" +
                 "  UNION ALL" +
-                "  SELECT n.* FROM ops.sqm_trace_node n" +
-                "  JOIN ops.sqm_trace_link l ON l.child_node_id = n.id" +
-                "  JOIN trace_tree t ON t.id = l.parent_node_id" +
-                "  WHERE n.is_deleted = false" +
-                ") SELECT * FROM trace_tree ORDER BY tree_level, node_date";
-        List<SqmTraceNode> nodes = jdbcTemplate.query(sql,
-                new BeanPropertyRowMapper<>(SqmTraceNode.class), rootLotId);
+                "  SELECT l.parent_node_id, up.path || l.parent_node_id" +
+                "    FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id" +
+                "    WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path)))," +
+                " root_ids AS (SELECT id FROM up WHERE id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false))," +
+                " down AS (" +
+                "  SELECT id, ARRAY[id] AS path FROM root_ids" +
+                "  UNION ALL" +
+                "  SELECT l.child_node_id, down.path || l.child_node_id" +
+                "    FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id" +
+                "    WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))" +
+                " SELECT id FROM down";
+        List<Map<String, Object>> idRows = jdbcTemplate.queryForList(idSql, rootLotId);
+        if (idRows.isEmpty()) {
+            // 回退: rootLotId 实际可能是 incoming_lot 表主键(id), 而该批次的追溯数据挂在同 batch_no 的 trace node 上。
+            // 通过 lot_no = batch_no 反查对应节点, 再按节点追溯整棵连通树, 避免列表"追溯"落空只显示单节点。
+            try {
+                Map<String, Object> nodeRow = jdbcTemplate.queryForMap(
+                        "SELECT n.id FROM ops.sqm_trace_node n JOIN ops.sqm_incoming_lot l ON n.batch_no = l.lot_no"
+                                + " WHERE l.id = ?::uuid AND n.is_deleted = false LIMIT 1", rootLotId);
+                return getFullTraceTreeByRootNode(String.valueOf(nodeRow.get("id")));
+            } catch (EmptyResultDataAccessException noNode) {
+                // 无关联追溯节点, 走下方空树兜底
+            }
+            TraceFullTreeVO empty = new TraceFullTreeVO();
+            empty.setRootLotId(rootLotId);
+            SqmIncomingLot lot0 = sqmIncomingLotMapper.selectById(rootLotId);
+            if (lot0 != null) {
+                empty.setRootLotNo(lot0.getLotNo());
+                empty.setIsKeyPart(lot0.getIsKeyPart());
+            }
+            return empty;
+        }
+        Set<String> ids = new HashSet<>();
+        for (Map<String, Object> r : idRows) {
+            ids.add(String.valueOf(r.get("id")));
+        }
+        String in = inClause(ids);
+        List<SqmTraceNode> nodes = jdbcTemplate.query(
+                "SELECT n.* FROM ops.sqm_trace_node n WHERE n.id IN (" + in + ") AND n.is_deleted = false ORDER BY n.tree_level, n.node_date",
+                new BeanPropertyRowMapper<>(SqmTraceNode.class));
 
         // 供应商名映射,供节点展示供应商
         Map<String, String> supplierNameMap = new HashMap<>();
         try {
-            List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
-                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
+            List<Map<String, Object>> suppliers = querySupplierRows();
             for (Map<String, Object> s : suppliers) {
                 supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
             }
@@ -416,18 +459,34 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             voMap.put(n.getId(), vo);
         }
 
-        TraceNodeTreeVO root = null;
-        for (SqmTraceNode n : nodes) {
-            TraceNodeTreeVO vo = voMap.get(n.getId());
-            if (n.getParentNodeId() == null) {
-                root = vo;
-            } else {
-                TraceNodeTreeVO parent = voMap.get(n.getParentNodeId());
-                if (parent != null) {
-                    parent.getChildren().add(vo);
-                }
+        // 2) 纯 link 建边: 将 child 挂到其所有 link 父的 children(支持多父 DAG, 不再吞边)
+        List<Map<String, Object>> edges = jdbcTemplate.queryForList(
+                "SELECT l.parent_node_id AS parent_id, l.child_node_id AS child_id FROM ops.sqm_trace_link l"
+                        + " WHERE l.is_deleted = false AND l.parent_node_id IN (" + in + ") AND l.child_node_id IN (" + in + ")");
+        Set<String> childIds = new HashSet<>();
+        for (Map<String, Object> e : edges) {
+            String pid = String.valueOf(e.get("parent_id"));
+            String cid = String.valueOf(e.get("child_id"));
+            childIds.add(cid);
+            TraceNodeTreeVO p = voMap.get(pid);
+            TraceNodeTreeVO c = voMap.get(cid);
+            if (p != null && c != null && !p.getChildren().contains(c)) {
+                p.getChildren().add(c);
+                c.setParentNodeId(pid);
             }
         }
+        // 3) 选根: 连通集内无入边(不在 childIds)者; 兜底取第一个
+        String chosen = null;
+        for (String id : voMap.keySet()) {
+            if (!childIds.contains(id)) {
+                chosen = id;
+                break;
+            }
+        }
+        if (chosen == null) {
+            chosen = voMap.keySet().iterator().next();
+        }
+        TraceNodeTreeVO root = voMap.get(chosen);
 
         TraceFullTreeVO result = new TraceFullTreeVO();
         result.setRootLotId(rootLotId);
@@ -466,6 +525,16 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             return camel;
         } catch (EmptyResultDataAccessException e) {
             return new HashMap<>();
+        }
+    }
+
+    private static boolean isValidUuid(String s) {
+        if (s == null) return false;
+        try {
+            java.util.UUID.fromString(s);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 
@@ -600,11 +669,14 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private Set<String> componentIds(String seed) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "WITH RECURSIVE up AS ("
-                        + " SELECT id FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
+                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
                         + " UNION ALL"
-                        + " SELECT l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id WHERE l.is_deleted = false),"
+                        + " SELECT l.parent_node_id, up.path || l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id"
+                        + "   WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path))),"
                         + " root_ids AS (SELECT id FROM up WHERE id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false)),"
-                        + " down AS (SELECT id FROM root_ids UNION ALL SELECT l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id WHERE l.is_deleted = false)"
+                        + " down AS (SELECT id, ARRAY[id] AS path FROM root_ids"
+                        + "   UNION ALL SELECT l.child_node_id, down.path || l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id"
+                        + "   WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))"
                         + " SELECT id FROM down",
                 seed);
         Set<String> ids = new HashSet<>();
@@ -678,6 +750,10 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             node.setTreeLevel(0);
         }
         sqmTraceNodeMapper.insert(node);
+        // 环防御(防御性, 对齐 attachComponent): 若所选父已是本节点下游, 会形成循环
+        if (parentIdForLink != null && isDescendantOf(id, parentIdForLink)) {
+            throw new BusinessException(400, "目标父节点已是该节点的下游, 挂载会形成循环, 请先解除原有关系");
+        }
         insertLink(parentIdForLink, id, node.getOrgId(), "compose");
 
         writeDetail(node, req);
@@ -823,6 +899,19 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 }
                 return ref;
             } else {
+                // 去重: 父节点下已存在同 batch_no + 同 node_type 的直接子节点时复用, 不再克隆(避免重复 link)
+                if (ref.getBatchNo() != null) {
+                    List<String> existIds = jdbcTemplate.query(
+                            "SELECT c.id FROM ops.sqm_trace_link l"
+                            + " JOIN ops.sqm_trace_node c ON c.id = l.child_node_id"
+                            + " WHERE l.parent_node_id = ?::uuid AND l.is_deleted = false AND c.is_deleted = false"
+                            + " AND c.node_type = ? AND c.batch_no = ? LIMIT 1",
+                            (rs, i) -> rs.getString("id"),
+                            parent.getId(), ref.getNodeType(), ref.getBatchNo());
+                    if (existIds != null && !existIds.isEmpty()) {
+                        return sqmTraceNodeMapper.selectById(existIds.get(0));
+                    }
+                }
                 // 半成品/成品等: 复制为新子节点(新 UUID), 原节点及其子树保留不搬移
                 String newId = genId();
                 SqmTraceNode clone = new SqmTraceNode();
@@ -980,8 +1069,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
         Map<String, String> supplierNameMap = new HashMap<>();
         try {
-            List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
-                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
+            List<Map<String, Object>> suppliers = querySupplierRows();
             for (Map<String, Object> s : suppliers) {
                 supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
             }
@@ -1046,10 +1134,10 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private Set<String> descendantIds(String seed) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "WITH RECURSIVE down AS ("
-                        + " SELECT id FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
+                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
                         + " UNION ALL"
-                        + " SELECT l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id"
-                        + " WHERE l.is_deleted = false)"
+                        + " SELECT l.child_node_id, down.path || l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id"
+                        + "   WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))"
                         + " SELECT id FROM down",
                 seed);
         Set<String> ids = new HashSet<>();
@@ -1063,10 +1151,10 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private Set<String> ancestorIds(String seed) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "WITH RECURSIVE up AS ("
-                        + " SELECT id FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
+                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
                         + " UNION ALL"
-                        + " SELECT l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id"
-                        + " WHERE l.is_deleted = false)"
+                        + " SELECT l.parent_node_id, up.path || l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id"
+                        + "   WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path)))"
                         + " SELECT id FROM up",
                 seed);
         Set<String> ids = new HashSet<>();
@@ -1140,8 +1228,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
         Map<String, String> supplierNameMap = new HashMap<>();
         try {
-            List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
-                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
+            List<Map<String, Object>> suppliers = querySupplierRows();
             for (Map<String, Object> s : suppliers) {
                 supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
             }
@@ -1230,14 +1317,35 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
     // ---- 供应商名称映射缓存 ----
 
+    /** 当前用户分公司 org_id；跨公司管理员(dataScope=all, JWT orgId="ROOT")返回 null。 */
+    private String currentBranchOrgId() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        if (u == null || CompanyContext.isAdmin()) {
+            return null;
+        }
+        String orgId = u.orgId();
+        return (orgId == null || "ROOT".equals(orgId)) ? null : orgId;
+    }
+
+    /**
+     * 供应商 (id, name) 查询：JdbcTemplate 不经过 MyBatis 数据权限拦截器，
+     * 须手工按当前用户 org_id 过滤（sysadmin/跨公司不过滤）。
+     */
+    private List<Map<String, Object>> querySupplierRows() {
+        String orgId = currentBranchOrgId();
+        if (orgId == null) {
+            return jdbcTemplate.queryForList(
+                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
+        }
+        return jdbcTemplate.queryForList(
+                "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false AND org_id = ?::uuid", orgId);
+    }
+
     private Map<String, String> buildSupplierNameMap() {
         Map<String, String> map = new HashMap<>();
         try {
-            List<Object[]> rows = jdbcTemplate.query(
-                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false",
-                    (rs, rowNum) -> new Object[]{rs.getString("id"), rs.getString("name")});
-            for (Object[] row : rows) {
-                map.put((String) row[0], (String) row[1]);
+            for (Map<String, Object> row : querySupplierRows()) {
+                map.put(String.valueOf(row.get("id")), String.valueOf(row.get("name")));
             }
         } catch (Exception ignored) {
             log.warn("buildSupplierNameMap failed: {}", ignored.getMessage());
@@ -1249,6 +1357,10 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
     @Override
     public TraceNodeFullVO getNodeDetail(String nodeId) {
+        if (!isValidUuid(nodeId)) {
+            // 非法 uuid(如前端 seed 占位节点 "seed-...")直接空返回, 避免 ?::uuid 解析抛 500
+            return null;
+        }
         SqmTraceNode node = sqmTraceNodeMapper.selectById(nodeId);
         if (node == null) {
             return null;
@@ -1259,13 +1371,18 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
         String supplierName = null;
         if (node.getSupplierId() != null && !node.getSupplierId().isBlank()) {
+            String curOrgId = currentBranchOrgId();
             try {
-                Map<String, Object> s = jdbcTemplate.queryForMap(
-                        "SELECT name FROM ops.sqm_supplier WHERE id = ?::uuid AND is_deleted = false",
-                        node.getSupplierId());
+                Map<String, Object> s = curOrgId == null
+                        ? jdbcTemplate.queryForMap(
+                                "SELECT name FROM ops.sqm_supplier WHERE id = ?::uuid AND is_deleted = false",
+                                node.getSupplierId())
+                        : jdbcTemplate.queryForMap(
+                                "SELECT name FROM ops.sqm_supplier WHERE id = ?::uuid AND is_deleted = false AND org_id = ?::uuid",
+                                node.getSupplierId(), curOrgId);
                 supplierName = String.valueOf(s.get("name"));
             } catch (EmptyResultDataAccessException ignored) {
-                // 供应商不存在
+                // 供应商不存在或不属于本分公司
             }
         }
         vo.setSupplierName(supplierName);

@@ -60,4 +60,8 @@ public class SpcParam extends BaseEntity {
 
     @TableField("is_active")
     private Boolean isActive;
+
+    /** 关联供应商:该工序参数归属的供应商,用于 CPK→供应商质量分联动(可空)。 */
+    @TableField("supplier_id")
+    private String supplierId;
 }

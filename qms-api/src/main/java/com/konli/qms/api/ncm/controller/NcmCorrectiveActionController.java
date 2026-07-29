@@ -5,6 +5,7 @@ import com.konli.qms.domain.ncm.entity.NcmCorrectiveAction;
 import com.konli.qms.service.ncm.NcmCorrectiveActionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,7 +26,10 @@ public class NcmCorrectiveActionController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('ncm.record.create')")
-    public R<List<NcmCorrectiveAction>> list() {
+    public R<List<NcmCorrectiveAction>> list(@RequestParam(required = false) String defectNo) {
+        if (StringUtils.hasText(defectNo)) {
+            return R.ok(ncmCorrectiveActionService.listByDefectNo(defectNo));
+        }
         return R.ok(ncmCorrectiveActionService.list());
     }
 

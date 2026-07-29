@@ -27,10 +27,14 @@ import com.konli.qms.service.fia.FiaTaskService;
 import static com.konli.qms.common.enums.QmsEnums.*;
 import com.konli.qms.service.fia.FiaWoLockService;
 import com.konli.qms.service.ncm.NcmDefectRecordService;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.service.sqm.SqmTraceService;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.service.fia.SignConfigService;
+import com.konli.qms.domain.fia.dto.PreviewJudgeRequest;
+import com.konli.qms.domain.fia.dto.PreviewJudgeResult;
+import com.konli.qms.domain.fia.dto.StdTraceResult;
 import com.konli.qms.service.fia.dto.FiaTaskVo;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
@@ -43,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,6 +57,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,10 +90,22 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final JdbcTemplate jdbcTemplate;
     private final NcmDefectRecordService ncmDefectRecordService;
     private final SqmTraceService sqmTraceService;
+    private final NotificationService notificationService;
 
     @Override
-    public List<FiaTask> list() {
-        return fiaTaskMapper.selectList(null);
+        public List<FiaTask> list(String orgId, String status, String woNo) {
+        LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
+        if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
+            w.eq(FiaTask::getOrgId, orgId);
+        }
+        if (status != null && !status.trim().isEmpty()) {
+            w.eq(FiaTask::getStatus, status);
+        }
+        if (woNo != null && !woNo.trim().isEmpty()) {
+            w.like(FiaTask::getWoNo, woNo.trim());
+        }
+        w.orderByDesc(FiaTask::getCreatedAt);
+        return fiaTaskMapper.selectList(w);
     }
 
     @Override
@@ -122,6 +140,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     /** 校验标准：优先按 UUID 主键查询；传入编码(如 STD-001)时按 code 兜底，避免向 UUID 列传入非法值导致 500 */
     private static final Pattern UUID_RE =
             Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+    private static final Pattern NUM_RE = Pattern.compile("-?\\d+(?:\\.\\d+)?");
+    private static final Pattern TOL_PM_RE = Pattern.compile("±\\s*(\\d+(?:\\.\\d+)?)");
+    private static final Pattern TOL_RANGE_RE = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[~\\-]\\s*(\\d+(?:\\.\\d+)?)");
 
     private FiaInspStd resolveInspStd(String stdId) {
         if (stdId == null || stdId.isBlank()) {
@@ -248,16 +270,13 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         return task;
     }
 
-    /** 写入待检通知到 notification_log(一期站内通知,角色广播给检验员/班组长)。 */
+    /** 推送待检通知给检验员/班组长(使用 NotificationService 标准接口)。 */
     private void notifyPending(FiaTask task) {
         String content = String.format("首件检验待检:校验单 %s,工单 %s,产线 %s,工序 %s,SLA %s",
                 task.getCode(), task.getWoNo(), task.getLineName(), task.getProcName(),
                 task.getSlaDueAt() != null ? task.getSlaDueAt().toString() : "-");
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) " +
-                        "VALUES (?, 'FIA_TASK_PENDING', ?, '站内', ?, ?, '提醒', '已发送', now())",
-                java.util.UUID.fromString(task.getOrgId()), task.getCode(),
-                "检验员/班组长", content);
+        notificationService.notifyRoles(List.of("inspector", "supervisor"),
+                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks", null);
     }
 
     /** 将前端传入的标识(可能是主键 UUID,也可能是校验单号 code)解析为真实主键;解析失败返回 null */
@@ -284,13 +303,27 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (realId == null) {
             throw new BusinessException(400, "任务不存在");
         }
+        // 批量取标准项规则,避免 N+1
+        Set<String> stdIds = items.stream().map(FiaInspItem::getStdItemId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<String, FiaInspStdItem> stdItemMap = stdIds.isEmpty() ? Collections.emptyMap() :
+                fiaInspStdItemMapper.selectBatchIds(stdIds).stream()
+                        .collect(Collectors.toMap(FiaInspStdItem::getId, s -> s, (a, b) -> a));
         for (FiaInspItem it : items) {
+            // 系统按标准规则自动判定:可匹配则覆盖,不可匹配则保留前端人工 judge
+            String sysJudge = null;
+            if (it.getStdItemId() != null) {
+                sysJudge = computeItemJudge(stdItemMap.get(it.getStdItemId()), it.getMeasuredValue());
+            }
             FiaInspItem upd = new FiaInspItem();
             upd.setId(it.getId());
             upd.setMeasuredValue(it.getMeasuredValue());
-            upd.setJudge(it.getJudge());
+            upd.setJudge(sysJudge != null ? sysJudge
+                    : (it.getJudge() == null || it.getJudge().isBlank() ? "-" : it.getJudge()));
             fiaInspItemMapper.updateById(upd);
         }
+        // 录入后刷新检验项统计与合格率
+        computeStats(realId);
         // 仅在首次录入(待检)时置为FiaTaskStatus.IN_PROGRESS;已处于签名流转中(待复核/待批准)的任务补充录入时
         // 保持当前状态,避免把状态错误地重置回FiaTaskStatus.IN_PROGRESS而打断分级签名。
         FiaTask task = fiaTaskMapper.selectById(realId);
@@ -302,6 +335,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     @Override
+    @Transactional
     public void signInspector(String taskId, String password, String itemId) {
         String realId = resolveTaskId(taskId);
         FiaTask task = realId == null ? null : fiaTaskMapper.selectById(realId);
@@ -391,10 +425,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     @Override
     @Transactional
     public void setDisposition(String taskId, String disposition, String remark) {
-        FiaTask task = fiaTaskMapper.selectById(taskId);
-        if (task == null) {
+        String realId = resolveTaskId(taskId);
+        if (realId == null) {
             throw new BusinessException(400, "首件任务不存在");
         }
+        FiaTask task = fiaTaskMapper.selectById(realId);
         // 按 source 校验 disposition 枚举
         Set<String> allowed;
         if ("SUPPLIER".equals(task.getSource())) {
@@ -410,7 +445,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         fiaTaskMapper.updateById(task);
 
         int seq = fiaTaskLogMapper.selectCount(
-                new LambdaQueryWrapper<FiaTaskLog>().eq(FiaTaskLog::getTaskId, taskId)
+                new LambdaQueryWrapper<FiaTaskLog>().eq(FiaTaskLog::getTaskId, realId)
         ).intValue() + 1;
         log(task, seq, "处置-" + disposition, currentOperator());
     }
@@ -456,10 +491,22 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         task.setStatus(FiaTaskStatus.COMPLETED);
         task.setSubmittedAt(LocalDateTime.now());
         task.setOverallJudge(computeJudge(task.getId()));
+        computeStats(task.getId());
         fiaTaskMapper.updateById(task);
         archive(task);
         log(task, 7, "审批通过-放行归档", "系统");
         log(task, 8, "归档报告", "系统");
+        // 审批结果通知
+        try {
+            String judgeText = task.getOverallJudge() != null ? task.getOverallJudge() : "已判定";
+            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+                    "首件检验审批通过-已放行",
+                    String.format("校验单 %s(工单 %s) 审批通过,判定:%s,已自动放行归档。",
+                            task.getCode(), task.getWoNo(), judgeText),
+                    "fia_task", task.getCode(), "/fia/tasks", null);
+        } catch (Exception e) {
+            log.warn("[FIA] 审批放行通知失败: {}", e.getMessage());
+        }
         // 审批放行:已获批准,无论判定是否合格均将CTQ数据写入SPC基准
         try {
             syncToSpc(task);
@@ -662,6 +709,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         task.setStatus(FiaTaskStatus.COMPLETED);
         task.setSubmittedAt(LocalDateTime.now());
         task.setOverallJudge(computeJudge(task.getId()));
+        computeStats(task.getId());
         // 拦截生产:首件不合格时设 disposition=拦截(记录级,不阻断 MES;一期不接 MES)
         if (!InspResult.PASS.equals(task.getOverallJudge())) {
             if (task.getDisposition() == null || task.getDisposition().isEmpty()) {
@@ -676,6 +724,16 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (!InspResult.PASS.equals(task.getOverallJudge())) {
             log(task, logSeq + 2, "拦截生产-首件不合格", "系统");
             log.warn("FIA拦截生产: code={}, woNo={}, judge={}", task.getCode(), task.getWoNo(), task.getOverallJudge());
+            // 不合格告警通知
+            try {
+                notificationService.notifyRoles(List.of("qmanager", "supervisor"),
+                        "首件检验不合格告警",
+                        String.format("校验单 %s(工单 %s,产线 %s) 判定不合格(%s),请及时处理。",
+                                task.getCode(), task.getWoNo(), task.getLineName(), task.getOverallJudge()),
+                        "fia_task", task.getCode(), "/fia/tasks", null);
+            } catch (Exception e) {
+                log.warn("[FIA] 不合格告警通知失败: {}", e.getMessage());
+            }
         }
         // FIA->SPC 联动:仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
         if (InspResult.PASS.equals(task.getOverallJudge())) {
@@ -833,6 +891,191 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             return InspResult.FAIL;
         }
         return anyFail ? "警告" : InspResult.PASS;
+    }
+
+    /**
+     * 依据标准项规则计算单条检验项判定:合格/不合格;不可匹配(缺规则/缺实测/非数值/枚举未定义)返回 null。
+     * 数值型:stdValue±tolerance(支持 ±X、单值 X 视作±X、L~U / L-U 区间)。
+     * 枚举型:实测命中 passValues → 合格;命中其它 enumValues → 不合格;否则不可匹配(人工兜底)。
+     */
+    private String computeItemJudge(FiaInspStdItem rule, String measuredValue) {
+        if (rule == null || measuredValue == null || measuredValue.isBlank()) {
+            return null;
+        }
+        String vt = rule.getValueType();
+        if ("numeric".equals(vt) || "数值".equals(vt)) {
+            BigDecimal center = null;
+            if (rule.getStdValue() != null && NUM_RE.matcher(rule.getStdValue().trim()).matches()) {
+                center = new BigDecimal(rule.getStdValue().trim());
+            }
+            String tol = rule.getTolerance();
+            if (tol == null || tol.isBlank()) {
+                return null;
+            }
+            String t = tol.trim();
+            BigDecimal lower, upper;
+            Matcher mPm = TOL_PM_RE.matcher(t);
+            if (mPm.find()) {
+                BigDecimal half = new BigDecimal(mPm.group(1));
+                BigDecimal c = center != null ? center : BigDecimal.ZERO;
+                lower = c.subtract(half);
+                upper = c.add(half);
+            } else {
+                Matcher mRange = TOL_RANGE_RE.matcher(t);
+                if (mRange.find()) {
+                    lower = new BigDecimal(mRange.group(1));
+                    upper = new BigDecimal(mRange.group(2));
+                } else if (NUM_RE.matcher(t).matches()) {
+                    BigDecimal half = new BigDecimal(t);
+                    BigDecimal c = center != null ? center : BigDecimal.ZERO;
+                    lower = c.subtract(half);
+                    upper = c.add(half);
+                } else {
+                    return null;
+                }
+            }
+            BigDecimal mv;
+            try {
+                mv = new BigDecimal(measuredValue.trim());
+            } catch (Exception e) {
+                return null;
+            }
+            return (mv.compareTo(lower) >= 0 && mv.compareTo(upper) <= 0) ? InspResult.PASS : InspResult.FAIL;
+        } else if ("enum".equals(vt) || "枚举".equals(vt)) {
+            if (rule.getPassValues() == null || rule.getPassValues().trim().isEmpty()) {
+                return null;
+            }
+            Set<String> pass = Arrays.stream(rule.getPassValues().split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toSet());
+            if (pass.isEmpty()) {
+                return null;
+            }
+            String mv = measuredValue.trim();
+            if (pass.contains(mv)) {
+                return InspResult.PASS;
+            }
+            if (rule.getEnumValues() != null && !rule.getEnumValues().trim().isEmpty()) {
+                Set<String> enums = Arrays.stream(rule.getEnumValues().split(","))
+                        .map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toSet());
+                if (enums.contains(mv)) {
+                    return InspResult.FAIL;
+                }
+            }
+            return null; // 实测不在枚举定义内 → 不可匹配,人工兜底
+        }
+        return null; // 文本型/空 → 人工兜底
+    }
+
+    /** 统计检验项总数/合格数/不合格数,并计算合格率(=合格数/总数)写回 fia_task。 */
+    private void computeStats(String taskId) {
+        List<FiaInspItem> items = fiaInspItemMapper.selectList(
+                new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, taskId));
+        int total = items.size();
+        int pass = 0, fail = 0;
+        for (FiaInspItem it : items) {
+            if (InspResult.PASS.equals(it.getJudge())) {
+                pass++;
+            } else if (InspResult.FAIL.equals(it.getJudge())) {
+                fail++;
+            }
+        }
+        BigDecimal rate = total > 0
+                ? BigDecimal.valueOf(pass).divide(BigDecimal.valueOf(total), 4, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+        FiaTask upd = new FiaTask();
+        upd.setId(taskId);
+        upd.setItemTotal(total);
+        upd.setPassCount(pass);
+        upd.setFailCount(fail);
+        upd.setPassRate(rate);
+        fiaTaskMapper.updateById(upd);
+    }
+
+    @Override
+    public List<PreviewJudgeResult> previewJudge(String taskId, PreviewJudgeRequest req) {
+        String realId = resolveTaskId(taskId);
+        if (realId == null) {
+            throw new BusinessException(400, "任务不存在");
+        }
+        List<FiaInspItem> taskItems = fiaInspItemMapper.selectList(
+                new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, realId));
+        Map<String, FiaInspItem> itemMap = taskItems.stream()
+                .collect(Collectors.toMap(FiaInspItem::getId, i -> i, (a, b) -> a));
+        Set<String> stdIds = taskItems.stream().map(FiaInspItem::getStdItemId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<String, FiaInspStdItem> stdMap = stdIds.isEmpty() ? Collections.emptyMap() :
+                fiaInspStdItemMapper.selectBatchIds(stdIds).stream()
+                        .collect(Collectors.toMap(FiaInspStdItem::getId, s -> s, (a, b) -> a));
+        List<PreviewJudgeResult> res = new ArrayList<>();
+        if (req.getItems() != null) {
+            for (PreviewJudgeRequest.PreviewJudgeItem pi : req.getItems()) {
+                FiaInspItem ti = itemMap.get(pi.getId());
+                String measured = pi.getMeasuredValue() != null ? pi.getMeasuredValue()
+                        : (ti != null ? ti.getMeasuredValue() : null);
+                String judge = null;
+                boolean matchable = false;
+                if (ti != null && ti.getStdItemId() != null) {
+                    judge = computeItemJudge(stdMap.get(ti.getStdItemId()), measured);
+                    matchable = judge != null;
+                }
+                PreviewJudgeResult r = new PreviewJudgeResult();
+                r.setId(pi.getId());
+                r.setJudge(judge);
+                r.setMatchable(matchable);
+                r.setAutoJudged(matchable);
+                res.add(r);
+            }
+        }
+        return res;
+    }
+
+    /**
+     * 标准引用追溯:列出引用该标准(stdId)的首件任务;itemId 非空时精确到引用该标准项的任务。
+     * 组织隔离沿用 CompanyContext;命中检验项按 std_item_id 过滤(精确到项时只剩该项)。
+     */
+    @Override
+    public StdTraceResult traceStd(String stdId, String itemId) {
+        StdTraceResult res = new StdTraceResult();
+        res.setStdId(stdId);
+        List<FiaTask> tasks;
+        if (itemId != null && !itemId.isBlank()) {
+            Set<String> taskIds = fiaInspItemMapper.selectList(
+                            new LambdaQueryWrapper<FiaInspItem>().select(FiaInspItem::getTaskId).eq(FiaInspItem::getStdItemId, itemId))
+                    .stream().map(FiaInspItem::getTaskId).collect(Collectors.toSet());
+            tasks = taskIds.isEmpty() ? Collections.emptyList()
+                    : fiaTaskMapper.selectList(new LambdaQueryWrapper<FiaTask>().in(FiaTask::getId, taskIds));
+        } else {
+            tasks = fiaTaskMapper.selectList(new LambdaQueryWrapper<FiaTask>().eq(FiaTask::getStdId, stdId));
+        }
+        // 组织隔离
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        if (orgId != null) {
+            tasks = tasks.stream().filter(t -> orgId.equals(t.getOrgId())).collect(Collectors.toList());
+        }
+        // 收集该标准下的标准项 id(精确到项时只取该项),用于过滤命中检验项
+        Set<String> stdItemIds = new HashSet<>();
+        if (itemId != null && !itemId.isBlank()) {
+            stdItemIds.add(itemId);
+        } else {
+            stdItemIds.addAll(fiaInspStdItemMapper.selectList(
+                            new LambdaQueryWrapper<FiaInspStdItem>().select(FiaInspStdItem::getId).eq(FiaInspStdItem::getStdId, stdId))
+                    .stream().map(FiaInspStdItem::getId).collect(Collectors.toSet()));
+        }
+        List<StdTraceResult.StdTraceTask> list = new ArrayList<>();
+        for (FiaTask t : tasks) {
+            List<FiaInspItem> items = stdItemIds.isEmpty() ? Collections.emptyList()
+                    : fiaInspItemMapper.selectList(
+                            new LambdaQueryWrapper<FiaInspItem>()
+                                    .eq(FiaInspItem::getTaskId, t.getId())
+                                    .in(FiaInspItem::getStdItemId, stdItemIds));
+            StdTraceResult.StdTraceTask tt = new StdTraceResult.StdTraceTask();
+            tt.setTask(t);
+            tt.setItems(items);
+            list.add(tt);
+        }
+        res.setTasks(list);
+        return res;
     }
 
     private void archive(FiaTask task) {

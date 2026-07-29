@@ -7,6 +7,7 @@ import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.service.uop.UserService;
 import com.konli.qms.service.uop.dto.CurrentUserVo;
+import com.konli.qms.service.uop.dto.UserSelectVo;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -41,6 +42,13 @@ public class UserController {
     @PreAuthorize("hasAuthority('system.user.list')")
     public R<List<SysUser>> list() {
         return R.ok(userService.list());
+    }
+
+    /** 采集任务"选择接收人"下拉:返回启用用户的精简信息,无需 system.user.list 权限。 */
+    @GetMapping("/users/select")
+    @PreAuthorize("hasAuthority('spc.subgroup.create')")
+    public R<List<UserSelectVo>> listForSelect() {
+        return R.ok(userService.listForSelect());
     }
 
     @PostMapping("/users")

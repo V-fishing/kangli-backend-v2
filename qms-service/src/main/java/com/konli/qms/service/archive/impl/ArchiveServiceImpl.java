@@ -177,6 +177,158 @@ public class ArchiveServiceImpl implements ArchiveService {
         return result;
     }
 
+    // ==================== 档案详情 / 下载 ====================
+
+    @Override
+    public Map<String, Object> detail(String type, String refId) {
+        if (refId == null || refId.isBlank()) return null;
+        String t = type == null ? "" : type.trim().toLowerCase();
+        if ("audit".equals(t)) {
+            CompanyContext.CurrentUser au = CompanyContext.get();
+            String auditOrg = (au != null && !CompanyContext.isAdmin() && au.orgId() != null && !au.orgId().isBlank())
+                    ? " AND a.org_id = '" + au.orgId().replace("'", "''") + "'" : "";
+            String sql = "SELECT a.archive_no, a.record_id, a.archive_date, a.report_hash, a.retention_until, "
+                    + "a.report_file_path AS pdf_ref, "
+                    + "r.record_no, r.audit_type, r.audit_lead AS auditor, r.audit_date, r.conclusion, r.status, r.plan_id "
+                    + "FROM ops.sqm_audit_report_archive a "
+                    + "LEFT JOIN ops.sqm_audit_record r ON r.id = a.record_id AND r.is_deleted = false "
+                    + "WHERE a.record_id = ?" + auditOrg;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, refId);
+            if (rows.isEmpty()) return null;
+            Map<String, Object> m = mapDetail("audit", rows.get(0));
+            Object planObj = rows.get(0).get("plan_id");
+            String planId = planObj == null ? null : String.valueOf(planObj);
+            m.put("log", buildAuditLog(planId, rows.get(0)));
+            return m;
+        }
+        // 默认 fia
+        String sql = "SELECT r.report_no, r.task_id, r.wo_no, r.archive_date, r.status, r.pdf_ref, r.report_hash, r.retention_until, "
+                + "t.code AS task_code, t.line_name, t.proc_name, t.product_name, t.supplier_id, t.overall_judge, t.disposition, t.status AS task_status "
+                + "FROM ops.fia_archived_report r "
+                + "LEFT JOIN ops.fia_task t ON t.id = r.task_id "
+                + "WHERE r.task_id = ? " + orgFilter();
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, refId);
+        if (rows.isEmpty()) return null;
+        Map<String, Object> m = mapDetail("fia", rows.get(0));
+        m.put("log", queryLog(refId));        // 流程轨迹(建单→录项→各级签名→归档)
+        m.put("items", queryItems(refId));    // 检验项明细
+        return m;
+    }
+
+    private Map<String, Object> mapDetail(String type, Map<String, Object> row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("archiveType", type);
+        if ("audit".equals(type)) {
+            m.put("archiveNo", row.get("archive_no"));
+            m.put("refId", row.get("record_id"));
+            m.put("refNo", row.get("record_no"));
+            m.put("auditType", row.get("audit_type"));
+            m.put("deptName", row.get("dept_name"));
+            m.put("auditor", row.get("auditor"));
+            m.put("auditDate", toDateStr(row.get("audit_date")));
+            m.put("conclusion", row.get("conclusion"));
+        } else {
+            m.put("archiveNo", row.get("report_no"));
+            m.put("refId", row.get("task_id"));
+            m.put("refNo", row.get("wo_no"));
+            m.put("taskCode", row.get("task_code"));
+            m.put("lineName", row.get("line_name"));
+            m.put("procName", row.get("proc_name"));
+            m.put("productName", row.get("product_name"));
+            m.put("supplierId", row.get("supplier_id"));
+            m.put("overallJudge", row.get("overall_judge"));
+            m.put("disposition", row.get("disposition"));
+            m.put("taskStatus", row.get("task_status"));
+        }
+        m.put("archiveDate", toDateStr(row.get("archive_date")));
+        m.put("status", row.get("status"));
+        m.put("reportHash", row.get("report_hash"));
+        m.put("retentionUntil", toDateStr(row.get("retention_until")));
+        m.put("pdfRef", row.get("pdf_ref"));
+        Object pdfRef = row.get("pdf_ref");
+        m.put("hasPdf", pdfRef != null && !String.valueOf(pdfRef).startsWith("placeholder://"));
+        return m;
+    }
+
+    @Override
+    public String pdfRef(String type, String refId) {
+        Map<String, Object> d = detail(type, refId);
+        return d == null ? null : (String) d.get("pdfRef");
+    }
+
+    private List<Map<String, Object>> queryLog(String taskId) {
+        String sql = "SELECT node_name, op_time, operator, is_done FROM ops.fia_task_log WHERE task_id = ? ORDER BY node_seq";
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, taskId);
+        List<Map<String, Object>> res = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("node", r.get("node_name"));
+            m.put("time", toDateTimeStr(r.get("op_time")));
+            m.put("operator", r.get("operator"));
+            m.put("done", r.get("is_done"));
+            res.add(m);
+        }
+        return res;
+    }
+
+    private List<Map<String, Object>> queryItems(String taskId) {
+        String sql = "SELECT item_name, is_ctq, std_value, tolerance, unit, measured_value, judge "
+                + "FROM ops.fia_insp_item WHERE task_id = ? ORDER BY seq";
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, taskId);
+        List<Map<String, Object>> res = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("itemName", r.get("item_name"));
+            m.put("isCtq", r.get("is_ctq"));
+            m.put("stdValue", r.get("std_value"));
+            m.put("tolerance", r.get("tolerance"));
+            m.put("unit", r.get("unit"));
+            m.put("measuredValue", r.get("measured_value"));
+            m.put("judge", r.get("judge"));
+            res.add(m);
+        }
+        return res;
+    }
+
+    /** 构造审核归档的流程轨迹:审核计划创建 → 各角色会签 → 现场审核执行 → 审核结论出具 → 归档报告。 */
+    private List<Map<String, Object>> buildAuditLog(String planId, Map<String, Object> mainRow) {
+        List<Map<String, Object>> log = new ArrayList<>();
+        if (planId != null && !planId.isBlank()) {
+            try {
+                String planSql = "SELECT plan_date, audit_lead FROM ops.sqm_audit_plan WHERE id = ?";
+                List<Map<String, Object>> pr = jdbcTemplate.queryForList(planSql, planId);
+                if (!pr.isEmpty()) {
+                    Map<String, Object> p = pr.get(0);
+                    addLog(log, "审核计划创建", toDateStr(p.get("plan_date")), p.get("audit_lead"));
+                    String apprSql = "SELECT role_label, status, operator, operate_date, seq_order "
+                            + "FROM ops.sqm_audit_approval WHERE audit_id = ? ORDER BY seq_order, operate_date";
+                    List<Map<String, Object>> aps = jdbcTemplate.queryForList(apprSql, planId);
+                    for (Map<String, Object> a : aps) {
+                        String st = a.get("status") == null ? "" : a.get("status").toString();
+                        String suffix = "done".equals(st) ? "会签通过" : ("rejected".equals(st) ? "会签驳回" : "会签待处理");
+                        String label = a.get("role_label") == null ? "会签" : a.get("role_label").toString();
+                        addLog(log, label + suffix, toDateTimeStr(a.get("operate_date")), a.get("operator"));
+                    }
+                }
+            } catch (Exception ignored) {
+                // 轨迹缺失不影响详情主体返回
+            }
+        }
+        Object auditor = mainRow.get("auditor");
+        addLog(log, "现场审核执行", toDateTimeStr(mainRow.get("audit_date")), auditor);
+        addLog(log, "审核结论出具", toDateTimeStr(mainRow.get("audit_date")), auditor);
+        addLog(log, "归档报告", toDateStr(mainRow.get("archive_date")), null);
+        return log;
+    }
+
+    private void addLog(List<Map<String, Object>> log, String node, String time, Object operator) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("node", node);
+        m.put("time", time);
+        m.put("operator", operator);
+        log.add(m);
+    }
+
     // ==================== 私有辅助 ====================
 
     /**
@@ -211,6 +363,15 @@ public class ArchiveServiceImpl implements ArchiveService {
         if (o instanceof LocalDate ld) return ld.toString();
         if (o instanceof LocalDateTime ldt) return ldt.toLocalDate().toString();
         if (o instanceof Timestamp ts) return ts.toLocalDateTime().toLocalDate().toString();
+        if (o instanceof java.sql.Date d) return d.toLocalDate().toString();
+        return String.valueOf(o);
+    }
+
+    private String toDateTimeStr(Object o) {
+        if (o == null) return null;
+        if (o instanceof LocalDateTime ldt) return ldt.toString().replace('T', ' ');
+        if (o instanceof Timestamp ts) return ts.toLocalDateTime().toString().replace('T', ' ');
+        if (o instanceof LocalDate ld) return ld.toString();
         if (o instanceof java.sql.Date d) return d.toLocalDate().toString();
         return String.valueOf(o);
     }

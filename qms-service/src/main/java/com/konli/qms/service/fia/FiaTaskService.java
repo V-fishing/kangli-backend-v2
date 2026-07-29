@@ -1,17 +1,20 @@
 package com.konli.qms.service.fia;
 
+import com.konli.qms.domain.fia.dto.PreviewJudgeRequest;
+import com.konli.qms.domain.fia.dto.PreviewJudgeResult;
+import com.konli.qms.domain.fia.dto.StdTraceResult;
+import com.konli.qms.service.fia.dto.FiaTaskVo;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
 import com.konli.qms.domain.fia.entity.FiaInspStd;
 import com.konli.qms.domain.fia.entity.FiaTask;
-import com.konli.qms.service.fia.dto.FiaTaskVo;
 
 import java.util.List;
 import java.util.Map;
 
 public interface FiaTaskService {
 
-    List<FiaTask> list();
+    List<FiaTask> list(String orgId, String status, String woNo);
 
     /** 按来源过滤: FACTORY(产线首件) / SUPPLIER(供应商来料首件) */
     List<FiaTask> listBySource(String source);
@@ -31,6 +34,18 @@ public interface FiaTaskService {
     FiaInspStd matchStd(String orgId, String partNo, String supplierId, String procName);
 
     void enterResults(String taskId, List<FiaInspItem> items);
+
+    /**
+     * 检验结果试算:依据检验项的标准规则(std_value/tolerance 或 enum_values/pass_values)预判合格/不合格。
+     * 可匹配 → 系统判定(覆盖人工);不可匹配 → 返回 null,由前端走人工兜底。
+     */
+    List<PreviewJudgeResult> previewJudge(String taskId, PreviewJudgeRequest req);
+
+    /**
+     * 标准引用追溯:列出引用该标准(stdId)的首件任务;itemId 非空时精确到引用该标准项的任务。
+     * 组织隔离在实体内处理。
+     */
+    StdTraceResult traceStd(String stdId, String itemId);
 
     /**
      * 检验人签名(密码校验 + 锁定)-> 待复核。

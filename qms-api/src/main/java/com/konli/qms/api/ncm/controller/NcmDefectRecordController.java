@@ -38,6 +38,12 @@ public class NcmDefectRecordController {
         return R.ok(ncmDefectRecordService.get(id));
     }
 
+    @GetMapping("/defect-records/by-number/{defectNo}")
+    @PreAuthorize("hasAuthority('ncm.record.list')")
+    public R<NcmDefectRecord> getByDefectNo(@PathVariable String defectNo) {
+        return R.ok(ncmDefectRecordService.getByDefectNo(defectNo));
+    }
+
     @PostMapping("/defect-records")
     @PreAuthorize("hasAuthority('ncm.record.create')")
     public R<NcmDefectRecord> create(@RequestBody NcmDefectRecord record) {
@@ -100,5 +106,12 @@ public class NcmDefectRecordController {
     @PreAuthorize("hasAuthority('ncm.capa.create')")
     public R<Object> launchCapaFromDefect(@PathVariable String id) {
         return R.ok(ncmDefectRecordService.launchCapaFromDefect(id));
+    }
+
+    /** 不良记录一键发起CA(跨模块:defect->CA) */
+    @PostMapping("/defect-records/{id}/launch-ca")
+    @PreAuthorize("hasAuthority('ncm.record.create')")
+    public R<Object> launchCaFromDefect(@PathVariable String id) {
+        return R.ok(ncmDefectRecordService.launchCaFromDefect(id));
     }
 }

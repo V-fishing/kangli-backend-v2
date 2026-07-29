@@ -6,6 +6,7 @@ import com.konli.qms.common.base.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -76,4 +77,13 @@ public class FiaTask extends BaseEntity {
     private String approverId;        // V09 加(三级签名第三签)
     @TableField("approved_at")
     private LocalDateTime approvedAt; // V09 加
+
+    @TableField("item_total")
+    private Integer itemTotal;       // 检验项总数
+    @TableField("pass_count")
+    private Integer passCount;       // 合格数
+    @TableField("fail_count")
+    private Integer failCount;       // 不合格数
+    @TableField("pass_rate")
+    private BigDecimal passRate;     // 合格率(比例 0~1)
 }

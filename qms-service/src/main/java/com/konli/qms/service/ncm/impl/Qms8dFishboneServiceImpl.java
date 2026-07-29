@@ -25,6 +25,13 @@ public class Qms8dFishboneServiceImpl implements Qms8dFishboneService {
     }
 
     @Override
+    public long count(String d8Id) {
+        return qms8dFishboneMapper.selectCount(
+                new LambdaQueryWrapper<Qms8dFishbone>()
+                        .eq(Qms8dFishbone::getD8Id, d8Id));
+    }
+
+    @Override
     @Transactional
     public Qms8dFishbone create(Qms8dFishbone fishbone) {
         qms8dFishboneMapper.insert(fishbone);

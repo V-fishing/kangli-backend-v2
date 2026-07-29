@@ -8,6 +8,7 @@ import com.konli.qms.domain.sqm.entity.QmsFmeaRiskTrack;
 import com.konli.qms.domain.sqm.mapper.QmsFmeaRiskMapper;
 import com.konli.qms.domain.sqm.mapper.QmsFmeaRiskTrackMapper;
 import com.konli.qms.service.sqm.SqmFmeaService;
+import com.konli.qms.service.notify.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -36,6 +37,7 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
     private final QmsFmeaRiskMapper qmsFmeaRiskMapper;
     private final QmsFmeaRiskTrackMapper qmsFmeaRiskTrackMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final NotificationService notificationService;
 
     @Override
     public List<String> listTypes() {
@@ -280,10 +282,10 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
             if (r.getTargetDate() == null) continue;
             long days = ChronoUnit.DAYS.between(r.getTargetDate(), today);
             if (days >= 14) {
-                notifyOverdue(r, "质量经理", days);
+                notifyOverdue(r, days);
                 count++;
             } else if (days >= 7) {
-                notifyOverdue(r, "责任人", days);
+                notifyOverdue(r, days);
                 count++;
             }
         }
@@ -295,11 +297,11 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         try { scanOverdue(); } catch (Exception e) { log.warn("FMEA超期扫描异常: {}", e.getMessage()); }
     }
 
-    private void notifyOverdue(QmsFmeaRisk r, String receiver, long days) {
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) VALUES (?::uuid, 'FMEA_OVERDUE', ?, '站内', ?, ?, '告警', '已发送', now())",
-                java.util.UUID.fromString("019f701f-0411-71ed-9eac-ab9440335832"),
-                r.getId(), receiver,
-                "FMEA风险项 " + r.getRiskNo() + " 措施超期" + days + "天,请尽快处理");
+    private void notifyOverdue(QmsFmeaRisk r, long days) {
+        String roleCode = days >= 14 ? "qmanager" : "sqe";
+        notificationService.notifyRoles(List.of(roleCode),
+                "FMEA措施超期提醒",
+                "FMEA风险项 " + r.getRiskNo() + " 措施超期" + days + "天,请尽快处理。",
+                "fmea_overdue", r.getId(), "/sqm/fmea", null);
     }
 }

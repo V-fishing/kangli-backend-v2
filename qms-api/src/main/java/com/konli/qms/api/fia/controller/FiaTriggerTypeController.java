@@ -1,6 +1,7 @@
 package com.konli.qms.api.fia.controller;
 
 import com.konli.qms.common.api.R;
+import com.konli.qms.domain.fia.dto.TriggerTypeStat;
 import com.konli.qms.domain.fia.entity.FiaTriggerType;
 import com.konli.qms.service.fia.FiaTriggerTypeService;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,12 @@ public class FiaTriggerTypeController {
     @PreAuthorize("hasAuthority('fia.std.create')")
     public R<List<FiaTriggerType>> list() {
         return R.ok(fiaTriggerTypeService.list());
+    }
+
+    @GetMapping("/stats")
+    @PreAuthorize("hasAuthority('fia.std.create')")
+    public R<List<TriggerTypeStat>> stats() {
+        return R.ok(fiaTriggerTypeService.stats());
     }
 
     @PostMapping

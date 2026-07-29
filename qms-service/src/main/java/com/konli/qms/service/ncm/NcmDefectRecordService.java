@@ -12,6 +12,9 @@ public interface NcmDefectRecordService {
 
     NcmDefectRecord get(String id);
 
+    /** 按不良编号精确查询。 */
+    NcmDefectRecord getByDefectNo(String defectNo);
+
     NcmDefectRecord create(NcmDefectRecord record);
 
     /** 多维分析:按 processCode/defectDictCode/deviceCode/batchNo 分组,返回 [{dimValue, totalCount, severityCount: {严重:N, 一般:M}}] */
@@ -34,4 +37,7 @@ public interface NcmDefectRecordService {
 
     /** 不良记录一键发起CAPA(SR-NCM处置决策):创建CAPA单。返回CAPA记录 */
     Object launchCapaFromDefect(String defectId);
+
+    /** 不良记录一键发起CA(SR-NCM处置决策):创建纠正措施单。返回CA记录 */
+    Object launchCaFromDefect(String defectId);
 }

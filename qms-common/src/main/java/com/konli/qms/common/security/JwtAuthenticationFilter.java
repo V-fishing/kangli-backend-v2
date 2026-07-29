@@ -60,6 +60,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             chain.doFilter(req, resp);
         } finally {
             CompanyContext.clear();
+            DataScopeInterceptor.clearScope();
         }
     }
 }

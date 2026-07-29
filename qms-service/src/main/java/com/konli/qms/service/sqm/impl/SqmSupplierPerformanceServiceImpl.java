@@ -13,6 +13,7 @@ import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierPerformanceMapper;
 import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +21,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformanceService {
@@ -104,6 +106,12 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
         }
 
         // 删除该供应商该周期旧记录(UNIQUE(supplier_id, period)),再插入
+        // 先保留 SPC CPK 联动写入的质量分,避免重算来料绩效时将其覆盖清空
+        SqmSupplierPerformance prev = sqmSupplierPerformanceMapper.selectOne(
+                new LambdaQueryWrapper<SqmSupplierPerformance>()
+                        .eq(SqmSupplierPerformance::getSupplierId, supplierId)
+                        .eq(SqmSupplierPerformance::getPeriod, period));
+        BigDecimal prevQualityScore = prev != null ? prev.getQualityScore() : null;
         sqmSupplierPerformanceMapper.delete(
                 new LambdaQueryWrapper<SqmSupplierPerformance>()
                         .eq(SqmSupplierPerformance::getSupplierId, supplierId)
@@ -120,10 +128,63 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
         p.setIncomingPassRate(incomingPassRate);
         p.setDeliveryTimelyRate(deliveryTimelyRate);
         p.setLevel(level);
+        p.setQualityScore(prevQualityScore);
         p.setObserveFlag(false);
         p.setDataMissingFlag(lots == null || lots.isEmpty());
         sqmSupplierPerformanceMapper.insert(p);
         return p;
+    }
+
+    /**
+     * SPC CPK→供应商质量分联动:按 (supplier_id, period) upsert 质量分,
+     * 并按权重(质量 0.4 / 来料 0.3 / 交付 0.3)重算综合分与 A/B/C/D 等级。
+     * 记录已存在则更新质量分并重算;不存在则新建(缺失来料数据时 dataMissingFlag=true)。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void applySpcQualityScore(String supplierId, String period, BigDecimal qualityScore) {
+        if (supplierId == null || supplierId.isBlank() || period == null || period.isBlank() || qualityScore == null) {
+            return;
+        }
+        LambdaQueryWrapper<SqmSupplierPerformance> w = new LambdaQueryWrapper<>();
+        w.eq(SqmSupplierPerformance::getSupplierId, supplierId).eq(SqmSupplierPerformance::getPeriod, period);
+        SqmSupplierPerformance existing = sqmSupplierPerformanceMapper.selectOne(w);
+
+        // 缺省语义与 calc 一致:来料合格率未知按 0、交付及时率按 100
+        BigDecimal incoming = (existing != null && existing.getIncomingPassRate() != null)
+                ? existing.getIncomingPassRate() : BigDecimal.ZERO;
+        BigDecimal delivery = (existing != null && existing.getDeliveryTimelyRate() != null)
+                ? existing.getDeliveryTimelyRate() : new BigDecimal("100.00");
+        BigDecimal score = qualityScore.multiply(new BigDecimal("0.4"))
+                .add(incoming.multiply(new BigDecimal("0.3")))
+                .add(delivery.multiply(new BigDecimal("0.3")))
+                .setScale(2, RoundingMode.HALF_UP);
+        String level = levelByRule(score);
+
+        if (existing != null) {
+            existing.setQualityScore(qualityScore);
+            existing.setScore(score);
+            existing.setLevel(level);
+            sqmSupplierPerformanceMapper.updateById(existing);
+        } else {
+            SqmSupplier supplier = sqmSupplierMapper.selectById(supplierId);
+            if (supplier == null) {
+                log.warn("[供应商绩效] SPC 联动失败:供应商不存在 supplierId={}", supplierId);
+                return;
+            }
+            SqmSupplierPerformance p = new SqmSupplierPerformance();
+            p.setOrgId(supplier.getOrgId());
+            p.setSupplierId(supplierId);
+            p.setPeriod(period);
+            p.setQualityScore(qualityScore);
+            p.setScore(score);
+            p.setLevel(level);
+            p.setIncomingPassRate(incoming);
+            p.setDeliveryTimelyRate(delivery);
+            p.setDataMissingFlag(true);
+            p.setObserveFlag(false);
+            sqmSupplierPerformanceMapper.insert(p);
+        }
     }
 
     /**

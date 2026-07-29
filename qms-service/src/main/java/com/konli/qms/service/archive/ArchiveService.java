@@ -34,4 +34,15 @@ public interface ArchiveService {
      * @return [{archiveType, archiveNo, refId, retentionUntil, daysRemaining}]
      */
     List<Map<String, Object>> expiring(Integer days);
+
+    /**
+     * 档案详情:按 type + refId 查对应归档表全量字段及关联业务信息。
+     * @return 档案元数据 Map;查不到返回 null
+     */
+    Map<String, Object> detail(String type, String refId);
+
+    /**
+     * 返回档案 PDF 的本地路径(pdf_ref);占位/不存在返回 null。
+     */
+    String pdfRef(String type, String refId);
 }

@@ -18,7 +18,12 @@ import com.konli.qms.service.ncm.Ncm8dService;
 import com.konli.qms.service.ncm.Ncm8dApprovalConfigService;
 import com.konli.qms.service.ncm.NcmCapaService;
 import com.konli.qms.service.ncm.dto.EightDVo;
+import com.konli.qms.service.notify.NotificationService;
+import com.konli.qms.service.ncm.Qms8dFishboneService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +36,7 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class Ncm8dServiceImpl implements Ncm8dService {
 
     private final Qms8dReportMapper qms8dReportMapper;
@@ -41,9 +47,14 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     private final Ncm8dApprovalConfigService approvalConfigService;
     private final SysUserMapper sysUserMapper;
     private final PasswordEncoder passwordEncoder;
+    private final NotificationService notificationService;
+    private final Qms8dFishboneService fishboneService;
 
     /** 8D 阶段顺序:D1->D2->D3->D4->D5->D6->D7->D8 */
     private static final String[] STAGES = {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"};
+
+    /** 用于解析 D4 阶段明细 content(JSON)中的 5Why 层级。 */
+    private static final ObjectMapper FIVE_WHY_OM = new ObjectMapper();
 
     @Override
     public List<Qms8dReport> list() {
@@ -73,6 +84,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             if (report.getCapaTriggered() == null) report.setCapaTriggered(false);
             if (report.getOrgId() == null) report.setOrgId(resolveOrgId());
             qms8dReportMapper.insert(report);
+            notify8d(report, "新建 8D 报告(简易闭环)", String.format(
+                "新建并闭环 8D 报告《%s》(单号 %s,严重度 %s)。",
+                report.getIssue(), report.getD8No(), report.getSeverity()));
             return report;
         }
         report.setD8No("8D-" + System.currentTimeMillis());
@@ -84,6 +98,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (report.getOrgId() == null) report.setOrgId(resolveOrgId());
         if (report.getSource() == null || report.getSource().isBlank()) report.setSource("NCM");
         qms8dReportMapper.insert(report);
+        notify8d(report, "新建 8D 报告", String.format(
+            "新建 8D 报告《%s》(单号 %s,严重度 %s),请跟进处理。",
+            report.getIssue(), report.getD8No(), report.getSeverity()));
         return report;
     }
 
@@ -97,6 +114,16 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 "SELECT id::text FROM ops.sys_org ORDER BY created_at LIMIT 1", String.class);
         } catch (Exception ex) {
             return null;
+        }
+    }
+
+    /** 站内信通知(8D 报告相关):推送给质量经理/SQE,失败不回滚主流程。 */
+    private void notify8d(Qms8dReport r, String title, String content) {
+        try {
+            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                title, content, "ncm_8d", r.getId(), "/ncm/8d-reports", null);
+        } catch (Exception ignored) {
+            log.warn("[8D通知] 站内信推送失败: {}", ignored.getMessage());
         }
     }
 
@@ -129,6 +156,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         report.setCapaTriggered(false);
         report.setFlowType("8D");
         qms8dReportMapper.insert(report);
+        notify8d(report, "从来料异常发起 8D 报告", String.format(
+            "已根据来料异常单发起 8D 报告《%s》(单号 %s),请跟进处理。",
+            report.getIssue(), report.getD8No()));
         SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
         upd.setId(abnormalId);
         upd.setD8Id(report.getId());
@@ -213,7 +243,14 @@ public class Ncm8dServiceImpl implements Ncm8dService {
 
         // 需审核的阶段:停留当前阶段,等待审核人签名通过后才进入下一阶段
         if (need) {
+            notify8d(report, "8D 报告待审批", String.format(
+                "8D 报告《%s》(单号 %s) 的 %s 阶段已提交,待质量经理签批。",
+                report.getIssue(), report.getD8No(), stageCode));
             return;
+        }
+        // D4 推进至 D5 前,强制校验根因分析已录入(鱼骨图≥1 且 5Why≥1)
+        if ("D4".equals(stageCode)) {
+            checkD4RootCause(d8Id, content);
         }
         // 无需审核 -> 进入下一阶段(或 D8 闭环)
         advanceCurrent(report, idx);
@@ -290,6 +327,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             if (qms8dReportMapper.updateById(report) == 0) {
                 throw new BusinessException(409, "8D 报告已被他人修改,请刷新后重试");
             }
+            notify8d(report, "8D 报告阶段被驳回", String.format(
+                "8D 报告《%s》(单号 %s) 的 %s 阶段被驳回。",
+                report.getIssue(), report.getD8No(), stageCode));
             return;
         }
 
@@ -301,9 +341,42 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (qms8dStageDetailMapper.updateById(detail) == 0) {
             throw new BusinessException(409, "阶段明细已被他人修改,请刷新后重试");
         }
+        // D4 审批通过、推进至 D5 前,强制校验根因分析已录入
+        if ("D4".equals(stageCode)) {
+            checkD4RootCause(d8Id, detail.getContent());
+        }
         // 签名通过 -> 进入下一阶段(或 D8 闭环)
         int idx = Arrays.asList(STAGES).indexOf(stageCode);
         advanceCurrent(report, idx);
+        notify8d(report, "8D 报告阶段审批通过", String.format(
+            "8D 报告《%s》(单号 %s) 的 %s 阶段已审批通过。",
+            report.getIssue(), report.getD8No(), stageCode));
+    }
+
+    /** 校验 D4 根因分析完整性:鱼骨图≥1 条且 5Why≥1 层,否则拦截推进至 D5。 */
+    private void checkD4RootCause(String d8Id, String content) {
+        long fishboneCount = fishboneService.count(d8Id);
+        int whyCount = parseFiveWhyCount(content);
+        if (fishboneCount < 1 || whyCount < 1) {
+            throw new BusinessException(400, "D4 根因分析需至少录入1条鱼骨图原因与1层5Why后方可推进至D5");
+        }
+    }
+
+    /** 解析 D4 阶段明细 content(JSON)中的 5Why 层数;非 JSON 或缺失时返回 0。 */
+    private int parseFiveWhyCount(String content) {
+        if (content == null || content.isBlank()) {
+            return 0;
+        }
+        try {
+            JsonNode node = FIVE_WHY_OM.readTree(content);
+            JsonNode why = node.get("fiveWhy");
+            if (why != null && why.isArray()) {
+                return why.size();
+            }
+        } catch (Exception ignored) {
+            // 非 JSON 内容(如历史纯文本)视为未填写 5Why
+        }
+        return 0;
     }
 
     /** D4 阶段完成时,严重度≥7(severity=高)自动发起 CAPA 并回写关联。 */
@@ -328,12 +401,18 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         u.setId(report.getId());
         u.setCapaTriggered(true);
         qms8dReportMapper.updateById(u);
+        // 关联来源异常单:按业务单号 abnormal_no 解析真实 UUID 主键;
+        // SPC 报警等非来料异常来源无对应来料异常单时,查不到则跳过(不报错)。
         if (report.getSourceRefId() != null && !report.getSourceRefId().isBlank()) {
-            SqmIncomingAbnormal au = new SqmIncomingAbnormal();
-            au.setId(report.getSourceRefId());
-            au.setCapaId(capa.getId());
-            au.setRectifyType("8D");
-            abnormalMapper.updateById(au);
+            SqmIncomingAbnormal au = abnormalMapper.selectOne(
+                    new LambdaQueryWrapper<SqmIncomingAbnormal>()
+                            .eq(SqmIncomingAbnormal::getAbnormalNo, report.getSourceRefId())
+                            .last("LIMIT 1"));
+            if (au != null) {
+                au.setCapaId(capa.getId());
+                au.setRectifyType("8D");
+                abnormalMapper.updateById(au);
+            }
         }
     }
 
@@ -352,22 +431,27 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (qms8dReportMapper.updateById(report) == 0) {
             throw new BusinessException(409, "8D 报告已被他人修改,请刷新后重试");
         }
+        notify8d(report, "8D 报告重新打开", String.format(
+            "8D 报告《%s》(单号 %s) 已重新打开,退回 D6 重新验证。",
+            report.getIssue(), report.getD8No()));
     }
 
     /** 异常单闭环(幂等):仅当未关闭时置 已关闭 并写入闭环日期。 */
-    private void closeAbnormalById(String abnormalId) {
-        if (abnormalId == null || abnormalId.isBlank()) {
+    private void closeAbnormalById(String abnormalNo) {
+        if (abnormalNo == null || abnormalNo.isBlank()) {
             return;
         }
-        SqmIncomingAbnormal ab = abnormalMapper.selectById(abnormalId);
+        // 按业务单号解析真实 UUID(原逻辑误将业务单号当主键,会触发 UUID 解析错误)
+        SqmIncomingAbnormal ab = abnormalMapper.selectOne(
+                new LambdaQueryWrapper<SqmIncomingAbnormal>()
+                        .eq(SqmIncomingAbnormal::getAbnormalNo, abnormalNo)
+                        .last("LIMIT 1"));
         if (ab == null || "已关闭".equals(ab.getStatus())) {
             return;
         }
-        SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
-        upd.setId(abnormalId);
-        upd.setStatus("已关闭");
-        upd.setCloseDate(LocalDate.now());
-        abnormalMapper.updateById(upd);
+        ab.setStatus("已关闭");
+        ab.setCloseDate(LocalDate.now());
+        abnormalMapper.updateById(ab);
     }
 
     @Override

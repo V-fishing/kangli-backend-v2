@@ -13,4 +13,5 @@ public class FiaStdItemRequest {
     private String unit;
     private String valueType;     // numeric/enum
     private String enumValues;    // "合格,不合格"
+    private String passValues;    // 合格值(逗号分隔);枚举型实测命中即判合格
 }

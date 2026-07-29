@@ -17,7 +17,8 @@ import java.util.List;
 /** 来料批次 + 追溯节点:创建/查询/追溯树。sqm.trace.* */
 public interface SqmTraceService {
 
-    List<SqmIncomingLot> listLots();
+    /** 来料批次列表,支持 keyword 模糊搜索（批次号/物料编码/物料名称）。 */
+    List<SqmIncomingLot> listLots(String keyword);
 
     /** 按批次号查询来料批次(批次号全局唯一)。 */
     SqmIncomingLot getLotByLotNo(String lotNo);

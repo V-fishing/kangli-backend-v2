@@ -11,8 +11,10 @@ import com.konli.qms.domain.uop.entity.SysUserRole;
 import com.konli.qms.domain.uop.mapper.SysRoleMapper;
 import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import com.konli.qms.domain.uop.mapper.SysUserRoleMapper;
+import com.konli.qms.service.uop.MenuService;
 import com.konli.qms.service.uop.UserService;
 import com.konli.qms.service.uop.dto.CurrentUserVo;
+import com.konli.qms.service.uop.dto.UserSelectVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -30,10 +32,25 @@ public class UserServiceImpl implements UserService {
     private final SysRoleMapper sysRoleMapper;
     private final PasswordEncoder passwordEncoder;
     private final PermissionLoader permissionLoader;
+    private final MenuService menuService;
 
     @Override
     public List<SysUser> list() {
         return sysUserMapper.selectList(null);
+    }
+
+    @Override
+    public List<UserSelectVo> listForSelect() {
+        List<SysUser> users = sysUserMapper.selectList(
+                new LambdaQueryWrapper<SysUser>().eq(SysUser::getStatus, "启用"));
+        return users.stream().map(u -> {
+            UserSelectVo vo = new UserSelectVo();
+            vo.setId(u.getId());
+            vo.setUsername(u.getUsername());
+            vo.setRealName(u.getRealName());
+            vo.setOrgId(u.getOrgId());
+            return vo;
+        }).toList();
     }
 
     @Override
@@ -43,7 +60,11 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(401, "未认证");
         }
         Set<String> perms = permissionLoader.loadPermissionCodes(u.userId());
-        return new CurrentUserVo(u.userId(), u.username(), u.orgId(), u.dataScope(), perms);
+        // 超管(dataScope=all)返回完整菜单树;其余按角色菜单码过滤
+        var menus = CompanyContext.isAdmin()
+                ? menuService.fullTree()
+                : menuService.treeByCodes(perms);
+        return new CurrentUserVo(u.userId(), u.username(), u.orgId(), u.dataScope(), perms, menus);
     }
 
     @Override

@@ -70,8 +70,7 @@ public class DataInitializer implements CommandLineRunner {
         if (count("ops.sys_button") > 0) {
             return;
         }
-        String sysadminRoleId = ensureRole("sysadmin", "系统管理员", "预置", "全部权限");
-        String operatorRoleId = ensureRole("operator", "操作员", "预置", "仅查看用户");
+        String sysadminRoleId = ensureRole("sysadmin", "系统管理员", "预置", "全部权限", null);
 
         String userMenu = ensureMenu("system.user", "用户管理", "/system/user", "system/user/index", 1);
         String roleMenu = ensureMenu("system.role", "角色管理", "/system/role", "system/role/index", 2);
@@ -90,11 +89,31 @@ public class DataInitializer implements CommandLineRunner {
 
         assignRoleMenus(sysadminRoleId, allMenus);
         assignRoleButtons(sysadminRoleId, allButtons);
-        assignRoleMenus(operatorRoleId, List.of(userMenu));
-        assignRoleButtons(operatorRoleId, List.of(btnUserList));
         assignUserRole("admin", sysadminRoleId);
-        assignUserRole("mzuser", operatorRoleId);
-        log.info("[SEED] 已预置角色/菜单/按钮/权限分配(sysadmin 全量, operator 仅查看用户)");
+
+        // 分公司级角色: 每分公司各建 admin/qmanager/rd(system.* 全量)与 operator(仅 user.list)
+        for (String orgId : branchOrgIds()) {
+            String adminRoleId = ensureRole("admin", "管理员", "预置", "公司内用户/角色管理 · 基础数据维护", orgId);
+            String qmRoleId    = ensureRole("qmanager", "质量经理", "预置", "审批授权 · 趋势分析 · 绩效评审", orgId);
+            String rdRoleId    = ensureRole("rd", "研发工程师", "预置", "物料变更研发审批 · 工艺/验证评估", orgId);
+            String opRoleId    = ensureRole("operator", "操作工", "预置", "产线操作 · 自检数据录入", orgId);
+            for (String rid : List.of(adminRoleId, qmRoleId, rdRoleId)) {
+                assignRoleMenus(rid, allMenus);
+                assignRoleButtons(rid, allButtons);
+            }
+            assignRoleMenus(opRoleId, List.of(userMenu));
+            assignRoleButtons(opRoleId, List.of(btnUserList));
+        }
+
+        // mzuser 绑定梅州分公司 operator 角色
+        String mzOrgId = queryId("SELECT id FROM ops.sys_org WHERE org_code='MZ'");
+        if (mzOrgId != null) {
+            String mzOperatorId = queryId("SELECT id FROM ops.sys_role WHERE role_code='operator' AND org_id=?::uuid", mzOrgId);
+            if (mzOperatorId != null) {
+                assignUserRole("mzuser", mzOperatorId);
+            }
+        }
+        log.info("[SEED] 已预置角色/菜单/按钮/权限分配(sysadmin 全局全量, 分公司 admin/qmanager/rd 全量, operator 仅查看用户)");
     }
 
     /** 额外权限按钮 + 颗粒度权限(关闭/审批/签名分层),幂等补,分配给 sysadmin。 */
@@ -154,7 +173,7 @@ public class DataInitializer implements CommandLineRunner {
             assignRoleButtonByCode("sysadmin", ensureButton(orgMenuId, "system.org.delete", "组织删除"));
         }
         // 确保 admin 始终有关联 sysadmin 角色(seedRbac 有 count>0 幂等跳过,admin 关联可能被跳过)
-        String sysadminRoleId = queryId("SELECT id FROM ops.sys_role WHERE role_code='sysadmin'");
+        String sysadminRoleId = queryId("SELECT id FROM ops.sys_role WHERE role_code='sysadmin' AND org_id IS NULL");
         if (sysadminRoleId != null) {
             assignUserRole("admin", sysadminRoleId);
         }
@@ -231,7 +250,10 @@ public class DataInitializer implements CommandLineRunner {
 
         // 物料变更三方审批角色:授予 sqm 菜单 + 变更查询/提交/审批 按钮
         // (采购 purchaser / 研发 rd / 质量 sqe)。每次启动幂等补权,使其可参与依次签字。
-        ensureRole("rd", "研发工程师", "rd", "查看权限"); // 确保 rd 角色存在(不依赖 SeedRunner 顺序)
+        // 确保各分公司 rd 角色存在(不依赖 SeedRunner 顺序)
+        for (String orgId : branchOrgIds()) {
+            ensureRole("rd", "研发工程师", "rd", "查看权限", orgId);
+        }
         String[] changeRoles = {"purchaser", "rd", "sqe"};
         for (String rc : changeRoles) {
             assignRoleMenuByCode(rc, sqmMenu);
@@ -463,13 +485,24 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     // ---- helpers ----
-    private String ensureRole(String code, String name, String type, String desc) {
-        String id = queryId("SELECT id FROM ops.sys_role WHERE role_code=?", code);
+    /** 按 (role_code, org_id) 确保角色存在; orgId=null 为全局角色(如 sysadmin)。 */
+    private String ensureRole(String code, String name, String type, String desc, String orgId) {
+        String id = orgId == null
+                ? queryId("SELECT id FROM ops.sys_role WHERE role_code=? AND org_id IS NULL", code)
+                : queryId("SELECT id FROM ops.sys_role WHERE role_code=? AND org_id=?::uuid", code, orgId);
         if (id == null) {
-            jdbcTemplate.update("INSERT INTO ops.sys_role (role_code, role_name, role_type, perm_desc, status) VALUES (?, ?, ?, ?, '启用')", code, name, type, desc);
-            id = queryId("SELECT id FROM ops.sys_role WHERE role_code=?", code);
+            jdbcTemplate.update("INSERT INTO ops.sys_role (role_code, role_name, role_type, perm_desc, status, org_id) VALUES (?, ?, ?, ?, '启用', ?::uuid)", code, name, type, desc, orgId);
+            id = orgId == null
+                    ? queryId("SELECT id FROM ops.sys_role WHERE role_code=? AND org_id IS NULL", code)
+                    : queryId("SELECT id FROM ops.sys_role WHERE role_code=? AND org_id=?::uuid", code, orgId);
         }
         return id;
+    }
+
+    /** MZ/SZ 分公司组织 id 列表(按 org_code 排序, 缺失时返回空)。 */
+    private List<String> branchOrgIds() {
+        return jdbcTemplate.queryForList(
+                "SELECT id FROM ops.sys_org WHERE org_code IN ('MZ','SZ') ORDER BY org_code", String.class);
     }
 
     private String ensureMenu(String code, String name, String path, String component, int sort) {
@@ -514,23 +547,31 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
+    /** 对同 role_code 的全部角色(各分公司副本 + 全局)逐一授予按钮权限。 */
     private void assignRoleButtonByCode(String roleCode, String buttonId) {
-        String roleId = queryId("SELECT id FROM ops.sys_role WHERE role_code=?", roleCode);
-        if (roleId == null || buttonId == null) {
+        if (buttonId == null) {
             return;
         }
-        if (linkMissing("ops.sys_role_button", "role_id", roleId, "button_id", buttonId)) {
-            jdbcTemplate.update("INSERT INTO ops.sys_role_button (role_id, button_id) VALUES (?::uuid, ?::uuid)", roleId, buttonId);
+        List<String> roleIds = jdbcTemplate.queryForList(
+                "SELECT id FROM ops.sys_role WHERE role_code=?", String.class, roleCode);
+        for (String roleId : roleIds) {
+            if (linkMissing("ops.sys_role_button", "role_id", roleId, "button_id", buttonId)) {
+                jdbcTemplate.update("INSERT INTO ops.sys_role_button (role_id, button_id) VALUES (?::uuid, ?::uuid)", roleId, buttonId);
+            }
         }
     }
 
+    /** 对同 role_code 的全部角色(各分公司副本 + 全局)逐一授予菜单权限。 */
     private void assignRoleMenuByCode(String roleCode, String menuId) {
-        String roleId = queryId("SELECT id FROM ops.sys_role WHERE role_code=?", roleCode);
-        if (roleId == null || menuId == null) {
+        if (menuId == null) {
             return;
         }
-        if (linkMissing("ops.sys_role_menu", "role_id", roleId, "menu_id", menuId)) {
-            jdbcTemplate.update("INSERT INTO ops.sys_role_menu (role_id, menu_id) VALUES (?::uuid, ?::uuid)", roleId, menuId);
+        List<String> roleIds = jdbcTemplate.queryForList(
+                "SELECT id FROM ops.sys_role WHERE role_code=?", String.class, roleCode);
+        for (String roleId : roleIds) {
+            if (linkMissing("ops.sys_role_menu", "role_id", roleId, "menu_id", menuId)) {
+                jdbcTemplate.update("INSERT INTO ops.sys_role_menu (role_id, menu_id) VALUES (?::uuid, ?::uuid)", roleId, menuId);
+            }
         }
     }
 

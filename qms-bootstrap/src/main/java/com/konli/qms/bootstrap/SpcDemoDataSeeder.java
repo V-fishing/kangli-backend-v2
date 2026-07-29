@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 
@@ -42,10 +43,14 @@ public class SpcDemoDataSeeder implements ApplicationRunner {
     /** 参数定义:name, process, unit, target, processSigma, decimalScale。 */
     private record Pdef(String name, String process, String unit, double target, double sigma, int scale) {}
 
+    /** 演示采集任务轮询模式,使管理页可见多种采集模式。 */
+    private static final String[] COLLECT_MODES = { "AUTO", "MANUAL", "OPC", "FILE", "MES" };
+
     @Override
     public void run(ApplicationArguments args) {
         String orgId = getDemoOrgId();
-        log.info("[SPC 种子] 开始重建演示数据, orgId={}", orgId);
+        List<String> supplierIds = ensureDemoSuppliers(orgId);
+        log.info("[SPC 种子] 开始重建演示数据, orgId={}, 演示供应商数={}", orgId, supplierIds.size());
 
         // 1. 清空该组织的演示数据(保留其他组织数据)
         String[] deletes = {
@@ -73,6 +78,7 @@ public class SpcDemoDataSeeder implements ApplicationRunner {
         for (int pi = 0; pi < defs.length; pi++) {
             Pdef d = defs[pi];
             String paramId = UUID.randomUUID().toString();
+            String supplierId = supplierIds.get(pi % supplierIds.size());
             double hw = 4.2 * d.sigma();               // 规格半宽 → CPK≈1.4
             double usl = round(d.target() + hw, d.scale());
             double lsl = round(d.target() - hw, d.scale());
@@ -81,11 +87,17 @@ public class SpcDemoDataSeeder implements ApplicationRunner {
             jdbcTemplate.update(
                     "INSERT INTO ops.spc_param (id, org_id, param_name, proc_name, unit, spec_text, "
                             + "spec_lower, spec_upper, target_value, subgroup_size, collect_freq, is_active, "
-                            + "chart_type, sigma_method, sigma_k, created_at, created_by, is_deleted, version) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,'true','Xbar-R','within',3,now(),null,false,0)",
+                            + "chart_type, sigma_method, sigma_k, supplier_id, created_at, created_by, is_deleted, version) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,'true','Xbar-R','within',3,?,now(),null,false,0)",
                     paramId, orgId, d.name(), d.process(), d.unit(), specText,
                     BigDecimal.valueOf(lsl), BigDecimal.valueOf(usl), BigDecimal.valueOf(d.target()),
-                    SUBGROUP_SIZE, "每日");
+                    SUBGROUP_SIZE, "每日", supplierId);
+
+            // 1.5 演示采集任务(轮询 5 种采集模式,使管理页有数据可验证)
+            jdbcTemplate.update(
+                    "INSERT INTO ops.spc_collect_task (id, org_id, param_id, collect_freq, status, collect_mode, next_due_at, created_at, is_deleted, version) "
+                            + "VALUES (?,?,?,'每日','待采集',?, now() + interval '1 day', now(), false, 0)",
+                    UUID.randomUUID().toString(), orgId, paramId, COLLECT_MODES[pi % COLLECT_MODES.length]);
 
             // 2. 生成子组 + 测量值
             for (int i = 0; i < SUBGROUPS; i++) {
@@ -130,13 +142,36 @@ public class SpcDemoDataSeeder implements ApplicationRunner {
             // 3. 计算控制限(激活基线)与过程能力 CPK
             try {
                 controlLimitService.calc(paramId);
-                capabilityService.calc(paramId, "OVERALL", YearMonth.now().toString());
+                // 生成最近 6 个月的能力快照,使"CPK 历史趋势"有多周期数据
+                // (否则仅当前月 1 点,趋势折线画不出、表格仅 1 行,看起来像"没数据")
+                YearMonth baseYm = YearMonth.now();
+                for (int m = 5; m >= 0; m--) {
+                    capabilityService.calc(paramId, "OVERALL", baseYm.minusMonths(m).toString());
+                }
                 log.info("[SPC 种子] 参数已就绪: {} ({})", d.name(), paramId);
             } catch (Exception ex) {
                 log.warn("[SPC 种子] 计算失败 param={} : {}", d.name(), ex.getMessage());
             }
         }
         log.info("[SPC 种子] 完成,共 {} 个参数, 每参数 {} 子组", defs.length, SUBGROUPS);
+    }
+
+    /** 确保 MZ 演示组织下存在若干演示供应商(幂等),返回其 id 列表用于参数绑定。 */
+    private List<String> ensureDemoSuppliers(String orgId) {
+        Integer cnt = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM ops.sqm_supplier WHERE org_id = ?", Integer.class, orgId);
+        if (cnt == null || cnt == 0) {
+            for (int i = 1; i <= 5; i++) {
+                String no = "SPC-DEMO-" + i;
+                jdbcTemplate.update(
+                        "INSERT INTO ops.sqm_supplier (id, org_id, supplier_no, supplier_code, name, credit_code, category, status, level, created_at, is_deleted, version) "
+                                + "VALUES (?,?,?,?,?,'CREDIT-" + no + "','电子','合格','B',now(),false,0) "
+                                + "ON CONFLICT (supplier_no) DO NOTHING",
+                        UUID.randomUUID().toString(), orgId, no, no, "演示供应商" + i);
+            }
+        }
+        return jdbcTemplate.query("SELECT id FROM ops.sqm_supplier WHERE org_id = ? ORDER BY supplier_no LIMIT 5",
+                (rs, rn) -> rs.getString(1), orgId);
     }
 
     private String getDemoOrgId() {

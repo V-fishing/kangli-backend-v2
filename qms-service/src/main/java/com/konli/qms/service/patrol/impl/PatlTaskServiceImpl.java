@@ -13,9 +13,11 @@ import com.konli.qms.domain.patrol.mapper.PatlCheckpointMapper;
 import com.konli.qms.domain.patrol.mapper.PatlRecordMapper;
 import com.konli.qms.domain.patrol.mapper.PatlRouteMapper;
 import com.konli.qms.domain.patrol.mapper.PatlTaskMapper;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.patrol.PatlTaskService;
 import com.konli.qms.service.patrol.dto.PatlTaskVo;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +26,7 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PatlTaskServiceImpl implements PatlTaskService {
 
     private final PatlTaskMapper patlTaskMapper;
@@ -31,6 +34,7 @@ public class PatlTaskServiceImpl implements PatlTaskService {
     private final PatlAbnormalMapper patlAbnormalMapper;
     private final PatlRouteMapper patlRouteMapper;
     private final PatlCheckpointMapper patlCheckpointMapper;
+    private final NotificationService notificationService;
 
     @Override
     public List<PatlTask> list() {
@@ -73,6 +77,14 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         task.setDonePoints(0);
         task.setAbnormalCount(0);
         patlTaskMapper.insert(task);
+        // 通知巡检员/班组长
+        try {
+            notificationService.notifyRoles(List.of("inspector", "supervisor"),
+                    "巡检任务已创建", "巡检任务" + task.getTaskNo() + " 已分配,请前往巡检。",
+                    "patrol_task", task.getId(), "/patrol/tasks", null);
+        } catch (Exception e) {
+            log.warn("[巡检] 任务创建通知失败: {}", e.getMessage());
+        }
         return task;
     }
 
@@ -112,6 +124,15 @@ public class PatlTaskServiceImpl implements PatlTaskService {
             patlAbnormalMapper.insert(abnormal);
 
             task.setAbnormalCount((task.getAbnormalCount() == null ? 0 : task.getAbnormalCount()) + 1);
+
+            // 通知质量经理/SQE
+            try {
+                notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                        "巡检发现异常", "巡检点【" + checkpointName + "】检查异常: " + (remark != null ? remark : ""),
+                        "patrol_task", taskId, "/patrol/tasks", null);
+            } catch (Exception e) {
+                log.warn("[巡检] 异常通知失败: {}", e.getMessage());
+            }
         }
 
         // 已检点位数 +1;若全部完成则置已完成
@@ -119,6 +140,14 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         if (task.getTotalPoints() != null && task.getDonePoints() >= task.getTotalPoints()) {
             task.setStatus("已完成");
             task.setFinishTime(LocalDateTime.now());
+            // 任务完成通知
+            try {
+                notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+                        "巡检任务已完成", "巡检任务" + task.getTaskNo() + " 全部点位已完成。",
+                        "patrol_task", taskId, "/patrol/tasks", null);
+            } catch (Exception e) {
+                log.warn("[巡检] 完成通知失败: {}", e.getMessage());
+            }
         }
         patlTaskMapper.updateById(task);
     }
@@ -133,6 +162,14 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         task.setStatus("已完成");
         task.setFinishTime(LocalDateTime.now());
         patlTaskMapper.updateById(task);
+        // 关闭通知
+        try {
+            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+                    "巡检任务已关闭", "巡检任务" + task.getTaskNo() + " 已被手动关闭。",
+                    "patrol_task", taskId, "/patrol/tasks", null);
+        } catch (Exception e) {
+            log.warn("[巡检] 关闭通知失败: {}", e.getMessage());
+        }
     }
 
     @Override

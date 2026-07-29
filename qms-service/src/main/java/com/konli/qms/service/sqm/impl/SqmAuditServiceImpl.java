@@ -18,6 +18,7 @@ import com.konli.qms.domain.sqm.mapper.SqmAuditRecordMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.DataScopeGuard;
 import com.konli.qms.service.sqm.SqmAuditApprovalCfgService;
@@ -60,6 +61,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
     private final SqmAuditApprovalMapper sqmAuditApprovalMapper;
     private final SqmAuditApprovalCfgService approvalCfgService;
     private final SqmAuditReportArchiveService reportArchiveService;
+    private final NotificationService notificationService;
 
     @Override
     public List<SqmAuditPlan> listPlans() {
@@ -128,6 +130,14 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         sqmAuditPlanMapper.insert(plan);
         // 创建时即惰性生成会签链并回写审核组,避免列表「审核组」栏为空(如年度复审/临时审核未填审核组)
         seedDefaultApprovals(plan);
+        // 通知审核组长和审核组成员
+        try {
+            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                    "审核计划已创建", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已创建,请确认并安排执行。",
+                    "audit_task", plan.getId(), "/sqm/audit", null);
+        } catch (Exception e) {
+            log.warn("[审核] 计划创建通知失败: {}", e.getMessage());
+        }
         return plan;
     }
 
@@ -191,6 +201,14 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         plan.setStatus("进行中");
         if (sqmAuditPlanMapper.updateById(plan) == 0) {
             throw new BusinessException(409, "审核计划已被他人修改,请刷新后重试");
+        }
+        // 通知参与人员
+        try {
+            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                    "审核计划已开始", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已开始执行,请及时完成审核记录。",
+                    "audit_task", plan.getId(), "/sqm/audit", null);
+        } catch (Exception e) {
+            log.warn("[审核] 计划开始通知失败: {}", e.getMessage());
         }
         return plan;
     }
@@ -477,6 +495,13 @@ public class SqmAuditServiceImpl implements SqmAuditService {
                 capa.setDueDate(LocalDate.now().plusDays(30));
                 ncmCapaService.createInNewTx(capa);
             } catch (Exception ignored) {}
+            // 严重不符合项通知
+            try {
+                notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                        "审核严重不符合项",
+                        "审核不符合项" + nc.getNcNo() + "(" + nc.getLevel() + "): " + (nc.getDescription() != null ? nc.getDescription() : ""),
+                        "audit_task", nc.getId(), "/sqm/audit", null);
+            } catch (Exception ignored) {}
         }
         return nc;
     }
@@ -497,6 +522,15 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         nc.setCloseDate(LocalDateTime.now());
         if (sqmAuditNcMapper.updateById(nc) == 0) {
             throw new BusinessException(409, "审核不符合项已被他人修改,请刷新后重试");
+        }
+        // 整改闭环通知
+        try {
+            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                    "审核不符合项已闭环",
+                    "审核不符合项" + nc.getNcNo() + " 整改验证通过,已闭环。" + (verifyResult != null ? " 验证结论:" + verifyResult : ""),
+                    "audit_task", ncId, "/sqm/audit", null);
+        } catch (Exception e) {
+            log.warn("[审核] NC闭环通知失败: {}", e.getMessage());
         }
     }
 
@@ -602,11 +636,10 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             for (SqmAuditNc nc : ncs) {
                 if (nc.getDeadline() == null) continue;
                 long days = ChronoUnit.DAYS.between(nc.getDeadline(), LocalDate.now());
-                jdbcTemplate.update(
-                        "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) VALUES (?::uuid, 'AUDIT_NC_OVERDUE', ?, '站内', '采购,质量经理', ?, '告警', '已发送', now())",
-                        java.util.UUID.fromString("019f701f-0411-71ed-9eac-ab9440335832"),
-                        nc.getId(),
-                        "审核不符合项 " + nc.getNcNo() + " 整改超期" + days + "天,已升级通知");
+                notificationService.notifyRoles(List.of("qmanager", "purchaser"),
+                        "审核NC整改超期",
+                        "审核不符合项 " + nc.getNcNo() + " 整改超期" + days + "天,已升级通知。",
+                        "audit_nc_overdue", nc.getId(), "/sqm/audit", null);
             }
         } catch (Exception e) { log.warn("NC超期扫描异常: {}", e.getMessage()); }
     }

@@ -85,30 +85,45 @@ public class SeedRunner implements ApplicationRunner {
         {"sz.admin",      "SZ-管理员",     "SZ", "admin"},
         {"mz.rd",         "MZ-研发工程师",  "MZ", "rd"},
         {"sz.rd",         "SZ-研发工程师",  "SZ", "rd"},
-        // ── 集团跨公司 ──
-        {"admin",         "集团管理员",    null, "admin"},
+        // ── 集团跨公司(绑全局超管 sysadmin, 而非分公司 admin) ──
+        {"admin",         "集团管理员",    null, "sysadmin"},
     };
 
     @Override
     public void run(ApplicationArguments args) {
-        ensureRoles();
         ensureOrgs();
+        ensureRoles();
         ensureUsers();
         ensureNotifications();
     }
 
+    /** 分公司级角色: 9 个功能角色按 MZ/SZ 各建一份(带 org_id); sysadmin 保持全局唯一(org_id=null)。 */
     private void ensureRoles() {
+        List<String> orgIds = jdbc.queryForList(
+            "SELECT id FROM ops.sys_org WHERE org_code IN ('MZ','SZ') ORDER BY org_code", String.class);
         for (String[] def : ROLE_DEFS) {
             String code = def[0], name = def[1], desc = def[2];
-            Long cnt = jdbc.queryForObject(
-                "SELECT count(*) FROM ops.sys_role WHERE role_code = ?", Long.class, code);
-            if (cnt == null || cnt == 0) {
-                jdbc.update(
-                    "INSERT INTO ops.sys_role (role_code, role_name, role_type, perm_desc, status, is_deleted, version) "
-                    + "VALUES (?, ?, '预置', ?, '启用', false, 1)",
-                    code, name, desc);
-                log.info("[SeedRunner] 写入角色: {} ({})", code, name);
+            for (String orgId : orgIds) {
+                Long cnt = jdbc.queryForObject(
+                    "SELECT count(*) FROM ops.sys_role WHERE role_code = ? AND org_id = ?::uuid",
+                    Long.class, code, orgId);
+                if (cnt == null || cnt == 0) {
+                    jdbc.update(
+                        "INSERT INTO ops.sys_role (role_code, role_name, role_type, perm_desc, status, is_deleted, version, org_id) "
+                        + "VALUES (?, ?, '预置', ?, '启用', false, 1, ?::uuid)",
+                        code, name, desc, orgId);
+                    log.info("[SeedRunner] 写入分公司角色: {} ({}) org={}", code, name, orgId);
+                }
             }
+        }
+        // 全局超管 sysadmin(org_id=null), 通常已由 V64 迁移/DataInitializer 建好
+        Long sysCnt = jdbc.queryForObject(
+            "SELECT count(*) FROM ops.sys_role WHERE role_code = 'sysadmin' AND org_id IS NULL", Long.class);
+        if (sysCnt == null || sysCnt == 0) {
+            jdbc.update(
+                "INSERT INTO ops.sys_role (role_code, role_name, role_type, perm_desc, status, is_deleted, version) "
+                + "VALUES ('sysadmin', '系统管理员', '预置', '全部权限', '启用', false, 1)");
+            log.info("[SeedRunner] 写入全局角色: sysadmin");
         }
     }
 
@@ -151,11 +166,12 @@ public class SeedRunner implements ApplicationRunner {
                 userMapper.insert(u);
             }
 
-            // 角色分配: 确保用户拥有对应角色
+            // 角色分配: 按 (role_code, org_id) 定位本分公司角色; orgId=null → 全局角色
             String userId = jdbc.queryForObject(
                 "SELECT id FROM ops.sys_user WHERE username = ?", String.class, username);
-            String roleId = jdbc.queryForObject(
-                "SELECT id FROM ops.sys_role WHERE role_code = ?", String.class, roleCode);
+            String roleId = firstId(orgId == null
+                ? jdbc.queryForList("SELECT id FROM ops.sys_role WHERE role_code = ? AND org_id IS NULL", String.class, roleCode)
+                : jdbc.queryForList("SELECT id FROM ops.sys_role WHERE role_code = ? AND org_id = ?::uuid", String.class, roleCode, orgId));
             if (userId != null && roleId != null) {
                 Long existsRel = jdbc.queryForObject(
                     "SELECT count(*) FROM ops.sys_user_role WHERE user_id = ?::uuid AND role_id = ?::uuid",
@@ -167,7 +183,11 @@ public class SeedRunner implements ApplicationRunner {
                 }
             }
         }
-        log.info("[SeedRunner] 17 账号就绪: 8(MZ) + 8(SZ) + 1(集团 admin), 密码 123456");
+        log.info("[SeedRunner] 17 账号就绪: 8(MZ) + 8(SZ) + 1(集团 admin→sysadmin), 密码 123456");
+    }
+
+    private static String firstId(List<String> ids) {
+        return ids.isEmpty() ? null : ids.get(0);
     }
 
     /**
@@ -245,6 +265,7 @@ public class SeedRunner implements ApplicationRunner {
                 list.add(new Msg("NCM", "设计相关不良", "设计公差评审待参与", "/ncm/8d-reports"));
                 break;
             case "admin":
+            case "sysadmin":
                 if (orgCode == null) {
                     list.add(new Msg("DASH", "全公司质量周报", "本周全公司质量周报已生成,跨公司概览可查看", "/dashboard"));
                     list.add(new Msg("ARCH", "跨分公司审计", "跨分公司质量审计记录待查看", "/archive/list"));

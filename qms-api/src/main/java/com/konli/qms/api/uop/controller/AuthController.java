@@ -30,4 +30,14 @@ public class AuthController {
         LoginResult result = authService.login(req.getUsername(), req.getPassword());
         return R.ok(new LoginResponse(result.accessToken(), "Bearer", result.expiresIn()));
     }
+
+    /**
+     * 退出登录。
+     *
+     * <p>JWT 为无状态令牌,服务端不维护会话,无需做令牌失效处理;前端在收到 2xx 后清除本地 token 即可。</p>
+     */
+    @PostMapping("/logout")
+    public R<?> logout() {
+        return R.ok();
+    }
 }

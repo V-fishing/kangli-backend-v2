@@ -40,4 +40,16 @@ public class SpcCollectTask extends BaseEntity {
 
     @TableField("is_planned_downtime")
     private Boolean isPlannedDowntime;
+
+    /** 指定接收人:为空时通知回退"班组长"。 */
+    @TableField("collector")
+    private String collector;
+
+    /** 临期提醒是否已发送(去重)。 */
+    @TableField("due_reminded")
+    private Boolean dueReminded;
+
+    /** 采集模式: MANUAL(手动录入)/OPC(设备直连)/FILE(文件导入)/MES(MES对接)/AUTO(定时自动采集)。 */
+    @TableField("collect_mode")
+    private String collectMode;
 }

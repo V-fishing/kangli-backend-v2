@@ -20,6 +20,8 @@ import com.konli.qms.service.spc.SpcNotifyChannelService;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.konli.qms.service.spc.SpcGlobalConfigService;
 import com.konli.qms.service.spc.SpcCapabilityService;
+import com.konli.qms.service.spc.SpcCollectTaskService;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.spc.dto.ControlChartMark;
 import com.konli.qms.service.spc.dto.ControlChartVo;
 import com.konli.qms.service.spc.dto.SpcHistogramVo;
@@ -55,6 +57,8 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
     private final SpcNotifyChannelService spcNotifyChannelService;
     private final SpcGlobalConfigService spcGlobalConfigService;
     private final SpcCapabilityService spcCapabilityService;
+    private final SpcCollectTaskService spcCollectTaskService;
+    private final NotificationService notificationService;
 
     @Override
     public List<SpcSubgroup> list() {
@@ -298,6 +302,17 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                 } catch (Exception ignored) {
                     // 通知异常不回滚报警
                 }
+                // 站内信:SPC 报警推送给质量经理/SQE(失败不影响报警)
+                try {
+                    notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                        "SPC 控制图报警",
+                        String.format("参数【%s】于 %s 触发 %s 级报警(规则:%s,实测值:%s)。请及时处理。",
+                            param.getParamName(), alarm.getAlarmTime(), alarm.getLevel(),
+                            alarm.getTriggeredRule(), alarm.getCurrentValue()),
+                        "spc_alarm", alarm.getId(), "/spc/alarms", null);
+                } catch (Exception ignored) {
+                    // 站内信异常不回滚报警
+                }
             }
         }
 
@@ -317,6 +332,15 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             }
         } catch (Exception e) {
             log.warn("[SPC CPK快照] 批次边界快照计算失败(忽略): {}", e.getMessage());
+        }
+
+        // 回写采集任务:录入成功后刷新上次值/时间/下次到期/状态为"已采集",形成闭环
+        try {
+            spcCollectTaskService.recordCollected(
+                    subgroup.getParamId(), subgroup.getOrgId(),
+                    subgroup.getXbar(), subgroup.getSubgroupTime());
+        } catch (Exception e) {
+            log.warn("[SPC子组] 回写采集任务失败(忽略): {}", e.getMessage());
         }
 
         return subgroup;

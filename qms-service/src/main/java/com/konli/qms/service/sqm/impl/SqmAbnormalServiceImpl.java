@@ -23,6 +23,7 @@ import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.domain.ncm.mapper.Qms8dReportMapper;
 import com.konli.qms.domain.sqm.entity.SqmAuditPlan;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.sqm.SqmAbnormalService;
 import com.konli.qms.service.sqm.SqmAuditService;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +58,7 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
     private final SqmAbnormalMeasureMapper measureMapper;
     private final SqmAbnormalBatchVerifyMapper batchVerifyMapper;
     private final Qms8dReportMapper qms8dReportMapper;
+    private final NotificationService notificationService;
 
     @Override
     public List<SqmIncomingAbnormal> listAbnormals() {
@@ -499,12 +501,11 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
                 upd.setId(a.getId());
                 upd.setOverdueDays((int) days);
                 sqmIncomingAbnormalMapper.updateById(upd);
-                String receiver = days >= 14 ? "质量经理,采购" : "SQE";
-                jdbcTemplate.update(
-                        "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) VALUES (?::uuid, 'ABNORMAL_OVERDUE', ?, '站内', ?, ?, '告警', '已发送', now())",
-                        java.util.UUID.fromString(a.getOrgId() != null ? a.getOrgId() : "019f701f-0411-71ed-9eac-ab9440335832"),
-                        a.getId(), receiver,
-                        "来料异常" + a.getAbnormalNo() + " 超期" + days + "天未闭环");
+                List<String> roles = days >= 14 ? List.of("qmanager", "purchaser") : List.of("sqe");
+                notificationService.notifyRoles(roles,
+                        "来料异常超期提醒",
+                        "来料异常" + a.getAbnormalNo() + " 超期" + days + "天未闭环,请及时处理。",
+                        "abnormal_overdue", a.getId(), "/sqm/abnormal", null);
             }
         } catch (Exception e) { log.warn("异常超期扫描失败: {}", e.getMessage()); }
     }

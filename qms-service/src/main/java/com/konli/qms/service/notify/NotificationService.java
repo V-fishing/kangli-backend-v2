@@ -5,6 +5,7 @@ import com.konli.qms.domain.notify.entity.SysNotification;
 import com.konli.qms.domain.notify.mapper.SysNotificationMapper;
 import com.konli.qms.service.uop.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +25,7 @@ public class NotificationService {
     private final SysNotificationMapper notificationMapper;
     private final JdbcTemplate jdbcTemplate;
     private final UserService userService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** 按角色码解析用户并推送(可排除某用户,避免通知发起者本人)。 */
     public void notifyRoles(List<String> roleCodes, String title, String content,
@@ -75,12 +77,24 @@ public class NotificationService {
                 });
     }
 
+    /**
+     * 查询当前用户在指定时间戳之后的新通知，供 SSE 增量推送使用。
+     * @param since 时间戳(含)，返回 createTime >= since 的通知
+     */
+    public List<SysNotification> listSince(LocalDateTime since) {
+        String uid = userService.getCurrent().userId();
+        return notificationMapper.selectList(new LambdaQueryWrapper<SysNotification>()
+                .eq(SysNotification::getUserId, uid)
+                .ge(since != null, SysNotification::getCreateTime, since)
+                .orderByDesc(SysNotification::getCreateTime));
+    }
+
     private void insert(String userId, String title, String content,
                         String bizType, String bizId, String link) {
         SysNotification n = new SysNotification();
         n.setUserId(userId);
         n.setUserName(queryUserName(userId));
-        n.setOrgId(currentOrgId());
+        n.setOrgId(queryUserOrg(userId));
         n.setTitle(title);
         n.setContent(content);
         n.setBizType(bizType);
@@ -89,18 +103,11 @@ public class NotificationService {
         n.setIsRead(false);
         n.setCreateTime(LocalDateTime.now());
         notificationMapper.insert(n);
-    }
-
-    private String currentOrgId() {
+        // 发布事件供 SSE 实时推送
         try {
-            String org = userService.getCurrent().orgId();
-            // org_id 为 uuid 列, "ROOT" 等哨兵值或非 uuid 不可入库, 置空
-            if (org == null || "ROOT".equals(org) || !org.matches("[0-9a-fA-F-]{8,36}")) {
-                return null;
-            }
-            return org;
-        } catch (Exception e) {
-            return null;
+            eventPublisher.publishEvent(new NotificationCreatedEvent(n));
+        } catch (Exception ignored) {
+            // 事件发布失败不影响主流程
         }
     }
 
@@ -118,6 +125,16 @@ public class NotificationService {
         try {
             return jdbcTemplate.queryForObject(
                     "SELECT real_name FROM ops.sys_user WHERE id = ?::uuid", String.class, userId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 取接收者用户的组织,使通知归属与接收者一致(避免被按 org 的数据权限过滤)。 */
+    private String queryUserOrg(String userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT org_id FROM ops.sys_user WHERE id = ?::uuid", String.class, userId);
         } catch (Exception e) {
             return null;
         }

@@ -23,5 +23,8 @@ public class SysRole extends BaseEntity {
     @TableField("perm_desc")
     private String permDesc;
 
+    @TableField("org_id")
+    private String orgId;      // 所属分公司(org_id)；null = 跨公司(系统管理员)
+
     private String status;     // 启用/停用
 }

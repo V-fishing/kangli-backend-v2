@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.api.fia.dto.CreateFiaTaskRequest;
 import com.konli.qms.api.fia.dto.InspItemResultRequest;
 import com.konli.qms.api.fia.dto.SignRequest;
+import com.konli.qms.domain.fia.dto.StdTraceResult;
 import com.konli.qms.common.api.R;
+import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
 import com.konli.qms.domain.fia.entity.FiaInspPlan;
@@ -56,8 +58,11 @@ public class FiaTaskController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('fia.task.list')")
-    public R<List<FiaTask>> list() {
-        return R.ok(fiaTaskService.list());
+        public R<List<FiaTask>> list(@RequestParam(required = false) String status,
+                                 @RequestParam(required = false) String woNo) {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        return R.ok(fiaTaskService.list(orgId, status, woNo));
     }
 
     @GetMapping("/{id}")
@@ -112,6 +117,22 @@ public class FiaTaskController {
         }
         fiaTaskService.enterResults(id, items);
         return R.ok();
+    }
+
+    /** 检验结果试算:依据标准规则预判合格/不合格,不可匹配返回 null(人工兜底)。 */
+    @PostMapping("/{id}/items/preview")
+    @PreAuthorize("hasAuthority('fia.task.create')")
+    public R<List<com.konli.qms.domain.fia.dto.PreviewJudgeResult>> previewItems(
+            @PathVariable String id, @RequestBody com.konli.qms.domain.fia.dto.PreviewJudgeRequest req) {
+        return R.ok(fiaTaskService.previewJudge(id, req));
+    }
+
+    /** 标准引用追溯:列出引用该标准(可精确到项)的首件任务及命中检验项。 */
+    @GetMapping("/trace")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<StdTraceResult> traceByStd(@RequestParam String stdId,
+                                       @RequestParam(required = false) String itemId) {
+        return R.ok(fiaTaskService.traceStd(stdId, itemId));
     }
 
     @PostMapping("/{id}/sign-inspector")

@@ -68,6 +68,7 @@ public class InspStdController {
                 it.setUnit(ir.getUnit());
                 it.setValueType(ir.getValueType());
                 it.setEnumValues(ir.getEnumValues());
+                it.setPassValues(ir.getPassValues());
                 items.add(it);
             }
         }
