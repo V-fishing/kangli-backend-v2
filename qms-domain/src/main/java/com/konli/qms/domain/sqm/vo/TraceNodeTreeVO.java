@@ -34,5 +34,9 @@ public class TraceNodeTreeVO {
     private String isValid;
 
     private Map<String, Object> detail;
+    /** 详情来源: finished_goods_inspection / material_inspection / binding(critical_material_binding 兜底) / product_no(料号聚合)。前端如实标注, 不编造。 */
+    private String detailSource;
+    /** 源表缺失 material_barcode 字段(如绑定表 material_barcode 为空的来料/半成品子件), 节点仍展示但标注"无 material_barcode"。 */
+    private Boolean noBarcode;
     private List<TraceNodeTreeVO> children = new ArrayList<>();
 }

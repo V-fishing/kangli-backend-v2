@@ -27,6 +27,14 @@ public class Qms8dReport extends BaseEntity {
 
     private String issue;
 
+    /** 负责人(姓名),列表页展示责任人 */
+    @TableField("owner_user_name")
+    private String ownerUserName;
+
+    /** 负责人用户 ID,支撑按当前登录用户聚合"我的任务"(V150 加) */
+    @TableField("owner_user_id")
+    private String ownerUserId;
+
     private String severity;
 
     @TableField("current_stage")

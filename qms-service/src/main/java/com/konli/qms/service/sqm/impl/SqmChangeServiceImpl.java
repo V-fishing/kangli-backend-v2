@@ -1,7 +1,11 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
+import org.springframework.util.StringUtils;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.DataScopeGuard;
 import com.konli.qms.domain.sqm.entity.SqmAuditPlan;
@@ -90,6 +94,26 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         List<SqmChangeOrder> orders = sqmChangeOrderMapper.selectList(
                 new LambdaQueryWrapper<SqmChangeOrder>().orderByDesc(SqmChangeOrder::getApplyDate));
         return orders.stream().map(this::toListVo).collect(Collectors.toList());
+    }
+
+    @Override
+    public PageResult<SqmChangeOrderListVo> listPage(String keyword, String status, String supplierId, int page, int size) {
+        LambdaQueryWrapper<SqmChangeOrder> qw = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            qw.and(w -> w.like(SqmChangeOrder::getChangeNo, keyword)
+                    .or().like(SqmChangeOrder::getTitle, keyword)
+                    .or().like(SqmChangeOrder::getPartNo, keyword));
+        }
+        if (StringUtils.hasText(status)) {
+            qw.eq(SqmChangeOrder::getStatus, status);
+        }
+        if (StringUtils.hasText(supplierId)) {
+            qw.eq(SqmChangeOrder::getSupplierId, supplierId);
+        }
+        qw.orderByDesc(SqmChangeOrder::getApplyDate);
+        IPage<SqmChangeOrder> ip = sqmChangeOrderMapper.selectPage(new Page<>(page, size), qw);
+        List<SqmChangeOrderListVo> vos = ip.getRecords().stream().map(this::toListVo).collect(Collectors.toList());
+        return new PageResult<>(vos, ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     private SqmChangeOrderListVo toListVo(SqmChangeOrder o) {
@@ -440,8 +464,8 @@ public class SqmChangeServiceImpl implements SqmChangeService {
                 "供应商【%s】发起物料变更《%s》(单号 %s,料号 %s)。请按 采购→研发→质量 顺序审批。",
                 supplierName(order.getSupplierId()), order.getTitle(),
                 order.getChangeNo(), order.getPartNo());
-        notificationService.notifyRoles(List.of("purchaser", "rd", "sqe"),
-                title, content, "sqm_change", order.getId(), "/sqm/change", order.getApplicant());
+        notificationService.notify("sqm", "sqm_change_submitted",
+                title, content, "sqm_change", order.getId(), "/sqm/change");
     }
 
     /** 通知下一位审批人。 */
@@ -468,8 +492,8 @@ public class SqmChangeServiceImpl implements SqmChangeService {
     }
 
     private void notifyPartiesAndApplicant(SqmChangeOrder order, String title, String content) {
-        notificationService.notifyRoles(List.of("purchaser", "rd", "sqe"),
-                title, content, "sqm_change", order.getId(), "/sqm/change", null);
+        notificationService.notify("sqm", "sqm_change_result",
+                title, content, "sqm_change", order.getId(), "/sqm/change");
         String applicantId = applicantUserId(order.getApplicant());
         notificationService.notifyUser(applicantId, title, content, "sqm_change", order.getId(), "/sqm/change");
     }

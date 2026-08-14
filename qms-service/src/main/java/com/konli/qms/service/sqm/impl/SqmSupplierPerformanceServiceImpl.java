@@ -1,16 +1,23 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
+import com.konli.qms.domain.sqm.entity.SqmPerfMetricCfg;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.entity.SqmSupplierGradeRule;
 import com.konli.qms.domain.sqm.entity.SqmSupplierPerformance;
+import com.konli.qms.domain.sqm.entity.SqmSupplierShare;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
+import com.konli.qms.domain.sqm.mapper.SqmPerfMetricCfgMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierGradeRuleMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierPerformanceMapper;
+import com.konli.qms.domain.sqm.mapper.SqmSupplierShareMapper;
 import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +37,8 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
     private final SqmIncomingLotMapper sqmIncomingLotMapper;
     private final SqmSupplierGradeRuleMapper gradeRuleMapper;
     private final SqmSupplierMapper sqmSupplierMapper;
+    private final SqmPerfMetricCfgMapper metricCfgMapper;
+    private final SqmSupplierShareMapper sqmSupplierShareMapper;
 
     @Override
     public List<SqmSupplierPerformance> list(String supplierId) {
@@ -39,6 +48,20 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
         }
         w.orderByDesc(SqmSupplierPerformance::getPeriod);
         return sqmSupplierPerformanceMapper.selectList(w);
+    }
+
+    @Override
+    public PageResult<SqmSupplierPerformance> listPage(String supplierId, String period, int page, int size) {
+        LambdaQueryWrapper<SqmSupplierPerformance> w = new LambdaQueryWrapper<>();
+        if (supplierId != null && !supplierId.isBlank()) {
+            w.eq(SqmSupplierPerformance::getSupplierId, supplierId);
+        }
+        if (period != null && !period.isBlank()) {
+            w.like(SqmSupplierPerformance::getPeriod, period);
+        }
+        w.orderByDesc(SqmSupplierPerformance::getPeriod);
+        IPage<SqmSupplierPerformance> ip = sqmSupplierPerformanceMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -88,12 +111,9 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
                     .divide(BigDecimal.valueOf(lots.size()), 2, RoundingMode.HALF_UP);
         }
 
-        // 交付及时率:sqm_incoming_lot 无 due_date 字段 -> 100%
+        // 交付及时率:当前来料批次无计划交付日期(due_date)字段,MES 亦无计划日期,
+        // 按既有行为兜底 100%;后续接入计划日期后可按 incoming_date<=due_date 重算。
         BigDecimal deliveryTimelyRate = new BigDecimal("100.00");
-
-        // score = (incomingPassRate + deliveryTimelyRate) / 2
-        BigDecimal score = incomingPassRate.add(deliveryTimelyRate)
-                .divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
 
         // orgId 优先取当前登录用户;当为空/超管哨兵(ROOT)/非法 UUID 时,回退取供应商自身 orgId
         String orgId = currentOrgId();
@@ -112,13 +132,17 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
                         .eq(SqmSupplierPerformance::getSupplierId, supplierId)
                         .eq(SqmSupplierPerformance::getPeriod, period));
         BigDecimal prevQualityScore = prev != null ? prev.getQualityScore() : null;
+
+        // 综合分 = 按 sqm_perf_metric_cfg 配置权重加权(来料/交付/质量),权重归一
+        BigDecimal score = weightedScore(incomingPassRate, deliveryTimelyRate, prevQualityScore);
+
+        // 绩效分级挂钩:用 sqm_supplier_grade_rule 区间匹配,覆盖简单算法的 level
+        String level = levelByRule(score);
+
         sqmSupplierPerformanceMapper.delete(
                 new LambdaQueryWrapper<SqmSupplierPerformance>()
                         .eq(SqmSupplierPerformance::getSupplierId, supplierId)
                         .eq(SqmSupplierPerformance::getPeriod, period));
-
-        // 绩效分级挂钩:用 sqm_supplier_grade_rule 区间匹配,覆盖简单算法的 level
-        String level = levelByRule(score);
 
         SqmSupplierPerformance p = new SqmSupplierPerformance();
         p.setOrgId(orgId);
@@ -132,7 +156,70 @@ public class SqmSupplierPerformanceServiceImpl implements SqmSupplierPerformance
         p.setObserveFlag(false);
         p.setDataMissingFlag(lots == null || lots.isEmpty());
         sqmSupplierPerformanceMapper.insert(p);
+
+        // 分级联动采购份额/供应商状态(受配置 auto_linkage 开关控制,默认关)
+        applyGradeLinkage(supplierId, level);
         return p;
+    }
+
+    /**
+     * 按 sqm_perf_metric_cfg 配置权重计算综合分。
+     * 仅 enabled 的指标参与;权重求和归一。缺失配置时降级为默认(来料0.3/交付0.3/质量0.4)。
+     */
+    private BigDecimal weightedScore(BigDecimal incomingPassRate, BigDecimal deliveryTimelyRate,
+                                     BigDecimal qualityScore) {
+        List<SqmPerfMetricCfg> cfgs = metricCfgMapper.selectList(
+                new LambdaQueryWrapper<SqmPerfMetricCfg>().eq(SqmPerfMetricCfg::getIsDeleted, false));
+        BigDecimal wIn = cfgWeight(cfgs, "INCOMING_PASS", new BigDecimal("0.30"));
+        BigDecimal wDel = cfgWeight(cfgs, "DELIVERY", new BigDecimal("0.30"));
+        BigDecimal wQual = cfgWeight(cfgs, "QUALITY", new BigDecimal("0.40"));
+        BigDecimal wSum = wIn.add(wDel).add(wQual);
+        if (wSum.compareTo(BigDecimal.ZERO) <= 0) {
+            wSum = BigDecimal.ONE;
+        }
+        BigDecimal q = qualityScore != null ? qualityScore : BigDecimal.ZERO;
+        return incomingPassRate.multiply(wIn)
+                .add(deliveryTimelyRate.multiply(wDel))
+                .add(q.multiply(wQual))
+                .divide(wSum, 2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal cfgWeight(List<SqmPerfMetricCfg> cfgs, String code, BigDecimal fallback) {
+        return cfgs.stream()
+                .filter(c -> code.equals(c.getMetricCode()) && Boolean.TRUE.equals(c.getEnabled()))
+                .map(SqmPerfMetricCfg::getWeight)
+                .filter(w -> w != null && w.compareTo(BigDecimal.ZERO) > 0)
+                .findFirst()
+                .orElse(fallback);
+    }
+
+    /**
+     * 分级联动:绩效降级(D)时写采购份额调整建议(linked_level)并置供应商受限状态。
+     * 受 sqm_perf_metric_cfg.auto_linkage 任一启用控制,默认关,验证后再开。
+     */
+    private void applyGradeLinkage(String supplierId, String level) {
+        if (level == null || !"D".equals(level)) {
+            return;
+        }
+        boolean linkageOn = metricCfgMapper.selectList(
+                new LambdaQueryWrapper<SqmPerfMetricCfg>().eq(SqmPerfMetricCfg::getIsDeleted, false))
+                .stream().anyMatch(c -> Boolean.TRUE.equals(c.getAutoLinkage()));
+        if (!linkageOn) {
+            return;
+        }
+        // D 级:在份额基线记录上标记 linked_level,并置供应商状态为受限
+        sqmSupplierShareMapper.selectList(
+                new LambdaQueryWrapper<SqmSupplierShare>().eq(SqmSupplierShare::getSupplierId, supplierId))
+                .forEach(s -> {
+                    s.setLinkedLevel("D");
+                    s.setChangeReason("绩效D级联动(自动)");
+                    sqmSupplierShareMapper.updateById(s);
+                });
+        SqmSupplier supplier = sqmSupplierMapper.selectById(supplierId);
+        if (supplier != null && !Boolean.TRUE.equals(supplier.getSoleSourceFlag())) {
+            supplier.setStatus("暂停");
+            sqmSupplierMapper.updateById(supplier);
+        }
     }
 
     /**

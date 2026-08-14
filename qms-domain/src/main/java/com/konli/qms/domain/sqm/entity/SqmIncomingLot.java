@@ -24,6 +24,9 @@ public class SqmIncomingLot extends BaseEntity {
     @TableField("supplier_id")
     private String supplierId;
 
+    @TableField("ven_code")
+    private String venCode;                // MES 供应商编号(来料检验记录上的 VEN 编号)
+
     @TableField("part_no")
     private String partNo;
 
@@ -57,7 +60,7 @@ public class SqmIncomingLot extends BaseEntity {
     @TableField("used_qty")
     private BigDecimal usedQty;           // 已投料数量(累加,防超领)
 
-    /** 供应商名称(仅展示用，不存表) */
-    @TableField(exist = false)
+    /** 供应商名称(MES 导入已落 supplier_name 列;SELECT/INSERT 均映射该列,不再仅展示用) */
+    @TableField("supplier_name")
     private String supplierName;
 }

@@ -16,4 +16,7 @@ public class ControlChartVo {
 
     /** 异常点标记(前端"异常点与判异规则命中"列表 / 控制图着色);无异常时为 null/空。 */
     private List<ControlChartMark> marks;
+
+    /** 计数型控制图序列(P/NP/C/U),每种图类型一个 CountSeries;计量型图不填充(用 subgroups)。 */
+    private List<CountSeries> countSeries;
 }

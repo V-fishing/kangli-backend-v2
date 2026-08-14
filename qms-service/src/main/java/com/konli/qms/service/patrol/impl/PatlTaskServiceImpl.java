@@ -1,6 +1,9 @@
 package com.konli.qms.service.patrol.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.patrol.entity.PatlAbnormal;
@@ -14,12 +17,14 @@ import com.konli.qms.domain.patrol.mapper.PatlRecordMapper;
 import com.konli.qms.domain.patrol.mapper.PatlRouteMapper;
 import com.konli.qms.domain.patrol.mapper.PatlTaskMapper;
 import com.konli.qms.service.notify.NotificationService;
+import com.konli.qms.service.patrol.PatlArchiveService;
 import com.konli.qms.service.patrol.PatlTaskService;
 import com.konli.qms.service.patrol.dto.PatlTaskVo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -35,10 +40,24 @@ public class PatlTaskServiceImpl implements PatlTaskService {
     private final PatlRouteMapper patlRouteMapper;
     private final PatlCheckpointMapper patlCheckpointMapper;
     private final NotificationService notificationService;
+    private final PatlArchiveService patlArchiveService;
 
     @Override
     public List<PatlTask> list() {
         return patlTaskMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<PatlTask> listPage(String keyword, int page, int size) {
+        LambdaQueryWrapper<PatlTask> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(PatlTask::getTaskNo, keyword)
+                    .or().like(PatlTask::getShift, keyword)
+                    .or().like(PatlTask::getStatus, keyword));
+        }
+        w.orderByDesc(PatlTask::getCreatedAt);
+        IPage<PatlTask> ip = patlTaskMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -79,9 +98,9 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         patlTaskMapper.insert(task);
         // 通知巡检员/班组长
         try {
-            notificationService.notifyRoles(List.of("inspector", "supervisor"),
+            notificationService.notify("patrol", "patrol_task_created",
                     "巡检任务已创建", "巡检任务" + task.getTaskNo() + " 已分配,请前往巡检。",
-                    "patrol_task", task.getId(), "/patrol/tasks", null);
+                    "patrol_task", task.getId(), "/patrol/tasks");
         } catch (Exception e) {
             log.warn("[巡检] 任务创建通知失败: {}", e.getMessage());
         }
@@ -127,9 +146,9 @@ public class PatlTaskServiceImpl implements PatlTaskService {
 
             // 通知质量经理/SQE
             try {
-                notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                notificationService.notify("patrol", "patrol_task_abnormal",
                         "巡检发现异常", "巡检点【" + checkpointName + "】检查异常: " + (remark != null ? remark : ""),
-                        "patrol_task", taskId, "/patrol/tasks", null);
+                        "patrol_task", taskId, "/patrol/tasks");
             } catch (Exception e) {
                 log.warn("[巡检] 异常通知失败: {}", e.getMessage());
             }
@@ -142,14 +161,16 @@ public class PatlTaskServiceImpl implements PatlTaskService {
             task.setFinishTime(LocalDateTime.now());
             // 任务完成通知
             try {
-                notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+                notificationService.notify("patrol", "patrol_task_completed",
                         "巡检任务已完成", "巡检任务" + task.getTaskNo() + " 全部点位已完成。",
-                        "patrol_task", taskId, "/patrol/tasks", null);
+                        "patrol_task", taskId, "/patrol/tasks");
             } catch (Exception e) {
                 log.warn("[巡检] 完成通知失败: {}", e.getMessage());
             }
         }
         patlTaskMapper.updateById(task);
+        // 全部点位完成 -> 触发巡检归档
+        patlArchiveService.archive(task.getId());
     }
 
     @Override
@@ -162,11 +183,13 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         task.setStatus("已完成");
         task.setFinishTime(LocalDateTime.now());
         patlTaskMapper.updateById(task);
+        // 手动关闭 -> 触发巡检归档
+        patlArchiveService.archive(task.getId());
         // 关闭通知
         try {
-            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+            notificationService.notify("patrol", "patrol_task_closed",
                     "巡检任务已关闭", "巡检任务" + task.getTaskNo() + " 已被手动关闭。",
-                    "patrol_task", taskId, "/patrol/tasks", null);
+                    "patrol_task", taskId, "/patrol/tasks");
         } catch (Exception e) {
             log.warn("[巡检] 关闭通知失败: {}", e.getMessage());
         }
@@ -175,6 +198,20 @@ public class PatlTaskServiceImpl implements PatlTaskService {
     @Override
     public List<PatlAbnormal> listAbnormals() {
         return patlAbnormalMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<PatlAbnormal> listAbnormalsPage(String keyword, int page, int size) {
+        LambdaQueryWrapper<PatlAbnormal> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(PatlAbnormal::getCheckpointName, keyword)
+                    .or().like(PatlAbnormal::getDescription, keyword)
+                    .or().like(PatlAbnormal::getStatus, keyword)
+                    .or().like(PatlAbnormal::getSeverity, keyword));
+        }
+        w.orderByDesc(PatlAbnormal::getCreatedAt);
+        IPage<PatlAbnormal> ip = patlAbnormalMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override

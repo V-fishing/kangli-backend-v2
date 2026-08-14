@@ -1,5 +1,6 @@
 package com.konli.qms.service.sqm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRiskTrack;
 
@@ -11,6 +12,9 @@ import java.util.List;
  */
 public interface SqmFmeaService {
 
+    /** 自动触发来源:严重不良记录(NCM 缺陷)。 */
+    String SRC_NCM_DEFECT = "NCM_DEFECT";
+
     /** FMEA 类型枚举(PFMEA/DFMEA/SFMEA)。 */
     List<String> listTypes();
 
@@ -19,6 +23,8 @@ public interface SqmFmeaService {
 
     /** 列表(按当前组织过滤；管理员全量)。可选 status 过滤。 */
     List<QmsFmeaRisk> list(String status);
+
+    PageResult<QmsFmeaRisk> listPage(String status, String keyword, int page, int size);
 
     /** 新建风险项：自动计算 RPN/风险等级/高风险标识/风险编号，并记录"识别"轨迹。 */
     QmsFmeaRisk create(QmsFmeaRisk risk);
@@ -40,4 +46,16 @@ public interface SqmFmeaService {
 
     /** SR-PTL-025:扫描超期措施(targetDate已过且status≠已闭环),超7天通知责任人,超14天通知质量经理。返回处理条数。 */
     int scanOverdue();
+
+    /**
+     * SR-PTL:严重不良记录自动触发 FMEA 风险项(RPN 达到阈值入清单)。
+     * @param srcType   来源类型(如 {@link #SRC_NCM_DEFECT})
+     * @param srcId     来源业务 id(如缺陷记录 id)
+     * @param orgId     组织 id
+     * @param product   关联产品
+     * @param process   关联工序
+     * @param remark    风险描述(失败模式)
+     * @param severity  严重度中文(如 "严重")
+     */
+    void createAuto(String srcType, String srcId, String orgId, String product, String process, String remark, String severity);
 }

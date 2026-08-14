@@ -11,7 +11,9 @@ public class FiaStdItemRequest {
     private String stdValue;
     private String tolerance;
     private String unit;
-    private String valueType;     // numeric/enum
+    private String valueType;     // numeric/enum/text
     private String enumValues;    // "合格,不合格"
     private String passValues;    // 合格值(逗号分隔);枚举型实测命中即判合格
+    /** 推荐控制图类型集合(基础图码逗号分隔,如 'Xbar,R');数值默认 Xbar,R,枚举/文本默认 P。 */
+    private String chartTypes;
 }

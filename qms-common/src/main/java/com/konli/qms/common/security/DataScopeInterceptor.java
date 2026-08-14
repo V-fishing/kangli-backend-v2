@@ -10,6 +10,7 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Component;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -50,7 +52,11 @@ public class DataScopeInterceptor implements InnerInterceptor {
     /**
      * 全局配置表(不按分公司/个人过滤)。
      */
-    private static final Set<String> GLOBAL_TABLES = Set.of("spc_rule", "sys_dict");
+    private static final Set<String> GLOBAL_TABLES = Set.of("spc_rule", "sys_dict", "sqm_supplier");
+
+    /** 组织切换生效组织必须是合法 UUID(由 OrgSwitchFilter 解析保证,此处再校验以防串号)。 */
+    private static final Pattern UUID_RE = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     /**
      * 用户有效数据范围缓存(key=userId, 存到 ThreadLocal 避免重复查库)。
@@ -62,6 +68,42 @@ public class DataScopeInterceptor implements InnerInterceptor {
     public void beforeQuery(Executor executor, MappedStatement ms, Object parameter,
                             RowBounds rowBounds, ResultHandler resultHandler, BoundSql boundSql) throws SQLException {
         CompanyContext.CurrentUser u = CompanyContext.get();
+
+        // 组织切换短路:存在生效组织时,强制追加 org_id = switchOrgId 过滤(优先级最高,
+        // 绕过超管全量与 scope 查表逻辑)。仅对单表且非全局表改写;多表 JOIN 交给原逻辑(默认跳过)。
+        String switchOrg = CompanyContext.getSwitchOrgId();
+        if (switchOrg != null && UUID_RE.matcher(switchOrg).matches()) {
+            // 仅在目标表确实拥有 org_id 列时才注入(与下方"非切换"分支的列存在性判定保持一致),
+            // 避免对无该列的全局表(如 sys_menu、spc_rule、sys_dict)注入 WHERE org_id 导致 500。
+            ensureInited();
+            try {
+                Statement stmt = CCJSqlParserUtil.parse(boundSql.getSql());
+                if (stmt instanceof Select) {
+                    PlainSelect ps = ((Select) stmt).getPlainSelect();
+                    if (ps != null && ps.getFromItem() instanceof Table) {
+                        String tbl = ((Table) ps.getFromItem()).getName().toLowerCase().replaceAll("^ops\\.", "");
+                        if (orgIdTables.contains(tbl) && !GLOBAL_TABLES.contains(tbl)) {
+                            Expression where = ps.getWhere();
+                            // org_id = switchOrg OR org_id IS NULL,放行全局配置数据
+                            // 注意:整个 org 条件必须带括号,否则 AND 优先于 OR,
+                            // 会改写原 WHERE 语义(如 user_id=.. AND org_id=.. OR org_id IS NULL)。
+                            // JOIN 多表时主表可能含 org_id,需用主表别名避免歧义。
+                            String orgIdColumn = resolveOrgIdColumn(ps);
+                            if (orgIdColumn != null) {
+                                Expression orgCond = CCJSqlParserUtil.parseExpression(
+                                        "(" + orgIdColumn + " = " + new StringValue(switchOrg) + " OR " + orgIdColumn + " IS NULL)");
+                                ps.setWhere(where == null ? orgCond : new AndExpression(where, orgCond));
+                                PluginUtils.mpBoundSql(boundSql).sql(ps.toString());
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // 解析失败则不强制改写,回退原逻辑
+            }
+            return;
+        }
+
         if (u == null || CompanyContext.isAdmin()) {
             return;
         }
@@ -101,9 +143,18 @@ public class DataScopeInterceptor implements InnerInterceptor {
                 EqualsTo cond = new EqualsTo(new Column("created_by"), new StringValue(u.userId()));
                 ps.setWhere(where == null ? cond : new AndExpression(where, cond));
             } else if (touchesOrg) {
-                // ORG_AND_SUB 或未配置 scope: 按分公司过滤(维持现有行为)
-                EqualsTo cond = new EqualsTo(new Column("org_id"), new StringValue(u.orgId()));
-                ps.setWhere(where == null ? cond : new AndExpression(where, cond));
+                // ORG_AND_SUB 或未配置 scope: 按分公司过滤; 同时放行 org_id IS NULL 的全局配置数据
+                // (如触发类型、工序字典等本就不按分公司隔离的主数据, 否则分公司管理员将查不到全局数据)。
+                // 注意:整个 org 条件必须带括号,否则 AND 优先于 OR,
+                // 会改写原 WHERE 语义(如 user_id=.. AND org_id=.. OR org_id IS NULL,
+                // 导致 org_id IS NULL 的全局数据无条件命中且绕过原过滤条件)。
+                // JOIN 多表时主表可能含 org_id,需用主表别名避免歧义。
+                String orgIdColumn = resolveOrgIdColumn(ps);
+                if (orgIdColumn != null) {
+                    Expression orgCond = CCJSqlParserUtil.parseExpression(
+                            "(" + orgIdColumn + " = " + new StringValue(u.orgId()) + " OR " + orgIdColumn + " IS NULL)");
+                    ps.setWhere(where == null ? orgCond : new AndExpression(where, orgCond));
+                }
             } else {
                 return;
             }
@@ -155,6 +206,21 @@ public class DataScopeInterceptor implements InnerInterceptor {
      */
     public static void clearScope() {
         EFFECTIVE_SCOPE.remove();
+    }
+
+    /**
+     * 解析主表 org_id 列名。单表直接返回 org_id;多表 JOIN 时返回主表别名.org_id,
+     * 避免两表均含 org_id 导致的列引用歧义。
+     */
+    private String resolveOrgIdColumn(PlainSelect ps) {
+        if (!(ps.getFromItem() instanceof Table)) {
+            return null;
+        }
+        Table fromTable = (Table) ps.getFromItem();
+        if (fromTable.getAlias() != null && fromTable.getAlias().getName() != null) {
+            return fromTable.getAlias().getName() + ".org_id";
+        }
+        return "org_id";
     }
 
     private synchronized void ensureInited() {

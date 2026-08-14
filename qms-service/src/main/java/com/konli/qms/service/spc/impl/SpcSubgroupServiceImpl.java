@@ -16,20 +16,29 @@ import com.konli.qms.domain.spc.mapper.SpcMeasurementMapper;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.spc.mapper.SpcRuleMapper;
 import com.konli.qms.domain.spc.mapper.SpcSubgroupMapper;
+import com.konli.qms.domain.uop.entity.SysUser;
+import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import com.konli.qms.service.spc.SpcNotifyChannelService;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.konli.qms.service.spc.SpcGlobalConfigService;
 import com.konli.qms.service.spc.SpcCapabilityService;
 import com.konli.qms.service.spc.SpcCollectTaskService;
+import com.konli.qms.service.spc.SpcSampleTaskService;
 import com.konli.qms.service.notify.NotificationService;
+import com.konli.qms.service.fia.FiaTaskService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import com.konli.qms.service.spc.dto.ControlChartMark;
 import com.konli.qms.service.spc.dto.ControlChartVo;
+import com.konli.qms.service.spc.dto.CountSeries;
 import com.konli.qms.service.spc.dto.SpcHistogramVo;
 import com.konli.qms.service.spc.dto.SpcSubgroupVo;
+import com.konli.qms.service.spc.FiaChartTypeResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -42,6 +51,9 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 @RequiredArgsConstructor
@@ -49,6 +61,7 @@ import lombok.extern.slf4j.Slf4j;
 public class SpcSubgroupServiceImpl implements SpcSubgroupService {
 
     private final SpcSubgroupMapper spcSubgroupMapper;
+    private final SysUserMapper sysUserMapper;
     private final SpcParamMapper spcParamMapper;
     private final SpcMeasurementMapper spcMeasurementMapper;
     private final SpcRuleMapper spcRuleMapper;
@@ -58,11 +71,39 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
     private final SpcGlobalConfigService spcGlobalConfigService;
     private final SpcCapabilityService spcCapabilityService;
     private final SpcCollectTaskService spcCollectTaskService;
+    private final SpcSampleTaskService spcSampleTaskService;
     private final NotificationService notificationService;
+
+    /** 回环联动需要 FIA 服务;为避免与 FiaTaskServiceImpl(其注入 SpcSubgroupService)形成构造器循环依赖,
+     *  改用 @Lazy 字段注入,延迟到首次调用时解析。 */
+    @Autowired
+    @Lazy
+    private FiaTaskService fiaTaskService;
+
+    private final PlatformTransactionManager transactionManager;
 
     @Override
     public List<SpcSubgroup> list() {
-        return spcSubgroupMapper.selectList(null);
+        List<SpcSubgroup> list = spcSubgroupMapper.selectList(null);
+        fillOperatorNames(list);
+        return list;
+    }
+
+    /** 批量解析子组的录入人/创建人姓名(operator_id/created_by 为用户 UUID),单次 IN 查询无 N+1。 */
+    private void fillOperatorNames(List<SpcSubgroup> subgroups) {
+        if (subgroups == null || subgroups.isEmpty()) return;
+        List<String> ids = new ArrayList<>();
+        for (SpcSubgroup sg : subgroups) {
+            if (StringUtils.hasText(sg.getOperatorId()) && !ids.contains(sg.getOperatorId())) ids.add(sg.getOperatorId());
+            if (StringUtils.hasText(sg.getCreatedBy()) && !ids.contains(sg.getCreatedBy())) ids.add(sg.getCreatedBy());
+        }
+        if (ids.isEmpty()) return;
+        Map<String, String> nameMap = sysUserMapper.selectBatchIds(ids).stream()
+                .collect(Collectors.toMap(SysUser::getId, SysUser::getRealName, (a, b) -> a));
+        for (SpcSubgroup sg : subgroups) {
+            if (StringUtils.hasText(sg.getOperatorId())) sg.setOperatorName(nameMap.get(sg.getOperatorId()));
+            if (StringUtils.hasText(sg.getCreatedBy())) sg.setCreatedByName(nameMap.get(sg.getCreatedBy()));
+        }
     }
 
     @Override
@@ -75,13 +116,19 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
     }
 
     @Override
-    public ControlChartVo getControlChart(String paramId, String startTime, String endTime) {
+    public ControlChartVo getControlChart(String paramId, String startTime, String endTime, String stage, String sampleTaskId) {
         if (paramId == null || paramId.isBlank()) {
             throw new BusinessException(400, "paramId 不能为空");
         }
         LambdaQueryWrapper<SpcSubgroup> w = new LambdaQueryWrapper<SpcSubgroup>()
                 .eq(SpcSubgroup::getParamId, paramId)
                 .orderByAsc(SpcSubgroup::getSubgroupTime);
+        if (stage != null && !stage.isBlank() && !"ALL".equalsIgnoreCase(stage)) {
+            w.eq(SpcSubgroup::getStage, stage);
+        }
+        if (sampleTaskId != null && !sampleTaskId.isBlank()) {
+            w.eq(SpcSubgroup::getSampleTaskId, sampleTaskId);
+        }
         if (startTime != null && !startTime.isBlank()) {
             w.ge(SpcSubgroup::getSubgroupTime, LocalDateTime.parse(startTime));
         }
@@ -89,6 +136,9 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             w.le(SpcSubgroup::getSubgroupTime, LocalDateTime.parse(endTime));
         }
         List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(w);
+
+        // 批量解析录入人/创建人姓名(operator_id/created_by 存的是用户 UUID),避免前端依赖用户字典
+        fillOperatorNames(subgroups);
 
         // 当前激活控制限:优先人工覆盖(manual=true),其次自动基线;active 且最新一条
         SpcControlLimit limit = spcControlLimitMapper.selectOne(
@@ -119,11 +169,147 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         vo.setSubgroups(subgroups);
         vo.setLimit(limit);
         vo.setMarks(marks);
+        // 计数型序列(P/NP/C/U):仅当子集含计数数据(noncforming/defectCount 非空)且参数 chartCandidates 含该类型时构建。
+        vo.setCountSeries(buildCountSeries(paramId, subgroups));
         return vo;
     }
 
+    /** 按参数配置的 chartCandidates 中计数型图类型(P/NP/C/U),由子组 nonconforming/inspectN/defectCount 构建控制图序列。 */
+    private List<CountSeries> buildCountSeries(String paramId, List<SpcSubgroup> subgroups) {
+        if (subgroups.isEmpty()) return null;
+        SpcParam param = spcParamMapper.selectById(paramId);
+        if (param == null || !StringUtils.hasText(param.getChartCandidates())) return null;
+        List<String> types = FiaChartTypeResolver.parse(param.getChartCandidates());
+        List<CountSeries> result = new ArrayList<>();
+        // 子集是否含计数数据
+        boolean hasCount = subgroups.stream().anyMatch(s ->
+                s.getNonconforming() != null || s.getDefectCount() != null);
+        if (!hasCount) return null;
+        for (String t : types) {
+            if (!List.of("P", "NP", "C", "U").contains(t)) continue;
+            CountSeries cs = switch (t) {
+                case "P" -> buildP(subgroups);
+                case "NP" -> buildNp(subgroups);
+                case "C" -> buildC(subgroups);
+                case "U" -> buildU(subgroups);
+                default -> null;
+            };
+            if (cs != null) result.add(cs);
+        }
+        return result.isEmpty() ? null : result;
+    }
+
+    private CountSeries buildP(List<SpcSubgroup> subgroups) {
+        BigDecimal sumNon = BigDecimal.ZERO, sumN = BigDecimal.ZERO;
+        int k = 0;
+        for (SpcSubgroup s : subgroups) {
+            if (s.getNonconforming() == null || s.getInspectN() == null || s.getInspectN() == 0) continue;
+            sumNon = sumNon.add(BigDecimal.valueOf(s.getNonconforming()));
+            sumN = sumN.add(BigDecimal.valueOf(s.getInspectN()));
+            k++;
+        }
+        if (k == 0 || sumN.signum() == 0) return null;
+        BigDecimal pbar = sumNon.divide(sumN, 6, RoundingMode.HALF_UP);
+        List<BigDecimal> vals = new ArrayList<>(), ucl = new ArrayList<>(), cl = new ArrayList<>(), lcl = new ArrayList<>();
+        for (SpcSubgroup s : subgroups) {
+            if (s.getNonconforming() == null || s.getInspectN() == null || s.getInspectN() == 0) {
+                vals.add(null); ucl.add(null); cl.add(null); lcl.add(null); continue;
+            }
+            BigDecimal n = BigDecimal.valueOf(s.getInspectN());
+            BigDecimal p = BigDecimal.valueOf(s.getNonconforming()).divide(n, 6, RoundingMode.HALF_UP);
+            BigDecimal sd = sqrt(pbar.multiply(BigDecimal.ONE.subtract(pbar)).divide(n, 6, RoundingMode.HALF_UP));
+            vals.add(p); cl.add(pbar);
+            ucl.add(pbar.add(sd.multiply(THREE)));
+            lcl.add(maxZero(pbar.subtract(sd.multiply(THREE))));
+        }
+        return series("P", vals, ucl, cl, lcl);
+    }
+
+    private CountSeries buildNp(List<SpcSubgroup> subgroups) {
+        BigDecimal sumNon = BigDecimal.ZERO;
+        int k = 0;
+        for (SpcSubgroup s : subgroups) {
+            if (s.getNonconforming() == null) continue;
+            sumNon = sumNon.add(BigDecimal.valueOf(s.getNonconforming()));
+            k++;
+        }
+        if (k == 0) return null;
+        BigDecimal npbar = sumNon.divide(BigDecimal.valueOf(k), 6, RoundingMode.HALF_UP);
+        BigDecimal sd = sqrt(npbar.multiply(BigDecimal.ONE.subtract(npbar.divide(BigDecimal.valueOf(k), 6, RoundingMode.HALF_UP))));
+        List<BigDecimal> vals = new ArrayList<>(), ucl = new ArrayList<>(), cl = new ArrayList<>(), lcl = new ArrayList<>();
+        for (SpcSubgroup s : subgroups) {
+            if (s.getNonconforming() == null) { vals.add(null); ucl.add(null); cl.add(null); lcl.add(null); continue; }
+            vals.add(BigDecimal.valueOf(s.getNonconforming()));
+            cl.add(npbar); ucl.add(npbar.add(sd.multiply(THREE))); lcl.add(maxZero(npbar.subtract(sd.multiply(THREE))));
+        }
+        return series("NP", vals, ucl, cl, lcl);
+    }
+
+    private CountSeries buildC(List<SpcSubgroup> subgroups) {
+        BigDecimal sumDef = BigDecimal.ZERO;
+        int k = 0;
+        for (SpcSubgroup s : subgroups) {
+            if (s.getDefectCount() == null) continue;
+            sumDef = sumDef.add(BigDecimal.valueOf(s.getDefectCount()));
+            k++;
+        }
+        if (k == 0) return null;
+        BigDecimal cbar = sumDef.divide(BigDecimal.valueOf(k), 6, RoundingMode.HALF_UP);
+        BigDecimal sd = sqrt(cbar);
+        List<BigDecimal> vals = new ArrayList<>(), ucl = new ArrayList<>(), cl = new ArrayList<>(), lcl = new ArrayList<>();
+        for (SpcSubgroup s : subgroups) {
+            if (s.getDefectCount() == null) { vals.add(null); ucl.add(null); cl.add(null); lcl.add(null); continue; }
+            vals.add(BigDecimal.valueOf(s.getDefectCount()));
+            cl.add(cbar); ucl.add(cbar.add(sd.multiply(THREE))); lcl.add(maxZero(cbar.subtract(sd.multiply(THREE))));
+        }
+        return series("C", vals, ucl, cl, lcl);
+    }
+
+    private CountSeries buildU(List<SpcSubgroup> subgroups) {
+        BigDecimal sumDef = BigDecimal.ZERO, sumN = BigDecimal.ZERO;
+        int k = 0;
+        for (SpcSubgroup s : subgroups) {
+            if (s.getDefectCount() == null || s.getInspectN() == null || s.getInspectN() == 0) continue;
+            sumDef = sumDef.add(BigDecimal.valueOf(s.getDefectCount()));
+            sumN = sumN.add(BigDecimal.valueOf(s.getInspectN()));
+            k++;
+        }
+        if (k == 0 || sumN.signum() == 0) return null;
+        BigDecimal ubar = sumDef.divide(sumN, 6, RoundingMode.HALF_UP);
+        List<BigDecimal> vals = new ArrayList<>(), ucl = new ArrayList<>(), cl = new ArrayList<>(), lcl = new ArrayList<>();
+        for (SpcSubgroup s : subgroups) {
+            if (s.getDefectCount() == null || s.getInspectN() == null || s.getInspectN() == 0) {
+                vals.add(null); ucl.add(null); cl.add(null); lcl.add(null); continue;
+            }
+            BigDecimal n = BigDecimal.valueOf(s.getInspectN());
+            BigDecimal u = BigDecimal.valueOf(s.getDefectCount()).divide(n, 6, RoundingMode.HALF_UP);
+            BigDecimal sd = sqrt(ubar.divide(n, 6, RoundingMode.HALF_UP));
+            vals.add(u); cl.add(ubar);
+            ucl.add(ubar.add(sd.multiply(THREE)));
+            lcl.add(maxZero(ubar.subtract(sd.multiply(THREE))));
+        }
+        return series("U", vals, ucl, cl, lcl);
+    }
+
+    private CountSeries series(String type, List<BigDecimal> vals, List<BigDecimal> ucl, List<BigDecimal> cl, List<BigDecimal> lcl) {
+        CountSeries cs = new CountSeries();
+        cs.setChartType(type); cs.setValues(vals); cs.setUcl(ucl); cs.setCl(cl); cs.setLcl(lcl);
+        return cs;
+    }
+
+    private static final BigDecimal THREE = BigDecimal.valueOf(3);
+
+    private BigDecimal sqrt(BigDecimal v) {
+        if (v.signum() < 0) return BigDecimal.ZERO;
+        return BigDecimal.valueOf(Math.sqrt(v.doubleValue()));
+    }
+
+    private BigDecimal maxZero(BigDecimal v) {
+        return v.signum() < 0 ? BigDecimal.ZERO : v;
+    }
+
     @Override
-    public SpcHistogramVo getHistogram(String paramId) {
+    public SpcHistogramVo getHistogram(String paramId, String stage, String sampleTaskId) {
         SpcHistogramVo vo = new SpcHistogramVo();
         vo.setBins(List.of());
         vo.setFreq(List.of());
@@ -134,10 +320,16 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         if (param == null) {
             return vo;
         }
-        List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(
-                new LambdaQueryWrapper<SpcSubgroup>()
-                        .eq(SpcSubgroup::getParamId, paramId)
-                        .orderByAsc(SpcSubgroup::getSubgroupTime));
+        LambdaQueryWrapper<SpcSubgroup> hw = new LambdaQueryWrapper<SpcSubgroup>()
+                .eq(SpcSubgroup::getParamId, paramId)
+                .orderByAsc(SpcSubgroup::getSubgroupTime);
+        if (stage != null && !stage.isBlank() && !"ALL".equalsIgnoreCase(stage)) {
+            hw.eq(SpcSubgroup::getStage, stage);
+        }
+        if (sampleTaskId != null && !sampleTaskId.isBlank()) {
+            hw.eq(SpcSubgroup::getSampleTaskId, sampleTaskId);
+        }
+        List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(hw);
         List<Double> values = subgroups.stream()
                 .map(SpcSubgroup::getXbar)
                 .filter(Objects::nonNull)
@@ -148,8 +340,12 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         }
         // 均值与整体标准差 σ
         double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
-        double variance = values.stream().mapToDouble(v -> (v - mean) * (v - mean)).sum() / (values.size() - 1);
-        double sigma = Math.sqrt(variance);
+        // 样本数 < 2 时无法估计标准差(除以 0 会得 NaN,Jackson 会序列化为 "NaN" 字符串导致前端崩溃),置 null
+        Double sigma = null;
+        if (values.size() > 1) {
+            double variance = values.stream().mapToDouble(v -> (v - mean) * (v - mean)).sum() / (values.size() - 1);
+            sigma = Math.sqrt(variance);
+        }
         double min = values.stream().mapToDouble(Double::doubleValue).min().orElse(0);
         double max = values.stream().mapToDouble(Double::doubleValue).max().orElse(0);
         int binCount = 12;
@@ -229,8 +425,22 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         BigDecimal rangeR = max.subtract(min);
         subgroup.setXbar(xbar);
         subgroup.setRangeR(rangeR);
+        // 子组标准差(计量型,支持 Xbar-S 图的 S 图):总体标准差 std = sqrt(Σ(xi-xbar)²/n)
+        if (values.size() > 1) {
+            BigDecimal sqSum = BigDecimal.ZERO;
+            for (BigDecimal v : values) {
+                BigDecimal d = v.subtract(xbar);
+                sqSum = sqSum.add(d.multiply(d));
+            }
+            BigDecimal variance = sqSum.divide(BigDecimal.valueOf(values.size()), 6, RoundingMode.HALF_UP);
+            subgroup.setStdDev(BigDecimal.valueOf(Math.sqrt(variance.doubleValue())));
+        }
         if (subgroup.getDataSource() == null || subgroup.getDataSource().isBlank()) {
             subgroup.setDataSource("manual");
+        }
+        // stage 兜底:未传则归为量产监控(ROUTINE),首件验证由 FIA 联动显式置 FIRST
+        if (subgroup.getStage() == null || subgroup.getStage().isBlank()) {
+            subgroup.setStage("ROUTINE");
         }
         subgroup.setOperatorId(currentOperator());
         subgroup.setCreatedAt(LocalDateTime.now());
@@ -302,6 +512,28 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                 } catch (Exception ignored) {
                     // 通知异常不回滚报警
                 }
+                // 回环联动:SPC 量产监控(ROUTINE)报警级异常 -> 停线整改后重新开工,自动触发新一轮首件检验
+                if ("ROUTINE".equals(subgroup.getStage()) && "报警".equals(triggered[1])) {
+                    try {
+                        TransactionTemplate tt = new TransactionTemplate(transactionManager);
+                        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                        tt.execute(status -> {
+                            fiaTaskService.createFromSetup(
+                                    subgroup.getOrgId(),
+                                    subgroup.getWoNo(),
+                                    subgroup.getProductCode(),
+                                    param.getProcName(),
+                                    subgroup.getProductCode(),
+                                    null,
+                                    "SPC 报警级异常(规则 " + triggered[0] + ",实测 " + xbar + ")触发停线整改后自动重开首件");
+                            return null;
+                        });
+                        log.info("[SPC回环] 量产监控报警级异常已触发首件重开: 参数={}, woNo={}, partNo={}",
+                                param.getParamName(), subgroup.getWoNo(), subgroup.getProductCode());
+                    } catch (Exception e) {
+                        log.warn("[SPC回环] 自动创建首件任务失败(忽略): {}", e.getMessage());
+                    }
+                }
                 // 站内信:SPC 报警推送给质量经理/SQE(失败不影响报警)
                 try {
                     notificationService.notifyRoles(List.of("qmanager", "sqe"),
@@ -341,6 +573,15 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                     subgroup.getXbar(), subgroup.getSubgroupTime());
         } catch (Exception e) {
             log.warn("[SPC子组] 回写采集任务失败(忽略): {}", e.getMessage());
+        }
+
+        // 抽样任务归集:绑定 sampleTaskId 则 +1,录满目标数自动结案并触发 CPK 软告警
+        try {
+            if (subgroup.getSampleTaskId() != null && !subgroup.getSampleTaskId().isBlank()) {
+                spcSampleTaskService.incCount(subgroup.getSampleTaskId());
+            }
+        } catch (Exception e) {
+            log.warn("[SPC子组] 回写抽样任务计数失败(忽略): {}", e.getMessage());
         }
 
         return subgroup;

@@ -1,14 +1,16 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
-import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.domain.sqm.entity.SqmKeyPartSn;
 import com.konli.qms.domain.sqm.entity.SqmTraceNode;
 import com.konli.qms.domain.sqm.entity.SqmTraceProductDetail;
 import com.konli.qms.domain.sqm.entity.SqmTraceRawDetail;
+import com.konli.qms.domain.sqm.vo.TraceDirection;
 import com.konli.qms.domain.sqm.vo.TraceDirectionNode;
 import com.konli.qms.domain.sqm.vo.TraceFullTreeVO;
 import com.konli.qms.domain.sqm.vo.TraceLinkRef;
@@ -20,25 +22,23 @@ import com.konli.qms.domain.sqm.mapper.SqmKeyPartSnMapper;
 import com.konli.qms.domain.sqm.mapper.SqmTraceNodeMapper;
 import com.konli.qms.domain.sqm.mapper.SqmTraceProductDetailMapper;
 import com.konli.qms.domain.sqm.mapper.SqmTraceRawDetailMapper;
+import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.service.sqm.SqmTraceService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -48,7 +48,6 @@ import java.util.UUID;
 
 import com.konli.qms.domain.sqm.dto.TraceNodeSaveRequest;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SqmTraceServiceImpl implements SqmTraceService {
@@ -59,24 +58,91 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private final SqmTraceProductDetailMapper sqmTraceProductDetailMapper;
     private final SqmKeyPartSnMapper sqmKeyPartSnMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final com.konli.qms.service.support.OrgIdResolver orgIdResolver;
 
     @Override
-    public List<SqmIncomingLot> listLots(String keyword) {
-        LambdaQueryWrapper<SqmIncomingLot> qw = new LambdaQueryWrapper<>();
-        if (keyword != null && !keyword.isBlank()) {
-            String like = "%" + keyword.trim() + "%";
-            qw.and(w -> w.like(SqmIncomingLot::getLotNo, like)
-                         .or().like(SqmIncomingLot::getPartNo, like)
-                         .or().like(SqmIncomingLot::getPartName, like));
+    public void saveRelation(String parentBarcode, String childBarcode, String relationType, String orgId) {
+        if (parentBarcode == null || childBarcode == null
+                || parentBarcode.isBlank() || childBarcode.isBlank()) {
+            return;
         }
-        List<SqmIncomingLot> lots = sqmIncomingLotMapper.selectList(qw);
-        if (!lots.isEmpty()) {
-            Map<String, String> supplierNameMap = buildSupplierNameMap();
-            for (SqmIncomingLot lot : lots) {
+        // 防自环
+        if (parentBarcode.equals(childBarcode)) {
+            return;
+        }
+        if (orgId == null || orgId.isBlank()) {
+            orgId = (CompanyContext.get() != null) ? CompanyContext.get().orgId() : null;
+        }
+        // 幂等跳过:同边已存在则直接返回
+        Integer cnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM ops.sqm_trace_relation WHERE org_id = ?::uuid"
+                        + " AND parent_barcode = ? AND child_barcode = ? AND relation_type = ? AND is_deleted = '0'",
+                Integer.class, orgId, parentBarcode, childBarcode, relationType);
+        if (cnt != null && cnt > 0) {
+            return;
+        }
+        jdbcTemplate.update(
+                "INSERT INTO ops.sqm_trace_relation (org_id, parent_barcode, child_barcode, relation_type, is_deleted, created_at)"
+                        + " VALUES (?::uuid, ?, ?, ?, '0', now())",
+                orgId, parentBarcode, childBarcode, relationType);
+    }
+
+    @Override
+    public List<SqmIncomingLot> listLots(String keyword, String supplierId, Boolean iqcPass) {
+        LambdaQueryWrapper<SqmIncomingLot> w = new LambdaQueryWrapper<>();
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String kw = keyword.trim();
+            w.and(k -> k.like(SqmIncomingLot::getLotNo, kw)
+                    .or().like(SqmIncomingLot::getPartNo, kw)
+                    .or().like(SqmIncomingLot::getPartName, kw));
+        }
+        if (supplierId != null && !supplierId.trim().isEmpty()) {
+            w.eq(SqmIncomingLot::getSupplierId, supplierId.trim());
+        }
+        if (iqcPass != null) {
+            w.eq(SqmIncomingLot::getIqcPass, iqcPass);
+        }
+        w.orderByDesc(SqmIncomingLot::getIncomingDate);
+        return sqmIncomingLotMapper.selectList(w);
+    }
+
+    @Override
+    public PageResult<SqmIncomingLot> listLotsPage(String keyword, String supplierId, String orgId, int page, int size) {
+        LambdaQueryWrapper<SqmIncomingLot> w = new LambdaQueryWrapper<>();
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String kw = keyword.trim();
+            w.and(k -> k.like(SqmIncomingLot::getLotNo, kw)
+                    .or().like(SqmIncomingLot::getPartNo, kw)
+                    .or().like(SqmIncomingLot::getPartName, kw));
+        }
+        if (supplierId != null && !supplierId.trim().isEmpty()) {
+            w.eq(SqmIncomingLot::getSupplierId, supplierId.trim());
+        }
+        // 组织隔离: 走查询专用解析器
+        // - 普通用户: 强制按登录上下文 orgId 过滤(防越权看别公司)
+        // - 管理员: 传了 orgCode/UUID 则解析过滤, 未传则 null(全局视图)
+        String resolvedOrg = orgIdResolver.resolveForQuery(orgId);
+        if (resolvedOrg != null) {
+            w.eq(SqmIncomingLot::getOrgId, resolvedOrg);
+        }
+        w.orderByDesc(SqmIncomingLot::getIncomingDate);
+        IPage<SqmIncomingLot> ip = sqmIncomingLotMapper.selectPage(new Page<>(page, size), w);
+        // 批量回填供应商名(sqm_incoming_lot.supplier_id 为外键, supplierName 为非持久化展示字段)
+        List<SqmIncomingLot> records = ip.getRecords();
+        if (!records.isEmpty()) {
+            Map<String, String> supplierNameMap = new HashMap<>();
+            try {
+                List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
+                        "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
+                for (Map<String, Object> s : suppliers) {
+                    supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
+                }
+            } catch (EmptyResultDataAccessException ignored) { /* 无供应商时忽略 */ }
+            for (SqmIncomingLot lot : records) {
                 lot.setSupplierName(lot.getSupplierId() == null ? null : supplierNameMap.get(lot.getSupplierId()));
             }
         }
-        return lots;
+        return new PageResult<>(records, ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -84,6 +150,241 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         if (lotNo == null || lotNo.isBlank()) return null;
         return sqmIncomingLotMapper.selectOne(
                 new LambdaQueryWrapper<SqmIncomingLot>().eq(SqmIncomingLot::getLotNo, lotNo.trim()));
+    }
+
+    @Override
+    public java.util.Map<String, Object> getSourceDetail(String sourceType, String key) {
+        if (key == null || key.isBlank()) return new HashMap<>();
+        String sql;
+        switch (sourceType) {
+            case "finished":
+                sql = "SELECT * FROM qms.finished_goods_inspection WHERE category='成品' AND prod_batch_or_sn = ? LIMIT 1";
+                break;
+            case "semi":
+                sql = "SELECT * FROM qms.finished_goods_inspection WHERE category='半成品' AND prod_batch_or_sn = ? LIMIT 1";
+                break;
+            case "critical":
+                // 绑定表节点可能以 material_barcode(被装子件) / product_barcode(父产品) / work_order_no(工单) / product_material_no(料号聚合) 任一身份命中,
+                // 全部 OR 覆盖, 避免子件节点用自身 material_barcode 查不到导致详情为空。
+                sql = "SELECT * FROM qms.critical_material_binding WHERE product_barcode = ? OR work_order_no = ? OR material_barcode = ? OR product_material_no = ? LIMIT 1";
+                break;
+            case "material":
+            default:
+                sql = "SELECT * FROM qms.material_inspection WHERE material_barcode = ? OR material_batch_no = ? LIMIT 1";
+                break;
+        }
+        try {
+            // 按占位符数量动态填充参数(key 重复使用), 兼容 1/2/4 个 ? 的各分支
+            int ph = 0;
+            for (int i = 0; i < sql.length(); i++) if (sql.charAt(i) == '?') ph++;
+            Object[] args = new Object[ph];
+            java.util.Arrays.fill(args, key);
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, args);
+            if (rows.isEmpty()) return new HashMap<>();
+            Map<String, Object> src = rows.get(0);
+            // 返回数据库原始 snake_case 列名(与 SourceDetailDialog 的字段定义一一对应, 不做 camel 转换)
+            Map<String, Object> raw = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : src.entrySet()) {
+                raw.put(e.getKey(), e.getValue());
+            }
+            return raw;
+        } catch (EmptyResultDataAccessException e) {
+            return new HashMap<>();
+        }
+    }
+
+    // ====== 方案 B: 源表分页 ======
+
+    @Override
+    public PageResult<Map<String, Object>> sourcePage(String type, String keyword, String plantCode, String bizType, int page, int size) {
+        if (type == null) type = "all";
+        if ("all".equals(type)) {
+            // 总表: 分别计数各类型, 返回各表总数(前端按 tab 分别调 material/semi/finished 取数)
+            Map<String, Object> counts = new LinkedHashMap<>();
+            counts.put("material", countSource("material", null, plantCode));
+            counts.put("semi", countSource("semi", null, plantCode));
+            counts.put("finished", countSource("finished", null, plantCode));
+            List<Map<String, Object>> one = new ArrayList<>();
+            one.add(counts);
+            return new PageResult<>(one, 1, 1, 1);
+        }
+        if ("union".equals(type)) {
+            // 单张大表全量: 两源表三块 UNION, bizType 可进一步筛选(material/semi/finished)
+            return unionPage(keyword, plantCode, bizType, page, size);
+        }
+        // 单类型分页查询(单表, 统一精简列, 与 union 大表列结构一致)
+        String baseSql = sourceBaseSql(type);
+        String where = sourceWhere(type, keyword, plantCode);
+        String countSql = "SELECT COUNT(*) FROM " + baseSql + " " + where;
+        Integer total = jdbcTemplate.queryForObject(countSql, Integer.class);
+        if (total == null) total = 0;
+        int offset = (page - 1) * size;
+        String dataSql = singleSelectColumns(type) + " FROM " + baseSql + " " + where
+                + " ORDER BY (SELECT 1) LIMIT " + size + " OFFSET " + offset;
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(dataSql);
+        List<Map<String, Object>> camelRows = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> camel = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : r.entrySet()) {
+                camel.put(toCamel(e.getKey()), e.getValue());
+            }
+            camelRows.add(camel);
+        }
+        return new PageResult<>(camelRows, total, page, size);
+    }
+
+    /**
+     * 单表(material/semi/finished)列表统一精简列投影, 与 unionPage 列结构一致:
+     * biz_type / biz_key / name / code / batch_no / barcode / qty / unit / node_date / plant_code / plant_name
+     */
+    private String singleSelectColumns(String type) {
+        switch (type) {
+            case "material":
+                return "SELECT 'material' AS biz_type, COALESCE(material_barcode, material_batch_no) AS biz_key,"
+                        + " material_name AS name, material_code AS code, material_batch_no AS batch_no, material_barcode AS barcode,"
+                        + " supplier_name AS supplier_name, supplier_code AS supplier_code,"
+                        + " inspection_request_no AS inspect_request_no, record_no AS record_no,"
+                        + " inspection_result AS inspect_result, inspection_date AS node_date,"
+                        + " submitted_qty AS qty, unit AS unit, plant_code AS plant_code, plant_name AS plant_name";
+            case "semi":
+            case "finished":
+                return "SELECT '" + type + "' AS biz_type, prod_batch_or_sn AS biz_key,"
+                        + " product_name AS name, material_code AS code, prod_batch_or_sn AS batch_no, prod_batch_or_sn AS barcode,"
+                        + " production_order_no AS production_order,"
+                        + " inspection_result AS inspect_result, production_date AS node_date,"
+                        + " inspected_qty AS qty, unit AS unit, plant_code AS plant_code, plant_name AS plant_name";
+            default:
+                return "SELECT *";
+        }
+    }
+
+    /**
+     * 单张大表全量: UNION ALL 两源表三块(material / 半成品 / 成品), 统一精简列投影, 服务端分页。
+     * 不含 critical_material_binding(建边表, 仅用于追溯关系, 非源表数据)。
+     * 每行携带 bizType(bizKey 供详情/追溯) + 公共展示列(name/code/batch_no/barcode/qty/unit/node_date/plant_*)。
+     */
+    private PageResult<Map<String, Object>> unionPage(String keyword, String plantCode, String bizType, int page, int size) {
+        String materialPart =
+                "SELECT 'material' AS biz_type, COALESCE(material_barcode, material_batch_no) AS biz_key," +
+                " 'material_inspection' AS source_table, material_name AS name, material_code AS code," +
+                " material_batch_no AS batch_no, material_barcode AS barcode, submitted_qty AS qty, unit AS unit," +
+                " inspection_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
+                " FROM qms.material_inspection";
+        String semiPart =
+                "SELECT 'semi' AS biz_type, prod_batch_or_sn AS biz_key, 'finished_goods_inspection' AS source_table," +
+                " product_name AS name, material_code AS code, prod_batch_or_sn AS batch_no, prod_batch_or_sn AS barcode," +
+                " inspected_qty AS qty, unit AS unit, production_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
+                " FROM qms.finished_goods_inspection WHERE category='半成品'";
+        String finishedPart =
+                "SELECT 'finished' AS biz_type, prod_batch_or_sn AS biz_key, 'finished_goods_inspection' AS source_table," +
+                " product_name AS name, material_code AS code, prod_batch_or_sn AS batch_no, prod_batch_or_sn AS barcode," +
+                " inspected_qty AS qty, unit AS unit, production_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
+                " FROM qms.finished_goods_inspection WHERE category='成品'";
+        String unionSql = materialPart + " UNION ALL " + semiPart + " UNION ALL " + finishedPart;
+
+        // 外层过滤: 来源类型 + 关键字(统一列名)
+        List<String> conds = new ArrayList<>();
+        if (bizType != null && !bizType.isBlank() && !"all".equals(bizType)) {
+            conds.add(" biz_type = " + quote(bizType));
+        }
+        if (plantCode != null && !plantCode.isBlank()) {
+            conds.add(" plant_code = " + quote(plantCode));
+        }
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String kwq = quote("%" + keyword.trim() + "%");
+            conds.add(" (code ILIKE " + kwq + " OR name ILIKE " + kwq + " OR batch_no ILIKE " + kwq + " OR barcode ILIKE " + kwq + ")");
+        }
+        String where = "";
+        if (!conds.isEmpty()) {
+            StringBuilder sb = new StringBuilder(" WHERE");
+            for (int i = 0; i < conds.size(); i++) sb.append(i == 0 ? "" : " AND").append(conds.get(i));
+            where = sb.toString();
+        }
+        String wrapped = "SELECT * FROM (" + unionSql + ") _u" + where;
+        Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM (" + unionSql + ") _c" + where, Long.class);
+        if (total == null) total = 0L;
+        int offset = (page - 1) * size;
+        String dataSql = wrapped + " ORDER BY biz_type, batch_no LIMIT " + size + " OFFSET " + offset;
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(dataSql);
+        List<Map<String, Object>> camelRows = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> camel = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : r.entrySet()) {
+                camel.put(toCamel(e.getKey()), e.getValue());
+            }
+            camelRows.add(camel);
+        }
+        return new PageResult<>(camelRows, total, page, size);
+    }
+
+    private long countSource(String type, String keyword, String plantCode) {
+        String baseSql = sourceBaseSql(type);
+        String where = sourceWhere(type, keyword, plantCode);
+        Integer c = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + baseSql + " " + where, Integer.class);
+        return c == null ? 0L : c;
+    }
+
+    private String sourceBaseSql(String type) {
+        switch (type) {
+            case "material":
+                return "qms.material_inspection";
+            case "semi":
+                return "qms.finished_goods_inspection WHERE category='半成品'";
+            case "finished":
+                return "qms.finished_goods_inspection WHERE category='成品'";
+            default:
+                return "qms.material_inspection";
+        }
+    }
+
+    private String sourceWhere(String type, String keyword, String plantCode) {
+        List<String> conds = new ArrayList<>();
+        if (plantCode != null && !plantCode.isBlank()) {
+            conds.add(" plant_code = " + quote(plantCode));
+        }
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            String kw = keyword.trim();
+            String kwq = quote("%" + kw + "%");
+            if (type.equals("material")) {
+                conds.add(" (material_code ILIKE " + kwq + " OR material_name ILIKE " + kwq
+                        + " OR material_barcode ILIKE " + kwq + " OR material_batch_no ILIKE " + kwq + ")");
+            } else {
+                conds.add(" (prod_batch_or_sn ILIKE " + kwq + " OR material_code ILIKE " + kwq
+                        + " OR product_name ILIKE " + kwq + ")");
+            }
+        }
+        if (conds.isEmpty()) {
+            return "";
+        }
+        boolean hasBaseWhere = type.equals("semi") || type.equals("finished");
+        StringBuilder sb = new StringBuilder();
+        sb.append(hasBaseWhere ? " AND" : " WHERE");
+        for (int i = 0; i < conds.size(); i++) {
+            sb.append(i == 0 ? "" : " AND").append(conds.get(i));
+        }
+        return sb.toString();
+    }
+
+    private String quote(String s) {
+        return "'" + s.replace("'", "''") + "'";
+    }
+
+    private String bizKeyOf(String type, Map<String, Object> camel) {
+        switch (type) {
+            case "material":
+                // 物料条码偶为空时回退物料批次, 保证详情/追溯 key 非空
+                return str(camel.get("materialBarcode")).isBlank()
+                        ? str(camel.get("materialBatchNo")) : str(camel.get("materialBarcode"));
+            case "semi":
+            case "finished":
+                return str(camel.get("prodBatchOrSn"));
+            default:
+                return "";
+        }
+    }
+
+    private static String str(Object o) {
+        return o == null ? "" : String.valueOf(o);
     }
 
     @Override
@@ -115,17 +416,15 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public SqmIncomingLot createLot(SqmIncomingLot lot) {
-        // 将哨兵值 "ROOT" 解析为真实组织 UUID
-        lot.setOrgId(resolveOrgId(lot.getOrgId()));
         // 同一公司下批次号唯一:重复入库直接返回已存在批次,避免产生重复来料节点
         if (lot.getOrgId() != null && lot.getLotNo() != null) {
             SqmIncomingLot exist = sqmIncomingLotMapper.selectOne(new LambdaQueryWrapper<SqmIncomingLot>()
                     .eq(SqmIncomingLot::getOrgId, lot.getOrgId())
                     .eq(SqmIncomingLot::getLotNo, lot.getLotNo()));
             if (exist != null) {
-                throw new BusinessException(409, "来料批次 " + lot.getLotNo() + " 已入库, 请勿重复创建");
+                return exist;
             }
         }
         if (lot.getLotNo() == null) {
@@ -148,7 +447,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         node.setNodeType("incoming");
         node.setNodeName(lot.getPartName() != null ? lot.getPartName() : lot.getLotNo());
         node.setBatchNo(lot.getLotNo());
-        node.setMaterialCode(lot.getPartNo());
         node.setQty(lot.getQty());
         node.setUnit(lot.getUnit());
         node.setNodeDate(lot.getIncomingDate() != null ? lot.getIncomingDate() : LocalDate.now());
@@ -169,8 +467,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     @Override
     @Transactional
     public SqmTraceNode createNode(SqmTraceNode node) {
-        // 将哨兵值 "ROOT" 解析为真实组织 UUID
-        node.setOrgId(resolveOrgId(node.getOrgId()));
         if (node.getTreeLevel() == null) {
             node.setTreeLevel(0);
         }
@@ -193,21 +489,18 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             size = 20;
         }
 
-        String resolvedOrgId = resolveOrgId(orgId);
-
         String selectCols = "SELECT n.id, n.root_lot_id, l.lot_no AS root_lot_no, n.node_type, n.node_name, " +
-                "n.batch_no, n.material_code, n.qty, n.unit, n.node_date, n.supplier_id, s.name AS supplier_name, " +
+                "n.batch_no, n.qty, n.unit, n.node_date, n.supplier_id, s.name AS supplier_name, " +
                 "n.remark, n.tree_level, n.is_valid ";
         StringBuilder fromWhere = new StringBuilder(
                 "FROM ops.sqm_trace_node n " +
                 "LEFT JOIN ops.sqm_incoming_lot l ON n.root_lot_id = l.id " +
                 "LEFT JOIN ops.sqm_supplier s ON n.supplier_id = s.id " +
-                "LEFT JOIN ops.sqm_trace_product_detail pd ON pd.node_id = n.id " +
                 "WHERE n.is_deleted = false");
         List<Object> args = new ArrayList<>();
-        if (resolvedOrgId != null && !resolvedOrgId.isBlank()) {
+        if (orgId != null && !orgId.isBlank()) {
             fromWhere.append(" AND n.org_id = CAST(? AS uuid)");
-            args.add(resolvedOrgId);
+            args.add(orgId);
         }
 
         if (nodeType != null && !nodeType.isBlank()) {
@@ -235,10 +528,8 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             }
         }
         if (keyword != null && !keyword.isBlank()) {
-            fromWhere.append(" AND (n.node_name ILIKE ? OR n.batch_no ILIKE ? OR n.material_code ILIKE ? OR COALESCE(s.name,'') ILIKE ? OR COALESCE(pd.product_name,'') ILIKE ?)");
+            fromWhere.append(" AND (n.node_name ILIKE ? OR n.batch_no ILIKE ? OR COALESCE(s.name,'') ILIKE ?)");
             String like = "%" + keyword.trim() + "%";
-            args.add(like);
-            args.add(like);
             args.add(like);
             args.add(like);
             args.add(like);
@@ -261,9 +552,8 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                     vo.setRootLotNo(rs.getString("root_lot_no"));
                     vo.setNodeType(rs.getString("node_type"));
                     vo.setNodeName(rs.getString("node_name"));
-        vo.setBatchNo(rs.getString("batch_no"));
-        vo.setMaterialCode(rs.getString("material_code"));
-        vo.setQty(rs.getBigDecimal("qty"));
+                    vo.setBatchNo(rs.getString("batch_no"));
+                    vo.setQty(rs.getBigDecimal("qty"));
                     vo.setUnit(rs.getString("unit"));
                     java.sql.Date d = rs.getDate("node_date");
                     vo.setNodeDate(d == null ? null : d.toLocalDate().toString());
@@ -379,56 +669,23 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
     @Override
     public TraceFullTreeVO getFullTraceTree(String rootLotId) {
-        // 1) 收集连通节点 id: 沿 link 上溯到根再下溯, 用路径数组防环(避免 link 成环导致 CTE 死循环)
-        String idSql = "WITH RECURSIVE up AS (" +
-                "  SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node" +
-                "    WHERE root_lot_id = ?::uuid AND is_deleted = false" +
+        String sql = "WITH RECURSIVE trace_tree AS (" +
+                "  SELECT * FROM ops.sqm_trace_node WHERE root_lot_id = ?::uuid AND is_deleted = false" +
+                "    AND id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false)" +
                 "  UNION ALL" +
-                "  SELECT l.parent_node_id, up.path || l.parent_node_id" +
-                "    FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id" +
-                "    WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path)))," +
-                " root_ids AS (SELECT id FROM up WHERE id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false))," +
-                " down AS (" +
-                "  SELECT id, ARRAY[id] AS path FROM root_ids" +
-                "  UNION ALL" +
-                "  SELECT l.child_node_id, down.path || l.child_node_id" +
-                "    FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id" +
-                "    WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))" +
-                " SELECT id FROM down";
-        List<Map<String, Object>> idRows = jdbcTemplate.queryForList(idSql, rootLotId);
-        if (idRows.isEmpty()) {
-            // 回退: rootLotId 实际可能是 incoming_lot 表主键(id), 而该批次的追溯数据挂在同 batch_no 的 trace node 上。
-            // 通过 lot_no = batch_no 反查对应节点, 再按节点追溯整棵连通树, 避免列表"追溯"落空只显示单节点。
-            try {
-                Map<String, Object> nodeRow = jdbcTemplate.queryForMap(
-                        "SELECT n.id FROM ops.sqm_trace_node n JOIN ops.sqm_incoming_lot l ON n.batch_no = l.lot_no"
-                                + " WHERE l.id = ?::uuid AND n.is_deleted = false LIMIT 1", rootLotId);
-                return getFullTraceTreeByRootNode(String.valueOf(nodeRow.get("id")));
-            } catch (EmptyResultDataAccessException noNode) {
-                // 无关联追溯节点, 走下方空树兜底
-            }
-            TraceFullTreeVO empty = new TraceFullTreeVO();
-            empty.setRootLotId(rootLotId);
-            SqmIncomingLot lot0 = sqmIncomingLotMapper.selectById(rootLotId);
-            if (lot0 != null) {
-                empty.setRootLotNo(lot0.getLotNo());
-                empty.setIsKeyPart(lot0.getIsKeyPart());
-            }
-            return empty;
-        }
-        Set<String> ids = new HashSet<>();
-        for (Map<String, Object> r : idRows) {
-            ids.add(String.valueOf(r.get("id")));
-        }
-        String in = inClause(ids);
-        List<SqmTraceNode> nodes = jdbcTemplate.query(
-                "SELECT n.* FROM ops.sqm_trace_node n WHERE n.id IN (" + in + ") AND n.is_deleted = false ORDER BY n.tree_level, n.node_date",
-                new BeanPropertyRowMapper<>(SqmTraceNode.class));
+                "  SELECT n.* FROM ops.sqm_trace_node n" +
+                "  JOIN ops.sqm_trace_link l ON l.child_node_id = n.id" +
+                "  JOIN trace_tree t ON t.id = l.parent_node_id" +
+                "  WHERE n.is_deleted = false" +
+                ") SELECT * FROM trace_tree ORDER BY tree_level, node_date";
+        List<SqmTraceNode> nodes = jdbcTemplate.query(sql,
+                new BeanPropertyRowMapper<>(SqmTraceNode.class), rootLotId);
 
         // 供应商名映射,供节点展示供应商
         Map<String, String> supplierNameMap = new HashMap<>();
         try {
-            List<Map<String, Object>> suppliers = querySupplierRows();
+            List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
+                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
             for (Map<String, Object> s : suppliers) {
                 supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
             }
@@ -445,7 +702,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             vo.setNodeType(n.getNodeType());
             vo.setNodeName(n.getNodeName());
             vo.setBatchNo(n.getBatchNo());
-            vo.setMaterialCode(n.getMaterialCode());
             vo.setQty(n.getQty());
             vo.setUnit(n.getUnit());
             vo.setNodeDate(n.getNodeDate() == null ? null : n.getNodeDate().toString());
@@ -459,34 +715,18 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             voMap.put(n.getId(), vo);
         }
 
-        // 2) 纯 link 建边: 将 child 挂到其所有 link 父的 children(支持多父 DAG, 不再吞边)
-        List<Map<String, Object>> edges = jdbcTemplate.queryForList(
-                "SELECT l.parent_node_id AS parent_id, l.child_node_id AS child_id FROM ops.sqm_trace_link l"
-                        + " WHERE l.is_deleted = false AND l.parent_node_id IN (" + in + ") AND l.child_node_id IN (" + in + ")");
-        Set<String> childIds = new HashSet<>();
-        for (Map<String, Object> e : edges) {
-            String pid = String.valueOf(e.get("parent_id"));
-            String cid = String.valueOf(e.get("child_id"));
-            childIds.add(cid);
-            TraceNodeTreeVO p = voMap.get(pid);
-            TraceNodeTreeVO c = voMap.get(cid);
-            if (p != null && c != null && !p.getChildren().contains(c)) {
-                p.getChildren().add(c);
-                c.setParentNodeId(pid);
+        TraceNodeTreeVO root = null;
+        for (SqmTraceNode n : nodes) {
+            TraceNodeTreeVO vo = voMap.get(n.getId());
+            if (n.getParentNodeId() == null) {
+                root = vo;
+            } else {
+                TraceNodeTreeVO parent = voMap.get(n.getParentNodeId());
+                if (parent != null) {
+                    parent.getChildren().add(vo);
+                }
             }
         }
-        // 3) 选根: 连通集内无入边(不在 childIds)者; 兜底取第一个
-        String chosen = null;
-        for (String id : voMap.keySet()) {
-            if (!childIds.contains(id)) {
-                chosen = id;
-                break;
-            }
-        }
-        if (chosen == null) {
-            chosen = voMap.keySet().iterator().next();
-        }
-        TraceNodeTreeVO root = voMap.get(chosen);
 
         TraceFullTreeVO result = new TraceFullTreeVO();
         result.setRootLotId(rootLotId);
@@ -525,16 +765,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             return camel;
         } catch (EmptyResultDataAccessException e) {
             return new HashMap<>();
-        }
-    }
-
-    private static boolean isValidUuid(String s) {
-        if (s == null) return false;
-        try {
-            java.util.UUID.fromString(s);
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
         }
     }
 
@@ -627,21 +857,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 parentId, childId);
     }
 
-    /**
-     * 判断 candidateId 是否为 ancestorId 的下游节点(沿 sqm_trace_link 向下递归)。
-     * 用于挂载前防御: 若被挂节点(parent)已是引用节点(ref)的下游, 新增 link 会形成环。
-     */
-    private boolean isDescendantOf(String ancestorId, String candidateId) {
-        Integer cnt = jdbcTemplate.queryForObject(
-                "WITH RECURSIVE d AS (" +
-                "  SELECT child_node_id FROM ops.sqm_trace_link WHERE parent_node_id = ?::uuid AND is_deleted = false" +
-                "  UNION ALL" +
-                "  SELECT l.child_node_id FROM ops.sqm_trace_link l JOIN d ON d.child_node_id = l.parent_node_id WHERE l.is_deleted = false" +
-                ") SELECT COUNT(*) FROM d WHERE child_node_id = ?::uuid",
-                Integer.class, ancestorId, candidateId);
-        return cnt != null && cnt > 0;
-    }
-
     /** 在 parentToChildren 邻接表中, 判断 from 是否能到达 to(用于多根 DAG 选根)。 */
     private boolean canReach(String from, String to, Map<String, List<String>> parentToChildren) {
         if (from.equals(to)) {
@@ -669,14 +884,11 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private Set<String> componentIds(String seed) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "WITH RECURSIVE up AS ("
-                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
+                        + " SELECT id FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
                         + " UNION ALL"
-                        + " SELECT l.parent_node_id, up.path || l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id"
-                        + "   WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path))),"
+                        + " SELECT l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id WHERE l.is_deleted = false),"
                         + " root_ids AS (SELECT id FROM up WHERE id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false)),"
-                        + " down AS (SELECT id, ARRAY[id] AS path FROM root_ids"
-                        + "   UNION ALL SELECT l.child_node_id, down.path || l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id"
-                        + "   WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))"
+                        + " down AS (SELECT id FROM root_ids UNION ALL SELECT l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id WHERE l.is_deleted = false)"
                         + " SELECT id FROM down",
                 seed);
         Set<String> ids = new HashSet<>();
@@ -704,17 +916,14 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     @Transactional
     public SqmTraceNode saveNode(TraceNodeSaveRequest req) {
         if (req.getNodeType() == null || req.getNodeType().isBlank()) {
-            throw new BusinessException(400, "nodeType 必填(incoming/raw/semi/ship/customer)");
+            throw new BusinessException(400, "nodeType 必填(semi/ship/customer)");
         }
-        if (!List.of("incoming", "raw", "semi", "ship", "customer").contains(req.getNodeType())) {
-            throw new BusinessException(400, "nodeType 仅支持 incoming/raw/semi/ship/customer");
+        if (!List.of("semi", "ship", "customer").contains(req.getNodeType())) {
+            throw new BusinessException(400, "nodeType 仅支持 semi/ship/customer");
         }
-        // 将哨兵值 "ROOT" 解析为真实组织 UUID
-        String resolvedOrgId = resolveOrgId(req.getOrgId());
-        if (resolvedOrgId == null || resolvedOrgId.isBlank()) {
+        if (req.getOrgId() == null || req.getOrgId().isBlank()) {
             throw new BusinessException(400, "orgId 必填");
         }
-        req.setOrgId(resolvedOrgId);
 
         String id = genId();
         SqmTraceNode node = new SqmTraceNode();
@@ -728,7 +937,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         node.setNodeDate(req.getNodeDate() != null ? req.getNodeDate() : LocalDate.now());
         node.setSupplierId(req.getSupplierId());
         node.setRemark(req.getRemark());
-        node.setMaterialCode(req.getMaterialCode());
         node.setQualificationType(req.getQualificationType());
         node.setIsValid("是");
 
@@ -744,16 +952,11 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             node.setTreeLevel((parent.getTreeLevel() != null ? parent.getTreeLevel() : 0) + 1);
             parentIdForLink = parent.getId();
         } else {
-            // 根节点: 允许挂载到来料批次下
-            node.setRootLotId(req.getRootLotId());
+            node.setRootLotId(null);
             node.setRootNodeId(id);                         // 自己即为树根
             node.setTreeLevel(0);
         }
         sqmTraceNodeMapper.insert(node);
-        // 环防御(防御性, 对齐 attachComponent): 若所选父已是本节点下游, 会形成循环
-        if (parentIdForLink != null && isDescendantOf(id, parentIdForLink)) {
-            throw new BusinessException(400, "目标父节点已是该节点的下游, 挂载会形成循环, 请先解除原有关系");
-        }
         insertLink(parentIdForLink, id, node.getOrgId(), "compose");
 
         writeDetail(node, req);
@@ -781,7 +984,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 rd.setWoQty(node.getQty());
                 sqmTraceRawDetailMapper.insert(rd);
                 break;
-            default: // incoming / semi / ship (都写入产品明细)
+            default: // semi / ship
                 SqmTraceProductDetail pd = new SqmTraceProductDetail();
                 pd.setNodeId(node.getId());
                 pd.setOrgId(node.getOrgId());
@@ -822,11 +1025,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 req.getUnit());
     }
 
-    /**
-     * 为 parent 挂载/创建子节点(组成关系)。
-     * DAG 模式: sqm_trace_link 是父子关系的唯一真相源(支持多父); parent_node_id 仅作去规范化"主父指针"。
-     * 跨聚合根挂载时, 会把 ref 整棵下游子树 reroot 到新父(加父级 = 移动整个子树)。
-     */
     @Override
     @Transactional
     public SqmTraceNode attachComponent(String parentId, TraceNodeSaveRequest.ComponentItem c) {
@@ -845,111 +1043,8 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             if (ref == null) {
                 throw new BusinessException(400, "引用的节点不存在: " + c.getRefNodeId());
             }
-            if (!parent.getOrgId().equals(ref.getOrgId())) {
-                throw new BusinessException(400, "不能跨组织引用节点");
-            }
-            // 防御: 防止节点挂载到自己
-            if (parent.getId().equals(ref.getId())) {
-                throw new BusinessException(400, "不能将节点挂载到自身");
-            }
-            // 防御(深层环): 若 parent 本就是 ref 的下游, 新增 link(parent→ref) 会形成环(A→..→B→A)
-            if (isDescendantOf(ref.getId(), parent.getId())) {
-                throw new BusinessException(400, "目标节点已是该节点的下游, 挂载会形成循环, 请先解除原有关系");
-            }
-            // 防御: 检测直接反向链接(A→B 且 B→A)
-            Integer reverseCount = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM ops.sqm_trace_link" +
-                    " WHERE parent_node_id = ?::uuid AND child_node_id = ?::uuid AND is_deleted = false",
-                    Integer.class, ref.getId(), parent.getId());
-            if (reverseCount != null && reverseCount > 0) {
-                throw new BusinessException(400, "节点已存在相反的组成关系（逆向链接），无法重复挂载，请先解除原有关系");
-            }
-            // 不再 reroot 迁移整棵子树: 按被引用节点类型分别处理, 原树始终保留(避免"添加已有节点却搬走整棵树")
-            if (isMaterialNode(ref.getNodeType())) {
-                // 物料(来料/物料行): 仅建立多父 link 共享, 不复制、不搬移原树
-                BigDecimal refUsage = c.getUsageQty();
-                if (refUsage != null && refUsage.signum() > 0) {
-                    if (isMaterialNode(parent.getNodeType()) && parent.getBatchNo() != null) {
-                        deductLotUsage(parent.getOrgId(), parent.getBatchNo(), refUsage);
-                        if (parent.getQty() != null) {
-                            BigDecimal left = parent.getQty().subtract(refUsage);
-                            jdbcTemplate.update(
-                                    "UPDATE ops.sqm_trace_node SET qty = ?::numeric, updated_at = NOW() WHERE id = ?::uuid AND is_deleted = false",
-                                    left.signum() < 0 ? BigDecimal.ZERO : left, parent.getId());
-                        }
-                    }
-                    if (isMaterialNode(ref.getNodeType()) && ref.getBatchNo() != null) {
-                        deductLotUsage(parent.getOrgId(), ref.getBatchNo(), refUsage);
-                        if (ref.getQty() != null) {
-                            BigDecimal left = ref.getQty().subtract(refUsage);
-                            jdbcTemplate.update(
-                                    "UPDATE ops.sqm_trace_node SET qty = ?::numeric, updated_at = NOW() WHERE id = ?::uuid AND is_deleted = false",
-                                    left.signum() < 0 ? BigDecimal.ZERO : left, ref.getId());
-                        }
-                    }
-                }
-                insertLink(parent.getId(), ref.getId(), parent.getOrgId(), "compose");
-                // 同步去规范化主父指针: 同根内给原本无父的独立节点加父时, 仅插 link 会导致 parent_node_id 与 link 表漂移
-                String parentRoot = parent.getRootNodeId() != null ? parent.getRootNodeId() : parent.getId();
-                String refRoot = ref.getRootNodeId() != null ? ref.getRootNodeId() : ref.getId();
-                if (parentRoot.equals(refRoot) && ref.getParentNodeId() == null) {
-                    jdbcTemplate.update(
-                            "UPDATE ops.sqm_trace_node SET parent_node_id = ?::uuid, updated_at = NOW() WHERE id = ?::uuid AND is_deleted = false",
-                            parent.getId(), ref.getId());
-                }
-                return ref;
-            } else {
-                // 去重: 父节点下已存在同 batch_no + 同 node_type 的直接子节点时复用, 不再克隆(避免重复 link)
-                if (ref.getBatchNo() != null) {
-                    List<String> existIds = jdbcTemplate.query(
-                            "SELECT c.id FROM ops.sqm_trace_link l"
-                            + " JOIN ops.sqm_trace_node c ON c.id = l.child_node_id"
-                            + " WHERE l.parent_node_id = ?::uuid AND l.is_deleted = false AND c.is_deleted = false"
-                            + " AND c.node_type = ? AND c.batch_no = ? LIMIT 1",
-                            (rs, i) -> rs.getString("id"),
-                            parent.getId(), ref.getNodeType(), ref.getBatchNo());
-                    if (existIds != null && !existIds.isEmpty()) {
-                        return sqmTraceNodeMapper.selectById(existIds.get(0));
-                    }
-                }
-                // 半成品/成品等: 复制为新子节点(新 UUID), 原节点及其子树保留不搬移
-                String newId = genId();
-                SqmTraceNode clone = new SqmTraceNode();
-                clone.setId(newId);
-                clone.setOrgId(parent.getOrgId());
-                clone.setNodeType(ref.getNodeType());
-                clone.setParentNodeId(parent.getId());
-                clone.setRootLotId(parent.getRootLotId());
-                clone.setRootNodeId(parent.getRootNodeId());
-                clone.setTreeLevel((parent.getTreeLevel() != null ? parent.getTreeLevel() : 0) + 1);
-                clone.setIsValid(ref.getIsValid() != null ? ref.getIsValid() : "是");
-                clone.setNodeName(ref.getNodeName());
-                clone.setBatchNo(ref.getBatchNo());
-                clone.setMaterialCode(ref.getMaterialCode());
-                clone.setQty(c.getUsageQty());
-                clone.setUnit(c.getUnit());
-                clone.setNodeDate(LocalDate.now());
-                clone.setSupplierId(ref.getSupplierId());
-                sqmTraceNodeMapper.insert(clone);
-                // 复制被引半成品/成品的明细(若有)
-                if ("semi".equals(ref.getNodeType()) || "ship".equals(ref.getNodeType())) {
-                    SqmTraceProductDetail pd = sqmTraceProductDetailMapper.selectOne(
-                            new LambdaQueryWrapper<SqmTraceProductDetail>().eq(SqmTraceProductDetail::getNodeId, ref.getId()));
-                    if (pd != null) {
-                        SqmTraceProductDetail npd = new SqmTraceProductDetail();
-                        npd.setNodeId(newId);
-                        npd.setOrgId(parent.getOrgId());
-                        npd.setProductName(pd.getProductName());
-                        npd.setMaterialCode(pd.getMaterialCode());
-                        npd.setBatchNo(pd.getBatchNo());
-                        npd.setInspectQty(c.getUsageQty());
-                        npd.setUnit(c.getUnit());
-                        sqmTraceProductDetailMapper.insert(npd);
-                    }
-                }
-                insertLink(parent.getId(), newId, parent.getOrgId(), "compose");
-                return clone;
-            }
+            insertLink(parent.getId(), ref.getId(), parent.getOrgId(), "compose");
+            return ref;
         }
 
         String id = genId();
@@ -974,7 +1069,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             }
             child.setNodeName(src.getNodeName());
             child.setBatchNo(src.getBatchNo());
-            child.setMaterialCode(src.getMaterialCode());
             child.setQty(c.getUsageQty());
             child.setUnit(c.getUnit());
             child.setSupplierId(src.getSupplierId());
@@ -991,12 +1085,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         } else {
             child.setNodeName(c.getMaterialName());
             child.setBatchNo(c.getMaterialCode());
-            // 物料号: 由所耗来料批次(lotNo)反查零件号; 找不到则退回批次号, 保证节点行有物料号
-            SqmIncomingLot srcLot = sqmIncomingLotMapper.selectOne(
-                    new LambdaQueryWrapper<SqmIncomingLot>()
-                            .eq(SqmIncomingLot::getOrgId, parent.getOrgId())
-                            .eq(SqmIncomingLot::getLotNo, c.getMaterialCode()));
-            child.setMaterialCode(srcLot != null ? srcLot.getPartNo() : c.getMaterialCode());
             child.setQty(c.getUsageQty());
             child.setUnit(c.getUnit());
             sqmTraceNodeMapper.insert(child);
@@ -1014,11 +1102,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         }
         insertLink(parent.getId(), child.getId(), parent.getOrgId(), "compose");
         return child;
-    }
-
-    /** 是否为来料/物料类节点(挂接时会消耗其来源批次库存)。 */
-    private boolean isMaterialNode(String nodeType) {
-        return "raw".equals(nodeType) || "incoming".equals(nodeType);
     }
 
     /**
@@ -1069,7 +1152,8 @@ public class SqmTraceServiceImpl implements SqmTraceService {
 
         Map<String, String> supplierNameMap = new HashMap<>();
         try {
-            List<Map<String, Object>> suppliers = querySupplierRows();
+            List<Map<String, Object>> suppliers = jdbcTemplate.queryForList(
+                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
             for (Map<String, Object> s : suppliers) {
                 supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
             }
@@ -1085,7 +1169,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             vo.setNodeType(n.getNodeType());
             vo.setNodeName(n.getNodeName());
             vo.setBatchNo(n.getBatchNo());
-            vo.setMaterialCode(n.getMaterialCode());
             vo.setQty(n.getQty());
             vo.setUnit(n.getUnit());
             vo.setNodeDate(n.getNodeDate() == null ? null : n.getNodeDate().toString());
@@ -1130,141 +1213,6 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         return result;
     }
 
-    /** 从 nodeId 沿 sqm_trace_link(parent->child) 递归取全部下游(含自身),用于"以选中节点为根向下延伸"。 */
-    private Set<String> descendantIds(String seed) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "WITH RECURSIVE down AS ("
-                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
-                        + " UNION ALL"
-                        + " SELECT l.child_node_id, down.path || l.child_node_id FROM down JOIN ops.sqm_trace_link l ON l.parent_node_id = down.id"
-                        + "   WHERE l.is_deleted = false AND NOT (l.child_node_id = ANY(down.path)))"
-                        + " SELECT id FROM down",
-                seed);
-        Set<String> ids = new HashSet<>();
-        for (Map<String, Object> r : rows) {
-            ids.add(String.valueOf(r.get("id")));
-        }
-        return ids;
-    }
-
-    /** 从 nodeId 沿 sqm_trace_link(child->parent) 递归取全部上游(含自身),用于"上游组成"树。 */
-    private Set<String> ancestorIds(String seed) {
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "WITH RECURSIVE up AS ("
-                        + " SELECT id, ARRAY[id] AS path FROM ops.sqm_trace_node WHERE id = ?::uuid AND is_deleted = false"
-                        + " UNION ALL"
-                        + " SELECT l.parent_node_id, up.path || l.parent_node_id FROM up JOIN ops.sqm_trace_link l ON l.child_node_id = up.id"
-                        + "   WHERE l.is_deleted = false AND NOT (l.parent_node_id = ANY(up.path)))"
-                        + " SELECT id FROM up",
-                seed);
-        Set<String> ids = new HashSet<>();
-        for (Map<String, Object> r : rows) {
-            ids.add(String.valueOf(r.get("id")));
-        }
-        return ids;
-    }
-
-    /** 按 id 集合加载节点并转 VO(children 置空,由调用方挂边)。 */
-    private Map<String, TraceNodeTreeVO> loadVoMap(Set<String> ids, Map<String, String> supplierNameMap) {
-        Map<String, TraceNodeTreeVO> voMap = new LinkedHashMap<>();
-        if (ids.isEmpty()) {
-            return voMap;
-        }
-        String in = inClause(ids);
-        List<SqmTraceNode> nodes = jdbcTemplate.query(
-                "SELECT n.* FROM ops.sqm_trace_node n WHERE n.id IN (" + in + ") AND n.is_deleted = false ORDER BY n.tree_level, n.node_date",
-                new BeanPropertyRowMapper<>(SqmTraceNode.class));
-        for (SqmTraceNode n : nodes) {
-            TraceNodeTreeVO vo = new TraceNodeTreeVO();
-            vo.setId(n.getId());
-            vo.setRootLotId(n.getRootLotId());
-            vo.setParentNodeId(n.getParentNodeId());
-            vo.setNodeType(n.getNodeType());
-            vo.setNodeName(n.getNodeName());
-            vo.setBatchNo(n.getBatchNo());
-            vo.setMaterialCode(n.getMaterialCode());
-            vo.setQty(n.getQty());
-            vo.setUnit(n.getUnit());
-            vo.setNodeDate(n.getNodeDate() == null ? null : n.getNodeDate().toString());
-            vo.setSupplierId(n.getSupplierId());
-            vo.setSupplierName(n.getSupplierId() == null ? null : supplierNameMap.get(n.getSupplierId()));
-            vo.setRemark(n.getRemark());
-            vo.setTreeLevel(n.getTreeLevel());
-            vo.setIsValid(n.getIsValid());
-            vo.setDetail(loadDetail(n));
-            vo.setChildren(new ArrayList<>());
-            voMap.put(n.getId(), vo);
-        }
-        return voMap;
-    }
-
-    /** 查询 id 集合内部的链路边(parent_id -> child_id)。 */
-    private List<Map<String, Object>> edgesWithin(Set<String> ids) {
-        if (ids.isEmpty()) {
-            return new ArrayList<>();
-        }
-        String in = inClause(ids);
-        return jdbcTemplate.queryForList(
-                "SELECT l.parent_node_id AS parent_id, l.child_node_id AS child_id FROM ops.sqm_trace_link l"
-                        + " WHERE l.is_deleted = false AND l.parent_node_id IN (" + in + ") AND l.child_node_id IN (" + in + ")");
-    }
-
-    /**
-     * 以 nodeId 为根,同时返回上下游两棵树:
-     *  - tree:下游去向树(选中节点 → 半成品 → 成品 → 客户…),children = 流向的下游;
-     *  - upTree:上游组成树(选中节点 ← 半成品 ← 来料…),children = 组成它的上游来源(BOM 方向)。
-     * 支持以来料/半成品/成品等任意带批次号的节点作为查询根。
-     */
-    @Override
-    public TraceFullTreeVO getTraceTreeFromNode(String nodeId) {
-        TraceFullTreeVO result = new TraceFullTreeVO();
-        result.setRootNodeId(nodeId);
-
-        Set<String> desc = descendantIds(nodeId);
-        Set<String> anc = ancestorIds(nodeId);
-        if (desc.isEmpty() && anc.isEmpty()) {
-            return result;
-        }
-
-        Map<String, String> supplierNameMap = new HashMap<>();
-        try {
-            List<Map<String, Object>> suppliers = querySupplierRows();
-            for (Map<String, Object> s : suppliers) {
-                supplierNameMap.put(String.valueOf(s.get("id")), String.valueOf(s.get("name")));
-            }
-        } catch (EmptyResultDataAccessException ignored) {
-            // 无供应商时忽略
-        }
-
-        // 下游去向树:边方向 parent -> child(与物流方向一致)
-        Map<String, TraceNodeTreeVO> downMap = loadVoMap(desc, supplierNameMap);
-        for (Map<String, Object> e : edgesWithin(desc)) {
-            String pid = String.valueOf(e.get("parent_id"));
-            String cid = String.valueOf(e.get("child_id"));
-            TraceNodeTreeVO p = downMap.get(pid);
-            TraceNodeTreeVO c = downMap.get(cid);
-            if (p != null && c != null && !p.getChildren().contains(c)) {
-                p.getChildren().add(c);
-                c.setParentNodeId(pid);
-            }
-        }
-        result.setTree(downMap.get(nodeId));
-
-        // 上游组成树:边方向反向挂(child 的 children = 它的 parent 们,即"由谁构成")
-        Map<String, TraceNodeTreeVO> upMap = loadVoMap(anc, supplierNameMap);
-        for (Map<String, Object> e : edgesWithin(anc)) {
-            String pid = String.valueOf(e.get("parent_id"));
-            String cid = String.valueOf(e.get("child_id"));
-            TraceNodeTreeVO p = upMap.get(pid);
-            TraceNodeTreeVO c = upMap.get(cid);
-            if (p != null && c != null && !c.getChildren().contains(p)) {
-                c.getChildren().add(p);
-            }
-        }
-        result.setUpTree(upMap.get(nodeId));
-        return result;
-    }
-
     @Override
     public List<SqmTraceNode> traceTreeByRootNode(String rootNodeId) {
         // 不依赖 root_node_id 字段, 改为沿 sqm_trace_link 取包含 rootNodeId 的连通分量(扁平返回)
@@ -1278,211 +1226,551 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 new BeanPropertyRowMapper<>(SqmTraceNode.class));
     }
 
-    /** 将 "ROOT" 哨兵值解析为默认组织 UUID。 */
-    private String resolveOrgId(String orgId) {
-        if (orgId == null || orgId.isBlank() || "ROOT".equals(orgId)) {
-            try {
-                String id = jdbcTemplate.queryForObject(
-                        "SELECT id::text FROM ops.sys_org WHERE org_code='MZ' LIMIT 1", String.class);
-                if (id != null) return id;
-            } catch (Exception ignored) { /* ignore */ }
-            try {
-                return jdbcTemplate.queryForObject("SELECT id::text FROM ops.sys_org LIMIT 1", String.class);
-            } catch (Exception e) {
-                log.warn("resolveOrgId failed: {}", e.getMessage());
-                return null;
-            }
-        }
-        return orgId;
-    }
-
     @Override
     public List<SqmTraceNode> listRoots(String orgId) {
-        String resolved = resolveOrgId(orgId);
-        if (resolved == null) return new ArrayList<>();
         // 根 = 没有任何 incoming link 的节点
-        List<SqmTraceNode> roots = jdbcTemplate.query(
-                "SELECT * FROM ops.sqm_trace_node WHERE org_id = ?::uuid AND is_deleted = false"
+        return jdbcTemplate.query(
+                "SELECT * FROM ops.sqm_trace_node WHERE org_id = ? AND is_deleted = false"
                         + " AND id NOT IN (SELECT child_node_id FROM ops.sqm_trace_link WHERE is_deleted = false)"
                         + " ORDER BY node_date DESC, created_at DESC",
-                new BeanPropertyRowMapper<>(SqmTraceNode.class), resolved);
-        if (!roots.isEmpty()) {
-            Map<String, String> supplierNameMap = buildSupplierNameMap();
-            for (SqmTraceNode node : roots) {
-                node.setSupplierName(node.getSupplierId() == null ? null : supplierNameMap.get(node.getSupplierId()));
-            }
-        }
-        return roots;
+                new BeanPropertyRowMapper<>(SqmTraceNode.class), orgId);
     }
-
-    // ---- 供应商名称映射缓存 ----
-
-    /** 当前用户分公司 org_id；跨公司管理员(dataScope=all, JWT orgId="ROOT")返回 null。 */
-    private String currentBranchOrgId() {
-        CompanyContext.CurrentUser u = CompanyContext.get();
-        if (u == null || CompanyContext.isAdmin()) {
-            return null;
-        }
-        String orgId = u.orgId();
-        return (orgId == null || "ROOT".equals(orgId)) ? null : orgId;
-    }
-
-    /**
-     * 供应商 (id, name) 查询：JdbcTemplate 不经过 MyBatis 数据权限拦截器，
-     * 须手工按当前用户 org_id 过滤（sysadmin/跨公司不过滤）。
-     */
-    private List<Map<String, Object>> querySupplierRows() {
-        String orgId = currentBranchOrgId();
-        if (orgId == null) {
-            return jdbcTemplate.queryForList(
-                    "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false");
-        }
-        return jdbcTemplate.queryForList(
-                "SELECT id, name FROM ops.sqm_supplier WHERE is_deleted = false AND org_id = ?::uuid", orgId);
-    }
-
-    private Map<String, String> buildSupplierNameMap() {
-        Map<String, String> map = new HashMap<>();
-        try {
-            for (Map<String, Object> row : querySupplierRows()) {
-                map.put(String.valueOf(row.get("id")), String.valueOf(row.get("name")));
-            }
-        } catch (Exception ignored) {
-            log.warn("buildSupplierNameMap failed: {}", ignored.getMessage());
-        }
-        return map;
-    }
-
-    // ---- 节点完整详情(表 + 树共用) ----
 
     @Override
-    public TraceNodeFullVO getNodeDetail(String nodeId) {
-        if (!isValidUuid(nodeId)) {
-            // 非法 uuid(如前端 seed 占位节点 "seed-...")直接空返回, 避免 ?::uuid 解析抛 500
-            return null;
+    public TraceFullTreeVO traceMesTree(String barcode, String orgId) {
+        return traceMesTree(barcode, orgId, TraceDirection.ALL);
+    }
+
+    @Override
+    public TraceFullTreeVO traceMesTree(String barcode, String orgId, TraceDirection direction) {
+        if (barcode == null || barcode.isBlank()) {
+            return new TraceFullTreeVO();
         }
-        SqmTraceNode node = sqmTraceNodeMapper.selectById(nodeId);
-        if (node == null) {
-            return null;
+        TraceFullTreeVO vo = new TraceFullTreeVO();
+        vo.setRootNodeId(barcode);
+        vo.setRootLotId(barcode);
+        vo.setRootLotNo(barcode);
+        TraceNodeTreeVO root = buildNode(barcode);
+        if (root == null) {
+            root = new TraceNodeTreeVO();
+            root.setId(barcode);
+            root.setNodeName(barcode);
+            root.setBatchNo(barcode);
+            root.setNodeType("unknown");
         }
-        TraceNodeFullVO vo = new TraceNodeFullVO();
-        vo.setNode(node);
-        vo.setDetail(loadDetail(node));
-
-        String supplierName = null;
-        if (node.getSupplierId() != null && !node.getSupplierId().isBlank()) {
-            String curOrgId = currentBranchOrgId();
-            try {
-                Map<String, Object> s = curOrgId == null
-                        ? jdbcTemplate.queryForMap(
-                                "SELECT name FROM ops.sqm_supplier WHERE id = ?::uuid AND is_deleted = false",
-                                node.getSupplierId())
-                        : jdbcTemplate.queryForMap(
-                                "SELECT name FROM ops.sqm_supplier WHERE id = ?::uuid AND is_deleted = false AND org_id = ?::uuid",
-                                node.getSupplierId(), curOrgId);
-                supplierName = String.valueOf(s.get("name"));
-            } catch (EmptyResultDataAccessException ignored) {
-                // 供应商不存在或不属于本分公司
-            }
+        vo.setTree(root);
+        // 共享 visited: 纯 barcode 去重, 跨方向也生效, 彻底切断上下游互绕导致的环。
+        Set<String> visited = new HashSet<>();
+        // nodeCache: 同一条码只回查一次三源表, 被多个父节点引用时直接复用, 极大减少重复 SQL。
+        Map<String, TraceNodeTreeVO> nodeCache = new HashMap<>();
+        nodeCache.put(barcode, root);
+        // 下游树(构成): 产品料号→成品实例→关键物料→物料批次
+        if (direction == TraceDirection.FORWARD || direction == TraceDirection.ALL) {
+            expand(root, true, visited, nodeCache);
+            // 成品节点下游挂固定“终端客户(待补)”占位: 成品表无客户字段, 仅展示用。
+            attachCustomerPlaceholder(root);
         }
-        vo.setSupplierName(supplierName);
-
-        // 正向(用于):其他节点把本节点作为组成 → 本节点是 child, 查 parent
-        List<TraceLinkRef> parents = jdbcTemplate.query(
-                "SELECT n.id AS id, n.node_type AS node_type, n.node_name AS node_name, n.batch_no AS batch_no "
-                        + "FROM ops.sqm_trace_link l JOIN ops.sqm_trace_node n ON n.id = l.parent_node_id "
-                        + "WHERE l.child_node_id = ?::uuid AND l.is_deleted = false AND n.is_deleted = false "
-                        + "ORDER BY n.node_type, n.node_name",
-                (rs, i) -> {
-                    TraceLinkRef r = new TraceLinkRef();
-                    r.setId(rs.getString("id"));
-                    r.setNodeType(rs.getString("node_type"));
-                    r.setNodeName(rs.getString("node_name"));
-                    r.setBatchNo(rs.getString("batch_no"));
-                    return r;
-                }, nodeId);
-        vo.setParents(parents);
-
-        // 反向(组成):本节点包含的下层节点 → 本节点是 parent, 查 child
-        List<TraceLinkRef> children = jdbcTemplate.query(
-                "SELECT n.id AS id, n.node_type AS node_type, n.node_name AS node_name, n.batch_no AS batch_no "
-                        + "FROM ops.sqm_trace_link l JOIN ops.sqm_trace_node n ON n.id = l.child_node_id "
-                        + "WHERE l.parent_node_id = ?::uuid AND l.is_deleted = false AND n.is_deleted = false "
-                        + "ORDER BY n.node_type, n.node_name",
-                (rs, i) -> {
-                    TraceLinkRef r = new TraceLinkRef();
-                    r.setId(rs.getString("id"));
-                    r.setNodeType(rs.getString("node_type"));
-                    r.setNodeName(rs.getString("node_name"));
-                    r.setBatchNo(rs.getString("batch_no"));
-                    return r;
-                }, nodeId);
-        vo.setChildren(children);
-
+        // 上游树(来源): 用独立的根节点对象(深拷贝本节点), 避免与下游树共享同一对象引用
+        // 而把下游 children 也带进上游、造成上下游镜像重复。
+        if (direction == TraceDirection.BACKWARD || direction == TraceDirection.ALL) {
+            TraceNodeTreeVO upRoot = cloneNode(root);
+            visited.add(barcode); // 根自身在上游不再重复展开
+            expand(upRoot, false, visited, nodeCache);
+            vo.setUpTree(upRoot);
+        }
         return vo;
     }
 
-    // ---- 按方向追溯 ----
+    /** 单节点下游/上游扇出硬上限, 防止枢纽条码把子树拉爆。 */
+    private static final int MAX_FANOUT = 500;
+    /** 全局节点数硬上限(含 buildNode 计数), 兜底防失控。 */
+    private static final int MAX_NODES = 800;
+    /** 追溯树最大展开深度。 */
+    private static final int MAX_DEPTH = 6;
+
+    /** 浅克隆节点(复制基础字段, 清空 children), 用于上下游树各自持有独立根对象。 */
+    private TraceNodeTreeVO cloneNode(TraceNodeTreeVO src) {
+        if (src == null) return null;
+        TraceNodeTreeVO n = new TraceNodeTreeVO();
+        n.setId(src.getId());
+        n.setBatchNo(src.getBatchNo());
+        n.setNodeName(src.getNodeName());
+        n.setNodeType(src.getNodeType());
+        n.setMaterialCode(src.getMaterialCode());
+        n.setQty(src.getQty());
+        n.setUnit(src.getUnit());
+        n.setSupplierName(src.getSupplierName());
+        n.setNodeDate(src.getNodeDate());
+        n.setRemark(src.getRemark());
+        n.setDetail(src.getDetail());
+        n.setChildren(new ArrayList<>());
+        return n;
+    }
+
+    /** 遍历下游树, 给每个成品(finished)节点追加一个固定的“终端客户(待补)”占位子节点(成品表无客户字段)。 */
+    private void attachCustomerPlaceholder(TraceNodeTreeVO node) {
+        if (node == null || node.getChildren() == null) return;
+        if ("finished".equals(node.getNodeType())) {
+            TraceNodeTreeVO customer = new TraceNodeTreeVO();
+            customer.setId(node.getId() + "::customer");
+            customer.setBatchNo(node.getId() + "::customer");
+            customer.setNodeName("终端客户(待补)");
+            customer.setNodeType("virtualCustomer");
+            customer.setChildren(new ArrayList<>());
+            node.getChildren().add(customer);
+        }
+        for (TraceNodeTreeVO c : node.getChildren()) {
+            attachCustomerPlaceholder(c);
+        }
+    }
+
+    /**
+     * 按层 BFS 批量展开: 每层收集待展开条码 → 批量查邻居边(downstreamBatch/upstreamBatch)
+     * → 批量回查三源表(buildNodesBatch) → 组装 children 进入下一层。
+     * 边只来自绑定表(product_material_no/material_barcode → product_barcode,
+     * product_barcode → material_barcode/product_material_no), son_lot_no 仅用于产品详情不作为树边。
+     * forward=true 为构成(向下): 码作为料号/物料查其下产品实例(物料→成品/半成品→更上层产品);
+     * forward=false 为来源(向上): 产品实例查其用料/所属料号。
+     * visited 为整树共享的纯 barcode 去重(跨方向), nodeCache 复用已回查节点。
+     */
+    private void expand(TraceNodeTreeVO root, boolean forward, Set<String> visited,
+                         Map<String, TraceNodeTreeVO> nodeCache) {
+        List<TraceNodeTreeVO> layer = new ArrayList<>();
+        layer.add(root);
+        String rootBarcode = root.getBatchNo();
+        if (rootBarcode != null && !rootBarcode.isBlank()) {
+            visited.add(rootBarcode);
+        }
+        int totalNodes = 1;
+        for (int depth = 0; depth < MAX_DEPTH; depth++) {
+            if (layer.isEmpty()) break;
+            // 1) 本层待展开条码(去重)
+            Set<String> layerBarcodes = new LinkedHashSet<>();
+            for (TraceNodeTreeVO n : layer) {
+                String b = n.getBatchNo();
+                if (b != null && !b.isBlank()) layerBarcodes.add(b);
+            }
+            if (layerBarcodes.isEmpty()) break;
+            // 2) 批量查邻居
+            Map<String, List<String>> neighbors = forward ? downstreamBatch(layerBarcodes) : upstreamBatch(layerBarcodes);
+            // 3) 批量回查三源表建节点: 本层 + 邻居层(下一层)一起建, 保证子节点带完整详情
+            Set<String> toBuild = new LinkedHashSet<>(layerBarcodes);
+            for (List<String> nbs : neighbors.values()) {
+                for (String nb : nbs) {
+                    if (nb != null && !nb.isBlank()) toBuild.add(nb);
+                }
+            }
+            Map<String, TraceNodeTreeVO> built = buildNodesBatch(toBuild);
+            nodeCache.putAll(built);
+            // 4) 组装 children, 准备下一层
+            List<TraceNodeTreeVO> nextLayer = new ArrayList<>();
+            for (TraceNodeTreeVO n : layer) {
+                String b = n.getBatchNo();
+                List<String> nbs = neighbors.getOrDefault(b, Collections.emptyList());
+                int added = 0;
+                for (String nb : nbs) {
+                    if (nb == null || nb.isBlank() || nb.equals(b)) continue;
+                    if (added >= MAX_FANOUT) break;
+                    if (visited.contains(nb)) continue;
+                    visited.add(nb);
+                    TraceNodeTreeVO child = nodeCache.get(nb);
+                    if (child == null) {
+                        child = new TraceNodeTreeVO();
+                        child.setId(nb);
+                        child.setBatchNo(nb);
+                        child.setNodeName(nb);
+                        child.setNodeType("unknown");
+                    }
+                    n.getChildren().add(child);
+                    added++;
+                    // 产品料号聚合节点(productNo, 如 80.02.010100)只作"上游来源归属"展示, 不再向下展开,
+                    // 否则会拉出同料号下所有其他批次产品(如 209 台血气电解质分析仪), 污染"按批号查该批次产品"的结果。
+                    boolean isProductNo = "productNo".equals(child.getNodeType());
+                    if (!isProductNo && totalNodes < MAX_NODES) {
+                        nextLayer.add(child);
+                        totalNodes++;
+                    }
+                }
+            }
+            layer = nextLayer;
+        }
+    }
+
+    /**
+     * 批量下游(构成)邻居: 一次 SQL 查整层条码。边只来自绑定表两类关系:
+     *  - 码作为产品料号 product_material_no → 该料号所有成品实例 product_barcode(查料号再查下去)
+     *  - 码作为产品/半成品实例 product_barcode → 它使用的物料 material_barcode(半成品则继续展开)
+     *  (注意: son_lot_no 仅用于产品详情查询, 不作为树边, 避免批次号造成的环状爆炸)
+     */
+    private Map<String, List<String>> downstreamBatch(Set<String> barcodes) {
+        Map<String, List<String>> map = new HashMap<>();
+        if (barcodes.isEmpty()) return map;
+        queryInto(map, "product_material_no", "product_barcode", barcodes);
+        queryInto(map, "product_barcode", "material_barcode", barcodes, true);
+        return map;
+    }
+
+    /**
+     * 批量上游(来源)邻居:
+     *  - 码作为物料/半成品 material_barcode → 使用它的产品实例 product_barcode(谁用了它, 半成品链继续向上)
+     *  - 码作为产品实例 product_barcode → 它所属的产品料号 product_material_no(来源归属)
+     * 注意: 绝不在上游查 product_barcode→material_barcode(那是构成/下游边), 否则上下游镜像重复。
+     */
+    private Map<String, List<String>> upstreamBatch(Set<String> barcodes) {
+        Map<String, List<String>> map = new HashMap<>();
+        if (barcodes.isEmpty()) return map;
+        queryInto(map, "material_barcode", "product_barcode", barcodes);
+        queryInto(map, "product_barcode", "product_material_no", barcodes);
+        return map;
+    }
+
+    /** 批量查 binding 表 colK→colV 邻居并合并入 map(每 key 去重并截断 MAX_FANOUT)。
+     *  useNameFallback=true 时(仅用于 product_barcode→material_barcode 构成边): 当 material_barcode 为空,
+     *  改用 material_name 作为合成 key 保留该子件(源表缺失 material_barcode 字段, 前端标注"无 material_barcode"),
+     *  避免"有数据但条码字段缺失"的来料/半成品子件从追溯树消失。 */
+    private void queryInto(Map<String, List<String>> map, String colK, String colV, Set<String> keys,
+                           boolean useNameFallback) {
+        if (keys.isEmpty()) return;
+        String in = inPlaceholders(keys.size());
+        String vSql = useNameFallback
+                ? "(CASE WHEN " + colV + " IS NULL OR " + colV + " = '' THEN material_name ELSE " + colV + " END) AS v"
+                : colV + " AS v";
+        String sql = "SELECT DISTINCT " + colK + " AS k, " + vSql + " FROM qms.critical_material_binding"
+                + " WHERE " + colK + " IN (" + in + ")";
+        if (!useNameFallback) {
+            sql += " AND " + colV + " IS NOT NULL AND " + colV + " <> ''";
+        }
+        jdbcTemplate.query(sql, rs -> {
+            String k = rs.getString("k");
+            String v = rs.getString("v");
+            if (k != null && v != null && !v.isBlank()) {
+                List<String> l = map.computeIfAbsent(k, x -> new ArrayList<>());
+                if (l.size() < MAX_FANOUT && !l.contains(v)) l.add(v);
+            }
+        }, keys.toArray());
+    }
+
+    /** queryInto 便捷重载(无 name 兜底)。 */
+    private void queryInto(Map<String, List<String>> map, String colK, String colV, Set<String> keys) {
+        queryInto(map, colK, colV, keys, false);
+    }
+
+    /** 生成 n 个 ? 占位符(IN 子句)。 */
+    private String inPlaceholders(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(",");
+            sb.append("?");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 批量回查三源表组装节点信息(一次 SQL 查整层)。优先级(只决定"从哪张表取行",
+     * 节点类型一律由行内的 category 字段决定, 不再按表名猜):
+     *  1) finished_goods_inspection.prod_batch_or_sn(成品/半成品实例, 带 category)
+     *  2) critical_material_binding.product_material_no(产品料号聚合, category 取 product_name)
+     *  3) critical_material_binding.product_barcode(成品实例, 用绑定行 category)
+     *  4) material_inspection.material_barcode(来料物料, 无 category → 来料)
+     *  5) critical_material_binding.material_barcode(关键物料, 用绑定行 category)
+     *  6) material_inspection.material_batch_no(物料批次 → lot)
+     * 高优先级命中后不再查低优先级。
+     */
+    private Map<String, TraceNodeTreeVO> buildNodesBatch(Set<String> barcodes) {
+        Map<String, TraceNodeTreeVO> map = new LinkedHashMap<>();
+        if (barcodes.isEmpty()) return map;
+        // 成品/半成品表: category 直接决定 成品/半成品
+        fillDistinct(map, "qms.finished_goods_inspection", "prod_batch_or_sn", barcodes, false, false, false);
+        Set<String> rest = new LinkedHashSet<>(barcodes);
+        rest.removeAll(map.keySet());
+        // 绑定表 product_material_no 聚合节点: 产品料号(用 product_name 作名称, 此列在绑定表即自身名)
+        fillDistinct(map, "qms.critical_material_binding", "product_material_no", rest, true, false, false);
+        rest.removeAll(map.keySet());
+        // 绑定表 material_barcode: 优先于 product_barcode! 一个条码在绑定表里可能既是"被装件"(material_barcode)
+        // 又是"装配者"(product_barcode)。被装件身份(category=半成品/来料)才是它在父产品构成里的真实角色,
+        // 必须先取, 否则会被 product_barcode 步取到它装配的某个子件行(可能 category=来料)而误标类型/错名。
+        fillDistinct(map, "qms.critical_material_binding", "material_barcode", rest, false, false, true);
+        rest.removeAll(map.keySet());
+        // 绑定表 product_barcode: 兜底(主表无此条码、且未作为被装件出现时). 该行列的 product_name 是"父产品名",
+        // 非自身名, bindingFallback=true 让名称取 material_name/自身。
+        fillDistinct(map, "qms.critical_material_binding", "product_barcode", rest, false, false, true);
+        rest.removeAll(map.keySet());
+        // 物料表 material_barcode: 兜底(绑定表也无此条码时), 来料(无 category 列, 默认 material)
+        fillDistinct(map, "qms.material_inspection", "material_barcode", rest, false, true, false);
+        rest.removeAll(map.keySet());
+        // 物料批次
+        fillDistinct(map, "qms.material_inspection", "material_batch_no", rest, false, true, false);
+        rest.removeAll(map.keySet());
+        // 源表缺失 material_barcode 的子件: 上游/下游邻居以 material_name 作合成 key 兜底进入 rest,
+        // 此处按 material_name 从绑定表查 material_barcode 为空的行, 生成节点并标注 noBarcode=true(不编造条码)。
+        fillByNameFallback(map, rest);
+        return map;
+    }
+
+    /** 按 material_name 从 binding 表取 material_barcode 为空的行(源表缺字段), 生成节点并标注 noBarcode。
+     *  这些 key 由 downstreamBatch/upstreamBatch 的 name fallback 产生, 真实 barcode 已被前面步骤命中, 不会误伤。 */
+    private void fillByNameFallback(Map<String, TraceNodeTreeVO> map, Set<String> names) {
+        if (names.isEmpty()) return;
+        String in = inPlaceholders(names.size());
+        String sql = "SELECT DISTINCT ON (material_name) * FROM qms.critical_material_binding"
+                + " WHERE material_name IN (" + in + ") AND (material_barcode IS NULL OR material_barcode = '')";
+        jdbcTemplate.query(sql, rs -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            for (int i = 1; i <= md.getColumnCount(); i++) {
+                row.put(md.getColumnLabel(i), rs.getObject(i));
+            }
+            Object raw = row.get("material_name");
+            if (raw == null) return;
+            String name = String.valueOf(raw);
+            if (map.containsKey(name)) return;
+            String nodeType = categoryToNodeType(String.valueOf(row.get("category")));
+            TraceNodeTreeVO n = toTreeNode(row, nodeType, name, true);
+            n.setDetailSource("binding");
+            n.setNoBarcode(true);
+            n.setBatchNo(null); // 缺失字段, 不编造
+            if (n.getNodeName() == null || n.getNodeName().equals(name)) n.setNodeName(name);
+            map.put(name, n);
+        }, names.toArray());
+    }
+
+    /** 单个条码回查(根节点用, 语义与批量版完全一致)。 */
+    private TraceNodeTreeVO buildNode(String barcode) {
+        if (barcode == null || barcode.isBlank()) return null;
+        Set<String> one = new LinkedHashSet<>();
+        one.add(barcode);
+        return buildNodesBatch(one).get(barcode);
+    }
+
+    /**
+     * 从 table 按 keyCol 批量取行(DISTINCT ON 保证每 key 一行), 转 TraceNodeTreeVO 写入 map(putIfAbsent)。
+     * nodeType 由行内 category 字段决定(categoryToNodeType); 仅当 forceMaterial=true(物料表无 category 列)
+     * 或行无 category 时回退到 material。isProductNo=true 时节点为产品料号聚合节点: 名称显示「产品名称 (料号)」。
+     * bindingFallback=true 表示此行来自绑定表兜底: 该表 product_name 是"父产品名"而非自身名, 名称须取自身名(material_name)。
+     */
+    private void fillDistinct(Map<String, TraceNodeTreeVO> map, String table, String keyCol,
+                              Set<String> keys, boolean isProductNo, boolean forceMaterial,
+                              boolean bindingFallback) {
+        if (keys.isEmpty()) return;
+        String in = inPlaceholders(keys.size());
+        String sql = "SELECT DISTINCT ON (" + keyCol + ") * FROM " + table + " WHERE " + keyCol + " IN (" + in + ")";
+        jdbcTemplate.query(sql, rs -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            for (int i = 1; i <= md.getColumnCount(); i++) {
+                row.put(md.getColumnLabel(i), rs.getObject(i));
+            }
+            Object raw = row.get(keyCol);
+            if (raw == null) return;
+            String bc = String.valueOf(raw);
+            String nodeType = forceMaterial ? "material" : categoryToNodeType(String.valueOf(row.get("category")));
+            TraceNodeTreeVO n = toTreeNode(row, nodeType, bc, bindingFallback);
+            // 标注详情来源表(前端如实告知用户, 不编造): 绑定表兜底节点来源为 binding
+            if (isProductNo) {
+                n.setDetailSource("product_no");
+            } else if (bindingFallback) {
+                n.setDetailSource("binding");
+            } else if (table.contains("finished_goods_inspection")) {
+                n.setDetailSource("finished_goods_inspection");
+            } else if (table.contains("material_inspection")) {
+                n.setDetailSource("material_inspection");
+            } else {
+                n.setDetailSource("binding");
+            }
+            if (isProductNo) {
+                Object pn = n.getDetail() == null ? null : n.getDetail().get("productName");
+                n.setNodeName((pn == null ? bc : String.valueOf(pn)) + " (" + bc + ")");
+            }
+            map.putIfAbsent(bc, n);
+        }, keys.toArray());
+    }
+
+    /** 源表 category 文本 → 节点类型。成品→finished / 半成品→semi / 来料→material / 空或其他→material。 */
+    private String categoryToNodeType(String category) {
+        if (category == null) return "material";
+        switch (category.trim()) {
+            case "成品": return "finished";
+            case "半成品": return "semi";
+            case "来料": return "material";
+            default: return "material";
+        }
+    }
+
+    /** 通用: 把源表行转成 TraceNodeTreeVO(节点基础信息 + 全字段 detail)。
+     *  bindingFallback=true 时(来源为绑定表兜底行): 该表 product_name 是父产品名而非自身名,
+     *  名称优先取 material_name(自身物料名)/nodeName, 避免把父名当节点名。 */
+    private TraceNodeTreeVO toTreeNode(Map<String, Object> row, String nodeType, String barcode,
+                                       boolean bindingFallback) {
+        TraceNodeTreeVO n = new TraceNodeTreeVO();
+        n.setId(barcode);
+        n.setBatchNo(barcode);
+        n.setNodeType(nodeType);
+        Map<String, Object> camel = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : row.entrySet()) {
+            camel.put(toCamel(e.getKey()), e.getValue());
+        }
+        n.setDetail(camel);
+        // 名称/编码/数量/单位/日期/供应商 抽提
+        Object name;
+        if (bindingFallback) {
+            // 绑定表兜底: 自身名优先(materialName / nodeName), product_name 是父名不用
+            name = camel.get("materialName");
+            if (name == null) name = camel.get("nodeName");
+            if (name == null) name = camel.get("productName");
+        } else {
+            name = camel.get("productName");
+            if (name == null) name = camel.get("materialName");
+            if (name == null) name = camel.get("nodeName");
+        }
+        n.setNodeName(name == null ? barcode : String.valueOf(name));
+        Object code = camel.get("materialCode");
+        n.setMaterialCode(code == null ? null : String.valueOf(code));
+        Object qty = camel.get("qualifiedQty");
+        if (qty == null) qty = camel.get("inspectedQty");
+        if (qty == null) qty = camel.get("submittedQty");
+        if (qty != null) {
+            try { n.setQty(new BigDecimal(String.valueOf(qty))); } catch (Exception ignored) {}
+        }
+        Object unit = camel.get("unit");
+        n.setUnit(unit == null ? null : String.valueOf(unit));
+        Object sup = camel.get("supplierName");
+        n.setSupplierName(sup == null ? null : String.valueOf(sup));
+        Object date = camel.get("productionDate");
+        if (date == null) date = camel.get("inspectionDate");
+        if (date == null) date = camel.get("arrivalDate");
+        n.setNodeDate(date == null ? null : String.valueOf(date));
+        return n;
+    }
+
+    @Override
+    public List<TraceFullTreeVO> traceByBatchNo(String batchNo, String orgId, TraceDirection direction) {
+        List<TraceFullTreeVO> forest = new ArrayList<>();
+        if (batchNo == null || batchNo.isBlank()) return forest;
+        // 批号可能为: 成品/半成品 prod_batch_or_sn, 或来料 material_batch_no / material_barcode
+        Set<String> seeds = new LinkedHashSet<>();
+        try {
+            seeds.addAll(jdbcTemplate.queryForList(
+                    "SELECT prod_batch_or_sn FROM qms.finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
+                    String.class, batchNo, batchNo));
+        } catch (EmptyResultDataAccessException ignored) {}
+        try {
+            seeds.addAll(jdbcTemplate.queryForList(
+                    "SELECT material_barcode FROM qms.material_inspection WHERE material_batch_no = ? OR material_barcode = ?",
+                    String.class, batchNo, batchNo));
+        } catch (EmptyResultDataAccessException ignored) {}
+        if (seeds.isEmpty()) {
+            // 当作业务条码直接追溯
+            seeds.add(batchNo);
+        }
+        for (String seed : seeds) {
+            forest.add(traceMesTree(seed, orgId, direction));
+        }
+        return forest;
+    }
+
+    @Override
+    public List<TraceFullTreeVO> traceByLotNo(String lotNo, String orgId, TraceDirection direction) {
+        List<TraceFullTreeVO> forest = new ArrayList<>();
+        if (lotNo == null || lotNo.isBlank()) return forest;
+        // 批号兼容两类: 来料批次号(material_inspection.material_batch_no / record_no → material_barcode)
+        // 与成品/半成品批号(finished_goods_inspection.prod_batch_or_sn, 直接作为根条码)。
+        // 无论输哪种批号, 都能定位到源表业务条码并展开追溯树(查该批次对应的产品)。
+        Set<String> seeds = new LinkedHashSet<>();
+        try {
+            seeds.addAll(jdbcTemplate.queryForList(
+                    "SELECT material_barcode FROM qms.material_inspection WHERE material_batch_no = ? OR record_no = ?",
+                    String.class, lotNo, lotNo));
+        } catch (EmptyResultDataAccessException ignored) {}
+        try {
+            seeds.addAll(jdbcTemplate.queryForList(
+                    "SELECT prod_batch_or_sn FROM qms.finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
+                    String.class, lotNo, lotNo));
+        } catch (EmptyResultDataAccessException ignored) {}
+        if (seeds.isEmpty()) {
+            // 当作业务条码直接追溯(兼容用户直接粘贴 material_barcode 等)
+            seeds.add(lotNo);
+        }
+        for (String seed : seeds) {
+            forest.add(traceMesTree(seed, orgId, direction));
+        }
+        return forest;
+    }
 
     @Override
     public List<TraceDirectionNode> traceDirection(String nodeId, String direction) {
-        if (!"forward".equalsIgnoreCase(direction) && !"backward".equalsIgnoreCase(direction)) {
-            // 全部:连通分量(无序 depth,按层级展示)
-            Set<String> comp = componentIds(nodeId);
-            if (comp.isEmpty()) {
-                return new ArrayList<>();
-            }
-            String in = inClause(comp);
-            return jdbcTemplate.query(
-                    "SELECT n.id AS id, n.node_type AS node_type, n.node_name AS node_name, n.batch_no AS batch_no, "
-                            + "n.qty AS qty, n.unit AS unit, n.node_date AS node_date, n.supplier_id AS supplier_id, "
-                            + "n.is_valid AS is_valid, n.tree_level AS tree_level, s.name AS supplier_name, 0 AS depth "
-                            + "FROM ops.sqm_trace_node n LEFT JOIN ops.sqm_supplier s ON n.supplier_id = s.id "
-                            + "WHERE n.id IN (" + in + ") AND n.is_deleted = false "
-                            + "ORDER BY n.tree_level, n.node_date",
-                    (rs, i) -> mapDirectionNode(rs));
+        List<TraceDirectionNode> result = new ArrayList<>();
+        if (nodeId == null || nodeId.isBlank()) {
+            return result;
         }
-
-        boolean forward = "forward".equalsIgnoreCase(direction);
-        // forward: 本节点被哪些上层节点使用(parent where child = 当前)
-        // backward: 本节点由哪些下层节点组成(child where parent = 当前)
-        String recurseOn = forward ? "l.child_node_id = dir.id" : "l.parent_node_id = dir.id";
-        String seedCol = forward ? "l.parent_node_id" : "l.child_node_id";
-
-        String sql = "WITH RECURSIVE dir AS ("
-                + " SELECT n.id AS id, 0 AS depth FROM ops.sqm_trace_node n"
-                + " WHERE n.id = ?::uuid AND n.is_deleted = false"
-                + " UNION ALL"
-                + " SELECT " + seedCol + ", dir.depth + 1 FROM dir"
-                + " JOIN ops.sqm_trace_link l ON " + recurseOn
-                + " WHERE l.is_deleted = false"
-                + ") SELECT DISTINCT n.id AS id, n.node_type AS node_type, n.node_name AS node_name,"
-                + " n.batch_no AS batch_no, n.qty AS qty, n.unit AS unit, n.node_date AS node_date,"
-                + " n.supplier_id AS supplier_id, n.is_valid AS is_valid, n.tree_level AS tree_level,"
-                + " s.name AS supplier_name, dir.depth AS depth"
-                + " FROM dir JOIN ops.sqm_trace_node n ON n.id = dir.id"
-                + " LEFT JOIN ops.sqm_supplier s ON n.supplier_id = s.id"
-                + " WHERE n.is_deleted = false"
-                + " ORDER BY dir.depth, n.tree_level, n.node_name";
-        return jdbcTemplate.query(sql, (rs, i) -> mapDirectionNode(rs), nodeId);
+        Set<String> comp = componentIds(nodeId);
+        if (comp.isEmpty()) {
+            comp = new HashSet<>();
+            comp.add(nodeId);
+        }
+        String in = inClause(comp);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT n.id, n.node_type, n.node_name, n.batch_no, n.unit, n.node_date, n.supplier_name, n.is_valid"
+                        + " FROM ops.sqm_trace_node n WHERE n.id IN (" + in + ") AND n.is_deleted = false");
+        for (Map<String, Object> r : rows) {
+            TraceDirectionNode n = new TraceDirectionNode();
+            n.setId(String.valueOf(r.get("id")));
+            n.setNodeType(String.valueOf(r.get("node_type")));
+            n.setNodeName(String.valueOf(r.get("node_name")));
+            n.setBatchNo(r.get("batch_no") == null ? null : String.valueOf(r.get("batch_no")));
+            n.setUnit(r.get("unit") == null ? null : String.valueOf(r.get("unit")));
+            n.setNodeDate(r.get("node_date") == null ? null : String.valueOf(r.get("node_date")));
+            n.setSupplierName(r.get("supplier_name") == null ? null : String.valueOf(r.get("supplier_name")));
+            n.setIsValid(r.get("is_valid") == null ? null : String.valueOf(r.get("is_valid")));
+            result.add(n);
+        }
+        return result;
     }
 
-    private TraceDirectionNode mapDirectionNode(ResultSet rs) throws SQLException {
-        TraceDirectionNode d = new TraceDirectionNode();
-        d.setId(rs.getString("id"));
-        d.setNodeType(rs.getString("node_type"));
-        d.setNodeName(rs.getString("node_name"));
-        d.setBatchNo(rs.getString("batch_no"));
-        d.setQty(rs.getBigDecimal("qty"));
-        d.setUnit(rs.getString("unit"));
-        java.sql.Date nd = rs.getDate("node_date");
-        d.setNodeDate(nd == null ? null : nd.toString());
-        d.setSupplierName(rs.getString("supplier_name"));
-        d.setIsValid(rs.getString("is_valid"));
-        int tl = rs.getInt("tree_level");
-        d.setTreeLevel(rs.wasNull() ? null : tl);
-        int dp = rs.getInt("depth");
-        d.setDepth(rs.wasNull() ? null : dp);
-        return d;
+    @Override
+    public TraceNodeFullVO getNodeDetail(String nodeId) {
+        TraceNodeFullVO vo = new TraceNodeFullVO();
+        if (nodeId == null || nodeId.isBlank()) {
+            return vo;
+        }
+        SqmTraceNode node = sqmTraceNodeMapper.selectById(nodeId);
+        vo.setNode(node);
+        if (node != null) {
+            vo.setDetail(loadDetail(node));
+            // 上游组成(parent)
+            List<TraceLinkRef> parents = jdbcTemplate.query(
+                    "SELECT c.id, c.node_type, c.node_name, c.batch_no FROM ops.sqm_trace_link l"
+                            + " JOIN ops.sqm_trace_node c ON c.id = l.parent_node_id"
+                            + " WHERE l.child_node_id = ?::uuid AND l.is_deleted = false",
+                    (rs, i) -> {
+                        TraceLinkRef r = new TraceLinkRef();
+                        r.setId(rs.getString("id"));
+                        r.setNodeType(rs.getString("node_type"));
+                        r.setNodeName(rs.getString("node_name"));
+                        r.setBatchNo(rs.getString("batch_no"));
+                        return r;
+                    }, nodeId);
+            // 下游组成(child)
+            List<TraceLinkRef> children = jdbcTemplate.query(
+                    "SELECT p.id, p.node_type, p.node_name, p.batch_no FROM ops.sqm_trace_link l"
+                            + " JOIN ops.sqm_trace_node p ON p.id = l.child_node_id"
+                            + " WHERE l.parent_node_id = ?::uuid AND l.is_deleted = false",
+                    (rs, i) -> {
+                        TraceLinkRef r = new TraceLinkRef();
+                        r.setId(rs.getString("id"));
+                        r.setNodeType(rs.getString("node_type"));
+                        r.setNodeName(rs.getString("node_name"));
+                        r.setBatchNo(rs.getString("batch_no"));
+                        return r;
+                    }, nodeId);
+            vo.setParents(parents);
+            vo.setChildren(children);
+        }
+        return vo;
+    }
+
+    @Override
+    public TraceFullTreeVO getTraceTreeFromNode(String nodeId) {
+        // 以任意节点为根,复用 getFullTraceTreeByRootNode 的连通分量组装逻辑
+        return getFullTraceTreeByRootNode(nodeId);
     }
 }

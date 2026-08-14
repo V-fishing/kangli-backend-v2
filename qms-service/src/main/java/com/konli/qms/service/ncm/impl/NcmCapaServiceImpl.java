@@ -1,6 +1,9 @@
 package com.konli.qms.service.ncm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
@@ -12,10 +15,13 @@ import com.konli.qms.domain.ncm.mapper.QmsCapaMapper;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingAbnormalMapper;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.dto.AbnormalCapaLaunchRequest;
 import com.konli.qms.service.ncm.dto.CapaVo;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
@@ -31,6 +37,7 @@ public class NcmCapaServiceImpl implements NcmCapaService {
     private final Qms8dReportMapper qms8dReportMapper;
     private final SqmIncomingAbnormalMapper abnormalMapper;
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    private final com.konli.qms.service.assign.AssignReassignService assignReassignService;
 
     private String resolveDefaultOrgId() {
         try {
@@ -44,6 +51,19 @@ public class NcmCapaServiceImpl implements NcmCapaService {
     @Override
     public List<QmsCapa> list() {
         return qmsCapaMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<QmsCapa> listPage(String keyword, int page, int size) {
+        LambdaQueryWrapper<QmsCapa> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(QmsCapa::getCapaNo, keyword)
+                    .or().like(QmsCapa::getIssue, keyword)
+                    .or().like(QmsCapa::getSourceRefId, keyword));
+        }
+        w.orderByDesc(QmsCapa::getCreatedAt);
+        IPage<QmsCapa> ip = qmsCapaMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -114,7 +134,11 @@ public class NcmCapaServiceImpl implements NcmCapaService {
 
     @Override
     @Transactional
-    public QmsCapa launchFromAbnormal(QmsCapa capa) {
+    public QmsCapa launchFromAbnormal(AbnormalCapaLaunchRequest req) {
+        QmsCapa capa = req.getCapa();
+        if (capa == null) {
+            throw new BusinessException(400, "缺少 CAPA 主体(capa)");
+        }
         String abnormalId = capa.getAbnormalId();
         if (abnormalId == null || abnormalId.isBlank()) {
             throw new BusinessException(400, "缺少来源异常单(abnormalId)");
@@ -263,5 +287,21 @@ public class NcmCapaServiceImpl implements NcmCapaService {
         upd.setStatus("已关闭");
         upd.setCloseDate(LocalDate.now());
         abnormalMapper.updateById(upd);
+    }
+
+    /** 列表级改派责任人(更新 owner_user_id/owner + 推送被指派人任务中心)。 */
+    @Override
+    @Transactional
+    public void reassign(String capaId, DefectLaunchRequest req) {
+        QmsCapa capa = qmsCapaMapper.selectById(capaId);
+        if (capa == null) throw new BusinessException(404, "CAPA 不存在");
+        String ownerName = assignReassignService.execute(new com.konli.qms.service.assign.AssignReassignService.ReassignContext(
+                "CAPA", capaId, capa.getCapaNo(), capa.getOrgId(),
+                "/ncm/capas/" + capaId, capa.getAbnormalId(), null, req, true));
+        QmsCapa upd = new QmsCapa();
+        upd.setId(capaId);
+        upd.setOwnerUserId(req.getOwnerUserId());
+        upd.setOwner(ownerName);
+        qmsCapaMapper.updateById(upd);
     }
 }

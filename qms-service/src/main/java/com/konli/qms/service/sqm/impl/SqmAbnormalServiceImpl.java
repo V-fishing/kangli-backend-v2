@@ -1,9 +1,13 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.konli.qms.domain.sqm.dto.AbnormalRectificationRequest;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.DataScopeGuard;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalMeasure;
@@ -23,12 +27,14 @@ import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.domain.ncm.mapper.Qms8dReportMapper;
 import com.konli.qms.domain.sqm.entity.SqmAuditPlan;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.sqm.SqmAbnormalService;
 import com.konli.qms.service.sqm.SqmAuditService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.util.StringUtils;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +65,7 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
     private final SqmAbnormalBatchVerifyMapper batchVerifyMapper;
     private final Qms8dReportMapper qms8dReportMapper;
     private final NotificationService notificationService;
+    private final com.konli.qms.service.assign.AssignReassignService assignReassignService;
 
     @Override
     public List<SqmIncomingAbnormal> listAbnormals() {
@@ -86,6 +93,52 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
             needFill.forEach(a -> a.setBatchNo(resolveBatchNo(a.getLotId(), lotNoMap)));
         }
         return list;
+    }
+
+    @Override
+    public PageResult<SqmIncomingAbnormal> listAbnormalsPage(String keyword, String level, String status,
+                                                              String supplierId, int page, int size) {
+        LambdaQueryWrapper<SqmIncomingAbnormal> qw = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            qw.and(w -> w.like(SqmIncomingAbnormal::getAbnormalNo, keyword)
+                    .or().like(SqmIncomingAbnormal::getSupplierName, keyword)
+                    .or().like(SqmIncomingAbnormal::getPartNo, keyword)
+                    .or().like(SqmIncomingAbnormal::getPartName, keyword));
+        }
+        if (StringUtils.hasText(level)) {
+            qw.eq(SqmIncomingAbnormal::getLevel, level);
+        }
+        if (StringUtils.hasText(status)) {
+            qw.eq(SqmIncomingAbnormal::getStatus, status);
+        }
+        if (StringUtils.hasText(supplierId)) {
+            qw.eq(SqmIncomingAbnormal::getSupplierId, supplierId);
+        }
+        qw.orderByDesc(SqmIncomingAbnormal::getCreatedAt);
+        IPage<SqmIncomingAbnormal> ip = sqmIncomingAbnormalMapper.selectPage(new Page<>(page, size), qw);
+        List<SqmIncomingAbnormal> list = ip.getRecords();
+        // 填充供应商名称
+        List<String> supplierIds = list.stream()
+                .map(SqmIncomingAbnormal::getSupplierId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (!supplierIds.isEmpty()) {
+            List<SqmSupplier> suppliers = sqmSupplierMapper.selectList(
+                    new LambdaQueryWrapper<SqmSupplier>().in(SqmSupplier::getId, supplierIds));
+            Map<String, String> nameMap = suppliers.stream()
+                    .collect(Collectors.toMap(SqmSupplier::getId, SqmSupplier::getName, (a, b) -> a));
+            list.forEach(a -> a.setSupplierName(nameMap.get(a.getSupplierId())));
+        }
+        // 兜底填充可读批次号
+        List<SqmIncomingAbnormal> needFill = list.stream()
+                .filter(a -> a.getBatchNo() == null || a.getBatchNo().isBlank())
+                .collect(Collectors.toList());
+        if (!needFill.isEmpty()) {
+            Map<String, String> lotNoMap = buildLotNoMap(needFill);
+            needFill.forEach(a -> a.setBatchNo(resolveBatchNo(a.getLotId(), lotNoMap)));
+        }
+        return new PageResult<>(list, ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     /** 以 lotId(去横杠 UUID)为 key 反查来料批次 lot_no。 */
@@ -487,6 +540,21 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
         return result;
     }
 
+    /** 列表级改派责任人(更新 handler_id + 推送被指派人任务中心)。 */
+    @Override
+    @Transactional
+    public void reassign(String id, DefectLaunchRequest req) {
+        SqmIncomingAbnormal ab = sqmIncomingAbnormalMapper.selectById(id);
+        if (ab == null) throw new BusinessException(404, "来料异常单不存在");
+        assignReassignService.execute(new com.konli.qms.service.assign.AssignReassignService.ReassignContext(
+                "SQM异常", id, ab.getAbnormalNo(), ab.getOrgId(),
+                "/sqm/abnormals", id, ab.getAbnormalNo(), req, true));
+        SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
+        upd.setId(id);
+        upd.setHandlerId(req.getOwnerUserId());
+        sqmIncomingAbnormalMapper.updateById(upd);
+    }
+
     /** SR-CAR:每天8:00扫描异常超期(occurDate>7天未闭环),超7天通知SQE,超14天升级质量经理+采购 */
     @Scheduled(cron = "0 5 8 * * ?")
     public void scanOverdue() {
@@ -501,11 +569,11 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
                 upd.setId(a.getId());
                 upd.setOverdueDays((int) days);
                 sqmIncomingAbnormalMapper.updateById(upd);
-                List<String> roles = days >= 14 ? List.of("qmanager", "purchaser") : List.of("sqe");
-                notificationService.notifyRoles(roles,
+                String ev = days >= 14 ? "sqm_abnormal_overdue_escalate" : "sqm_abnormal_overdue";
+                notificationService.notify("sqm", ev,
                         "来料异常超期提醒",
                         "来料异常" + a.getAbnormalNo() + " 超期" + days + "天未闭环,请及时处理。",
-                        "abnormal_overdue", a.getId(), "/sqm/abnormal", null);
+                        "abnormal_overdue", a.getId(), "/sqm/abnormal");
             }
         } catch (Exception e) { log.warn("异常超期扫描失败: {}", e.getMessage()); }
     }

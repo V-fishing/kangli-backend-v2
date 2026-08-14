@@ -24,4 +24,8 @@ public class SysButton {
 
     @TableField("btn_name")
     private String btnName;
+
+    /** 所属菜单名(查询时由菜单表回填,DB 无此列,仅展示用)。 */
+    @TableField(exist = false)
+    private String menuName;
 }

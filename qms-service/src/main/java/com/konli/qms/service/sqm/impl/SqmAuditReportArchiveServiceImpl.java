@@ -107,8 +107,15 @@ public class SqmAuditReportArchiveServiceImpl implements SqmAuditReportArchiveSe
         archive.setArchiveDate(now);
         archive.setRetentionUntil(LocalDate.now().plusYears(15));
 
-        // 生成 PDF(openhtmltopdf),失败抛 BusinessException
-        String pdfPath;
+        // 先落归档记录,保证"审核闭环即进归档模块"(即使后续 PDF 生成失败,归档条目仍存在)
+        sqmAuditReportArchiveMapper.insert(archive);
+        // 回填 sqm_audit_record.archive_id(便于反查归档记录)
+        SqmAuditRecord upd = new SqmAuditRecord();
+        upd.setId(recordId);
+        upd.setArchiveId(archive.getId());
+        sqmAuditRecordMapper.updateById(upd);
+
+        // 生成 PDF(openhtmltopdf),失败仅告警,不阻断归档条目生成
         try {
             String html = buildReportHtml(record, ncs, archive);
             PdfRendererBuilder builder = new PdfRendererBuilder();
@@ -124,19 +131,11 @@ public class SqmAuditReportArchiveServiceImpl implements SqmAuditReportArchiveSe
             Path path = Paths.get("logs", "reports", fileName);
             Files.createDirectories(path.getParent());
             Files.write(path, pdfBytes);
-            pdfPath = path.toString();
+            archive.setReportFilePath(path.toString());
+            sqmAuditReportArchiveMapper.updateById(archive);
         } catch (Exception e) {
-            log.warn("SQM 审核报告归档 PDF 生成失败, recordId={}: {}", recordId, e.getMessage(), e);
-            throw new BusinessException(500, "审核报告归档 PDF 生成失败: " + e.getMessage());
+            log.warn("SQM 审核报告归档 PDF 生成失败(归档条目已保留), recordId={}: {}", recordId, e.getMessage(), e);
         }
-        archive.setReportFilePath(pdfPath);
-        sqmAuditReportArchiveMapper.insert(archive);
-
-        // 回填 sqm_audit_record.archive_id(便于反查归档记录)
-        SqmAuditRecord upd = new SqmAuditRecord();
-        upd.setId(recordId);
-        upd.setArchiveId(archive.getId());
-        sqmAuditRecordMapper.updateById(upd);
 
         return archive;
     }
@@ -205,6 +204,30 @@ public class SqmAuditReportArchiveServiceImpl implements SqmAuditReportArchiveSe
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    /**
+     * 历史补归档:扫描 sqm_audit_record 中 status='已完成' 但 archive_id 为空的记录,
+     * 逐个触发 generatePdf(幂等:生成后会回填 archive_id,重复执行安全)。
+     */
+    @Override
+    @Transactional
+    public int backfill() {
+        List<SqmAuditRecord> pending = sqmAuditRecordMapper.selectList(
+                new LambdaQueryWrapper<SqmAuditRecord>()
+                        .eq(SqmAuditRecord::getStatus, "已完成")
+                        .isNull(SqmAuditRecord::getArchiveId)
+                        .eq(SqmAuditRecord::getIsDeleted, false));
+        int n = 0;
+        for (SqmAuditRecord rec : pending) {
+            try {
+                generatePdf(rec.getId());
+                n++;
+            } catch (Exception e) {
+                log.warn("审核补归档失败, recordId={}: {}", rec.getId(), e.getMessage());
+            }
+        }
+        return n;
     }
 
     private static String sha256(String content) {

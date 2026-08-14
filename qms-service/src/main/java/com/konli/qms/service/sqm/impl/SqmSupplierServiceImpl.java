@@ -1,10 +1,14 @@
 package com.konli.qms.service.sqm.impl;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.service.sqm.SqmSupplierService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -28,8 +32,36 @@ public class SqmSupplierServiceImpl implements SqmSupplierService {
     }
 
     @Override
+    public PageResult<SqmSupplier> listPage(String keyword, String level, String status, int page, int size) {
+        LambdaQueryWrapper<SqmSupplier> qw = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            qw.and(w -> w.like(SqmSupplier::getName, keyword)
+                    .or().like(SqmSupplier::getSupplierNo, keyword)
+                    .or().like(SqmSupplier::getSupplierCode, keyword));
+        }
+        if (StringUtils.hasText(level)) {
+            qw.eq(SqmSupplier::getLevel, level);
+        }
+        if (StringUtils.hasText(status)) {
+            qw.eq(SqmSupplier::getStatus, status);
+        }
+        qw.orderByDesc(SqmSupplier::getCreatedAt);
+        IPage<SqmSupplier> ip = sqmSupplierMapper.selectPage(new Page<>(page, size), qw);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
+    }
+
+    @Override
     public SqmSupplier get(String id) {
         return sqmSupplierMapper.selectById(id);
+    }
+
+    @Override
+    public SqmSupplier findByVenCode(String venCode) {
+        if (venCode == null || venCode.isBlank()) {
+            return null;
+        }
+        return sqmSupplierMapper.selectOne(
+                new LambdaQueryWrapper<SqmSupplier>().eq(SqmSupplier::getVenCode, venCode.trim()));
     }
 
     @Override

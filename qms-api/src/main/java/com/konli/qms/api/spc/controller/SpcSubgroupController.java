@@ -46,12 +46,19 @@ public class SpcSubgroupController {
         if ((orgId == null || orgId.isBlank()) && CompanyContext.get() != null) {
             orgId = CompanyContext.get().orgId();
         }
+        // ROOT 不是有效组织UUID，置null让Service层用参数所属组织兜底
+        if ("ROOT".equals(orgId)) {
+            orgId = null;
+        }
         sg.setOrgId(orgId);
         sg.setParamId(req.getParamId());
         sg.setSubgroupTime(req.getSubgroupTime());
-        sg.setShift(req.getShift());
         sg.setWoNo(req.getWoNo());
         sg.setBatchNo(req.getBatchNo());
+        sg.setTaskId(req.getTaskId());
+        sg.setSampleTaskId(req.getSampleTaskId());
+        sg.setProductCode(req.getProductCode());
+        sg.setStage(req.getStage());
         return R.ok(spcSubgroupService.create(sg, req.getValues()));
     }
 }

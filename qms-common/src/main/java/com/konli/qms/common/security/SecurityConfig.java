@@ -24,6 +24,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
+    private final OrgSwitchFilter orgSwitchFilter;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -46,7 +47,8 @@ public class SecurityConfig {
                     resp.setContentType("application/json;charset=UTF-8");
                     resp.getWriter().write("{\"code\":403,\"msg\":\"无权限\",\"data\":null}");
                 }))
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(orgSwitchFilter, JwtAuthenticationFilter.class);
         return http.build();
     }
 

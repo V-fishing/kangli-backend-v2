@@ -2,8 +2,10 @@ package com.konli.qms.service.sqm;
 
 import com.konli.qms.domain.sqm.entity.SqmAuditApproval;
 import com.konli.qms.domain.sqm.entity.SqmAuditNc;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmAuditPlan;
 import com.konli.qms.domain.sqm.entity.SqmAuditRecord;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 
 import java.util.List;
 
@@ -11,6 +13,8 @@ import java.util.List;
 public interface SqmAuditService {
 
     List<SqmAuditPlan> listPlans();
+
+    PageResult<SqmAuditPlan> listPlansPage(String status, String auditType, String supplierId, int page, int size);
 
     List<SqmAuditRecord> listRecords();
 
@@ -56,4 +60,7 @@ public interface SqmAuditService {
      * 返回 byte[](Controller 可直接输出为下载)。
      */
     byte[] generateReport(String recordId);
+
+    /** 列表级改派审核组长(更新 audit_lead_user_id/audit_lead + 推送被指派人任务中心)。 */
+    void reassign(String id, DefectLaunchRequest req);
 }

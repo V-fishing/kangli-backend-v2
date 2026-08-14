@@ -3,6 +3,7 @@ package com.konli.qms.domain.fia.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import java.math.BigDecimal;
@@ -39,6 +40,10 @@ public class FiaInspStdItem {
     @TableField("value_type")
     private String valueType;
 
+    /** 推荐控制图类型集合(基础图码逗号分隔,如 'Xbar,R');数值默认 Xbar,R,枚举/文本默认 P。可为历史组合码,读取侧经 normalizeToBasic 兼容。 */
+    @TableField("chart_types")
+    private String chartTypes;
+
     @TableField("enum_values")
     private String enumValues;
 
@@ -52,6 +57,8 @@ public class FiaInspStdItem {
     @TableField("item_type")
     private String itemType;
 
+    /** 软删标志(逻辑删,与 update 接口的明细替换策略一致;物理删会破坏 spc_param.fia_std_item_id 引用) */
+    @TableLogic
     @TableField("is_deleted")
     private Boolean isDeleted;
 }

@@ -1,5 +1,6 @@
 package com.konli.qms.api.spc.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.spc.entity.SpcRule;
 import com.konli.qms.service.spc.SpcRuleService;
@@ -27,6 +28,14 @@ public class SpcRuleController {
     @PreAuthorize("hasAuthority('spc.rule.list')")
     public R<List<SpcRule>> list() {
         return R.ok(spcRuleService.list());
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('spc.rule.list')")
+    public R<PageResult<SpcRule>> page(@RequestParam(required = false) String keyword,
+                                       @RequestParam(defaultValue = "1") int page,
+                                       @RequestParam(defaultValue = "20") int size) {
+        return R.ok(spcRuleService.listPage(keyword, page, size));
     }
 
     @PutMapping("/{id}")

@@ -1,6 +1,8 @@
 package com.konli.qms.service.ncm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 
 import java.util.List;
 import java.util.Map;
@@ -9,6 +11,11 @@ import java.util.Map;
 public interface NcmDefectRecordService {
 
     List<NcmDefectRecord> list();
+
+    /** 不良记录分页查询,支持关键字与条件过滤。
+     *  keyword 模糊匹配记录编号/工单号/工序/缺陷编码;defectDictCode/woNo/severity 精确或模糊过滤。
+     *  page/size 从 1 开始计数,默认 page=1,size=20。供不良记录列表大数据量分页加载。 */
+    PageResult<NcmDefectRecord> listPage(String keyword, String defectDictCode, String woNo, String severity, String stage, String source, int page, int size);
 
     NcmDefectRecord get(String id);
 
@@ -32,12 +39,15 @@ public interface NcmDefectRecordService {
     /** 趋势异常检测(SR-NCM-017):连续5天defectRate上升->写ncm_trend_alert+通知。返回{anomaly,consecutiveIncr,trendPoints} */
     Map<String, Object> checkTrendAnomaly();
 
-    /** 不良记录一键发起8D(SR-NCM处置决策):创建8D单,source=不良记录。返回8D记录 */
-    Object launch8dFromDefect(String defectId);
+    /** 不良记录一键发起8D(SR-NCM处置决策):创建8D单,source=不良记录,并按 req 指派处理人+通知。返回8D记录 */
+    Object launch8dFromDefect(String defectId, DefectLaunchRequest req);
 
-    /** 不良记录一键发起CAPA(SR-NCM处置决策):创建CAPA单。返回CAPA记录 */
-    Object launchCapaFromDefect(String defectId);
+    /** 不良记录一键发起CAPA(SR-NCM处置决策):创建CAPA单,并按 req 指派处理人+通知。返回CAPA记录 */
+    Object launchCapaFromDefect(String defectId, DefectLaunchRequest req);
 
-    /** 不良记录一键发起CA(SR-NCM处置决策):创建纠正措施单。返回CA记录 */
-    Object launchCaFromDefect(String defectId);
+    /** 不良记录一键发起CA(SR-NCM处置决策):创建纠正措施单,并按 req 指派处理人+通知。返回CA记录 */
+    Object launchCaFromDefect(String defectId, DefectLaunchRequest req);
+
+    /** 指派候选:启用用户列表 + 启用角色列表 + 启用的通知渠道列表。 */
+    Map<String, Object> assignCandidates();
 }

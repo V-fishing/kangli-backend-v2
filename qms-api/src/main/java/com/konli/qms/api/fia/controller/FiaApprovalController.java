@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** 首件审批(豁免/紧急放行/让步接收)。fia.std.create。 */
+/** 首件审批(豁免/紧急放行/让步接收)。查询 fia.std.list,写 fia.std.create。 */
 @RestController
 @RequestMapping("/api/v1/fia/approvals")
 @RequiredArgsConstructor
@@ -25,13 +25,15 @@ public class FiaApprovalController {
     private final FiaApprovalService fiaApprovalService;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('fia.std.create')")
-    public R<List<FiaApproval>> list() {
-        return R.ok(fiaApprovalService.list());
+    @PreAuthorize("hasAuthority('fia.std.list')")
+    public R<List<FiaApproval>> list(@RequestParam(required = false) String approvalType,
+                                     @RequestParam(required = false) String status,
+                                     @RequestParam(required = false) String keyword) {
+        return R.ok(fiaApprovalService.list(approvalType, status, keyword));
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("hasAuthority('fia.std.create')")
+    @PreAuthorize("hasAuthority('fia.std.list')")
     public R<FiaApproval> get(@PathVariable String id) {
         return R.ok(fiaApprovalService.get(id));
     }

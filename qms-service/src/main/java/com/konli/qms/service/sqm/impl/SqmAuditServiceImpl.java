@@ -1,8 +1,13 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
+import org.springframework.util.StringUtils;
 
+import java.util.Arrays;
 import java.util.Objects;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
 import com.konli.qms.domain.sqm.entity.SqmAuditApproval;
@@ -24,6 +29,7 @@ import com.konli.qms.common.security.DataScopeGuard;
 import com.konli.qms.service.sqm.SqmAuditApprovalCfgService;
 import com.konli.qms.service.sqm.SqmAuditReportArchiveService;
 import com.konli.qms.service.sqm.SqmAuditService;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.sqm.dto.AuditorDef;
 import com.konli.qms.service.support.CjkFontUtil;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
@@ -62,10 +68,28 @@ public class SqmAuditServiceImpl implements SqmAuditService {
     private final SqmAuditApprovalCfgService approvalCfgService;
     private final SqmAuditReportArchiveService reportArchiveService;
     private final NotificationService notificationService;
+    private final com.konli.qms.service.assign.AssignReassignService assignReassignService;
 
     @Override
     public List<SqmAuditPlan> listPlans() {
         return sqmAuditPlanMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<SqmAuditPlan> listPlansPage(String status, String auditType, String supplierId, int page, int size) {
+        LambdaQueryWrapper<SqmAuditPlan> qw = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(status)) {
+            qw.eq(SqmAuditPlan::getStatus, status);
+        }
+        if (StringUtils.hasText(auditType)) {
+            qw.eq(SqmAuditPlan::getAuditType, auditType);
+        }
+        if (StringUtils.hasText(supplierId)) {
+            qw.eq(SqmAuditPlan::getSupplierId, supplierId);
+        }
+        qw.orderByDesc(SqmAuditPlan::getPlanDate);
+        IPage<SqmAuditPlan> ip = sqmAuditPlanMapper.selectPage(new Page<>(page, size), qw);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -122,6 +146,9 @@ public class SqmAuditServiceImpl implements SqmAuditService {
     @Transactional
     public SqmAuditPlan createPlan(SqmAuditPlan plan) {
         plan.setPlanNo("AP-" + System.currentTimeMillis());
+        if (plan.getPlanDate() == null) {
+            plan.setPlanDate(java.time.LocalDate.now()); // 兜底:plan_date NOT NULL,任何来源缺字段都不应 500
+        }
         if (plan.getStatus() == null) {
             plan.setStatus("待执行");  // 直接进入待执行,去掉无实际业务动作的"计划中→确认"步骤
         }
@@ -132,9 +159,9 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         seedDefaultApprovals(plan);
         // 通知审核组长和审核组成员
         try {
-            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+            notificationService.notify("sqm", "sqm_audit_plan_created",
                     "审核计划已创建", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已创建,请确认并安排执行。",
-                    "audit_task", plan.getId(), "/sqm/audit", null);
+                    "audit_task", plan.getId(), "/sqm/audit");
         } catch (Exception e) {
             log.warn("[审核] 计划创建通知失败: {}", e.getMessage());
         }
@@ -204,9 +231,9 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         }
         // 通知参与人员
         try {
-            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+            notificationService.notify("sqm", "sqm_audit_plan_started",
                     "审核计划已开始", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已开始执行,请及时完成审核记录。",
-                    "audit_task", plan.getId(), "/sqm/audit", null);
+                    "audit_task", plan.getId(), "/sqm/audit");
         } catch (Exception e) {
             log.warn("[审核] 计划开始通知失败: {}", e.getMessage());
         }
@@ -254,6 +281,17 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         if ("done".equals(a.getStatus()) || "rejected".equals(a.getStatus())) {
             throw new BusinessException(409, "该节点已会签,不可重复操作");
         }
+        // 指定审批人身份校验:节点绑定了 approver_id 时,当前登录人必须命中其一(OR 语义),
+        // 否则存在越权签字风险;approver_id 为空(历史/未绑定)时退化为「有权限者均可签」以兼容旧数据。
+        if (a.getApproverId() != null && !a.getApproverId().isBlank()) {
+            CompanyContext.CurrentUser cur = CompanyContext.get();
+            String curId = (cur != null && cur.userId() != null) ? cur.userId() : null;
+            boolean allowed = curId != null && Arrays.stream(a.getApproverId().split(","))
+                .map(String::trim).anyMatch(id -> id.equals(curId));
+            if (!allowed) {
+                throw new BusinessException(403, "仅指定审批人可对该节点会签");
+            }
+        }
         a.setStatus(approved ? "done" : "rejected");
         a.setOperator(currentUser());
         a.setOperateDate(LocalDateTime.now());
@@ -300,9 +338,21 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             for (AuditorDef m : auditors) {
                 // approvalRole 必须是 ASCII 稳定标识(中文在 WHERE 参数比对中会编码失配),
                 // roleLabel 保留中文用于展示。
-                String role = (m.getRole() == null || m.getRole().isBlank())
+                // 同一审核类型下可能配置多名相同用户(role 派生值相同),而 sqm_audit_approval
+                // 有 (audit_id, approval_role) 唯一约束,故 role 必须带 seq 后缀保证同批唯一,
+                // 否则重置会签链时会 DuplicateKeyException 导致 500。
+                String base = (m.getRole() == null || m.getRole().isBlank())
                         ? roleCode(m.getLabel(), seq) : m.getRole();
-                seeds.add(buildApproval(orgId, plan.getId(), role, m.getLabel(), m.isVeto(), seq));
+                String role = base + "_" + seq;
+                // 多人会签:优先用 userIds 列表(同一节点多名审批人,OR 语义任一可签),
+                // 否则回退单 userId;approver_id 以逗号串存储。
+                String approverId;
+                if (m.getUserIds() != null && !m.getUserIds().isEmpty()) {
+                    approverId = String.join(",", m.getUserIds());
+                } else {
+                    approverId = m.getUserId();
+                }
+                seeds.add(buildApproval(orgId, plan.getId(), role, m.getLabel(), m.isVeto(), seq, approverId));
                 teamLabels.add(m.getLabel());
                 seq++;
             }
@@ -310,13 +360,13 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             // 兜底:解析 auditorTeam(无否决权)
             List<String> group = parseAuditGroup(plan.getAuditorTeam());
             for (String member : group) {
-                seeds.add(buildApproval(orgId, plan.getId(), roleCode(member, seq), member, false, seq));
+                seeds.add(buildApproval(orgId, plan.getId(), roleCode(member, seq), member, false, seq, null));
                 teamLabels.add(member);
                 seq++;
             }
             if (seeds.isEmpty()) {
-                seeds.add(buildApproval(orgId, plan.getId(), "quality", "质量经理", false, 0));
-                seeds.add(buildApproval(orgId, plan.getId(), "purchase", "采购主管", false, 1));
+                seeds.add(buildApproval(orgId, plan.getId(), "quality", "质量经理", false, 0, null));
+                seeds.add(buildApproval(orgId, plan.getId(), "purchase", "采购主管", false, 1, null));
                 teamLabels.add("质量经理");
                 teamLabels.add("采购主管");
             }
@@ -381,7 +431,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
     }
 
     private SqmAuditApproval buildApproval(String orgId, String auditId, String role,
-                                           String label, boolean veto, int seq) {
+                                           String label, boolean veto, int seq, String approverId) {
         SqmAuditApproval a = new SqmAuditApproval();
         a.setOrgId(orgId);
         a.setAuditId(auditId);
@@ -390,6 +440,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         a.setStatus("pending");
         a.setHasVeto(veto);
         a.setSeqOrder(seq);
+        a.setApproverId(approverId);
         return a;
     }
 
@@ -427,6 +478,22 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             if (c == null) record.setResult("通过");
             else if ("推荐通过".equals(c)) record.setResult("通过");
             else record.setResult(c);
+        }
+        // 会签全部通过才能生成记录并归档(修复"未会签也归档"的不合理):
+        // 变更联动审核(change_id 非空)在 startPlan 已要求变更单"已批准"且会签视为完成,此处跳过;
+        // 独立审核须全部 sqm_audit_approval 节点 status='done' 方可完成审核。
+        if (record.getPlanId() != null) {
+            SqmAuditPlan chkPlan = sqmAuditPlanMapper.selectById(record.getPlanId());
+            boolean changeLinked = chkPlan != null && chkPlan.getChangeId() != null && !chkPlan.getChangeId().isBlank();
+            if (!changeLinked) {
+                List<SqmAuditApproval> apps = sqmAuditApprovalMapper.selectList(
+                    new LambdaQueryWrapper<SqmAuditApproval>().eq(SqmAuditApproval::getAuditId, record.getPlanId()));
+                if (apps.isEmpty() && chkPlan != null) apps = seedDefaultApprovals(chkPlan);
+                boolean allApproved = apps.stream().allMatch(a -> "done".equals(a.getStatus()));
+                if (!allApproved) {
+                    throw new BusinessException(409, "需审核组全部会签通过后方可完成审核并归档");
+                }
+            }
         }
         sqmAuditRecordMapper.insert(record);
         // 供应商审核→等级联动:审核得分自动更新供应商等级(A/B/C/D)
@@ -497,10 +564,10 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             } catch (Exception ignored) {}
             // 严重不符合项通知
             try {
-                notificationService.notifyRoles(List.of("qmanager", "sqe"),
+                notificationService.notify("sqm", "sqm_audit_nc_major",
                         "审核严重不符合项",
                         "审核不符合项" + nc.getNcNo() + "(" + nc.getLevel() + "): " + (nc.getDescription() != null ? nc.getDescription() : ""),
-                        "audit_task", nc.getId(), "/sqm/audit", null);
+                        "audit_task", nc.getId(), "/sqm/audit");
             } catch (Exception ignored) {}
         }
         return nc;
@@ -525,10 +592,10 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         }
         // 整改闭环通知
         try {
-            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+            notificationService.notify("sqm", "sqm_audit_nc_closed",
                     "审核不符合项已闭环",
                     "审核不符合项" + nc.getNcNo() + " 整改验证通过,已闭环。" + (verifyResult != null ? " 验证结论:" + verifyResult : ""),
-                    "audit_task", ncId, "/sqm/audit", null);
+                    "audit_task", ncId, "/sqm/audit");
         } catch (Exception e) {
             log.warn("[审核] NC闭环通知失败: {}", e.getMessage());
         }
@@ -564,6 +631,22 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             log.warn("SQM 审核报告 PDF 生成失败, recordId={}: {}", recordId, e.getMessage(), e);
             throw new BusinessException(500, "审核报告 PDF 生成失败: " + e.getMessage());
         }
+    }
+
+    /** 列表级改派审核组长(更新 audit_lead_user_id/audit_lead + 推送被指派人任务中心)。 */
+    @Override
+    @Transactional
+    public void reassign(String id, DefectLaunchRequest req) {
+        SqmAuditPlan plan = sqmAuditPlanMapper.selectById(id);
+        if (plan == null) throw new BusinessException(404, "审核计划不存在");
+        String ownerName = assignReassignService.execute(new com.konli.qms.service.assign.AssignReassignService.ReassignContext(
+                "审核", id, plan.getPlanNo(), plan.getOrgId(),
+                "/sqm/audits/plan/" + id, null, null, req, true));
+        SqmAuditPlan upd = new SqmAuditPlan();
+        upd.setId(id);
+        upd.setAuditLeadUserId(req.getOwnerUserId());
+        upd.setAuditLead(ownerName);
+        sqmAuditPlanMapper.updateById(upd);
     }
 
     /** 构建审核报告 HTML(内联样式,不依赖外部 CSS;openhtmltopdf 渲染)。 */
@@ -636,10 +719,10 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             for (SqmAuditNc nc : ncs) {
                 if (nc.getDeadline() == null) continue;
                 long days = ChronoUnit.DAYS.between(nc.getDeadline(), LocalDate.now());
-                notificationService.notifyRoles(List.of("qmanager", "purchaser"),
+                notificationService.notify("sqm", "sqm_audit_nc_overdue",
                         "审核NC整改超期",
                         "审核不符合项 " + nc.getNcNo() + " 整改超期" + days + "天,已升级通知。",
-                        "audit_nc_overdue", nc.getId(), "/sqm/audit", null);
+                        "audit_nc_overdue", nc.getId(), "/sqm/audit");
             }
         } catch (Exception e) { log.warn("NC超期扫描异常: {}", e.getMessage()); }
     }

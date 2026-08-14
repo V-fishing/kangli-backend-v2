@@ -32,6 +32,12 @@ public class SysUser extends BaseEntity {
 
     private String status;   // 启用/停用/锁定
 
+    /** 邮箱(点对点邮件通知接收地址) */
+    private String email;
+
+    /** 手机号(短信通知 / 钉钉·企微按手机号桥接外部账号) */
+    private String phone;
+
     @TableField("fail_count")
     private Integer failCount;     // 连续密码错误
 

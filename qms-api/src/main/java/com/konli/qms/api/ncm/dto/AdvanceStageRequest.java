@@ -11,4 +11,7 @@ public class AdvanceStageRequest {
     private String content;
 
     private String owner;
+
+    /** 团队成员(D1 团队组建阶段,以"、"或","分隔的用户姓名) */
+    private String teamMembers;
 }

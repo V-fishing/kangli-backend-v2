@@ -1,5 +1,9 @@
 package com.konli.qms.service.spc.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.spc.entity.SpcAlarm;
@@ -7,6 +11,7 @@ import com.konli.qms.domain.spc.mapper.SpcAlarmMapper;
 import com.konli.qms.service.spc.SpcAlarmService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,6 +25,26 @@ public class SpcAlarmServiceImpl implements SpcAlarmService {
     @Override
     public List<SpcAlarm> list() {
         return spcAlarmMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<SpcAlarm> listPage(String keyword, String status, String level, int page, int size) {
+        LambdaQueryWrapper<SpcAlarm> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(SpcAlarm::getCode, keyword)
+                    .or().like(SpcAlarm::getParamName, keyword)
+                    .or().like(SpcAlarm::getWoNo, keyword)
+                    .or().like(SpcAlarm::getBatchNo, keyword));
+        }
+        if (StringUtils.hasText(status)) {
+            w.eq(SpcAlarm::getStatus, status);
+        }
+        if (StringUtils.hasText(level)) {
+            w.eq(SpcAlarm::getLevel, level);
+        }
+        w.orderByDesc(SpcAlarm::getAlarmTime);
+        IPage<SpcAlarm> ip = spcAlarmMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override

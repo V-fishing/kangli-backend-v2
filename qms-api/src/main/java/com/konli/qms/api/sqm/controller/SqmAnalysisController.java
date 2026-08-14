@@ -53,4 +53,64 @@ public class SqmAnalysisController {
     public R<List<Map<String, Object>>> ranking(@RequestParam(required = false) String period) {
         return R.ok(sqmAnalysisService.ranking(period));
     }
+
+    // ==================== 供应商看板:五聚合 ====================
+
+    /** 供应商合格率分布:五档分桶,可选 level/keyword/月份范围 */
+    @GetMapping("/supplier/pass-rate-dist")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> passRateDist(
+            @RequestParam(required = false) String level,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String startYm,
+            @RequestParam(required = false) String endYm) {
+        return R.ok(sqmAnalysisService.passRateDist(level, keyword, startYm, endYm));
+    }
+
+    /** 重点供应商合格率趋势:observeOnly 仅重点观察,supplierIds 追加对比 */
+    @GetMapping("/supplier/pass-rate-trend")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> passRateTrend(
+            @RequestParam(required = false, defaultValue = "true") boolean observeOnly,
+            @RequestParam(required = false) List<String> supplierIds,
+            @RequestParam(required = false) String startYm,
+            @RequestParam(required = false) String endYm) {
+        return R.ok(sqmAnalysisService.passRateTrend(observeOnly, supplierIds, startYm, endYm));
+    }
+
+    /** 质量异常热力图:供应商×月份,指定 year 与 topN */
+    @GetMapping("/supplier/abnormal-heat")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> abnormalHeat(
+            @RequestParam(required = false) String year,
+            @RequestParam(required = false, defaultValue = "15") int topN) {
+        return R.ok(sqmAnalysisService.abnormalHeat(year, topN));
+    }
+
+    /** 供应商等级占比:A/B/C/D 分布 */
+    @GetMapping("/supplier/level-ratio")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> levelRatio(
+            @RequestParam(required = false) String level,
+            @RequestParam(required = false) String keyword) {
+        return R.ok(sqmAnalysisService.levelRatio(level, keyword));
+    }
+
+    /** 检验结论分布:合格/不合格/待检 等 */
+    @GetMapping("/supplier/inspect-result")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> inspectResult(
+            @RequestParam(required = false) String level,
+            @RequestParam(required = false) String keyword) {
+        return R.ok(sqmAnalysisService.inspectResult(level, keyword));
+    }
+
+    /** 交付率×合格率散点 */
+    @GetMapping("/supplier/delivery-vs-pass")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> deliveryVsPass(
+            @RequestParam(required = false) String level,
+            @RequestParam(required = false) String keyword) {
+        return R.ok(sqmAnalysisService.deliveryVsPass(level, keyword));
+    }
 }

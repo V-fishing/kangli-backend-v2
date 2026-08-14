@@ -26,6 +26,10 @@ public class FiaTask extends BaseEntity {
     @TableField("source")
     private String source;
 
+    /** 分类: 物料(material) / 半成品(semi) / 成品(product)，可空(老任务按 source 派生) */
+    @TableField("category")
+    private String category;
+
     private String code;
     @TableField("wo_no")
     private String woNo;
@@ -86,4 +90,12 @@ public class FiaTask extends BaseEntity {
     private Integer failCount;       // 不合格数
     @TableField("pass_rate")
     private BigDecimal passRate;     // 合格率(比例 0~1)
+
+    /** 关联工装 ID(可空，仅 source=TOOLING 时填入，用于不合格回写工装锁定) */
+    @TableField("tool_id")
+    private String toolId;
+
+    /** 选中的标准项 ID 列表(非持久化);为空则按标准全量生成检验项 */
+    @TableField(exist = false)
+    private java.util.List<String> stdItemIds;
 }

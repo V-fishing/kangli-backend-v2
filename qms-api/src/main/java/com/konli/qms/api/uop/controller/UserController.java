@@ -59,6 +59,8 @@ public class UserController {
         u.setRealName(req.getRealName());
         u.setOrgId(req.getOrgId());
         u.setStatus(req.getStatus());
+        u.setEmail(req.getEmail());
+        u.setPhone(req.getPhone());
         return R.ok(userService.create(u, req.getPassword()));
     }
 
@@ -70,6 +72,8 @@ public class UserController {
         u.setRealName(req.getRealName());
         u.setOrgId(req.getOrgId());
         u.setStatus(req.getStatus());
+        u.setEmail(req.getEmail());
+        u.setPhone(req.getPhone());
         userService.update(u);
         return R.ok();
     }

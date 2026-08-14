@@ -1,5 +1,6 @@
 package com.konli.qms.api.spc.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.spc.entity.SpcCollectTask;
 import com.konli.qms.service.spc.SpcCollectTaskService;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -29,6 +31,15 @@ public class SpcCollectTaskController {
     @PreAuthorize("hasAuthority('spc.subgroup.create')")
     public R<List<SpcCollectTask>> list() {
         return R.ok(spcCollectTaskService.list());
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('spc.subgroup.create')")
+    public R<PageResult<SpcCollectTask>> page(@RequestParam(required = false) String status,
+                                              @RequestParam(required = false) String collectMode,
+                                              @RequestParam(defaultValue = "1") int page,
+                                              @RequestParam(defaultValue = "20") int size) {
+        return R.ok(spcCollectTaskService.listPage(status, collectMode, page, size));
     }
 
     @PostMapping

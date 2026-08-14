@@ -1,6 +1,9 @@
 package com.konli.qms.service.ncm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.DataScopeGuard;
@@ -10,13 +13,18 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.domain.ncm.entity.Qms8dStageDetail;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
+import com.konli.qms.domain.ncm.entity.QmsAssignRecord;
 import com.konli.qms.domain.ncm.mapper.Qms8dReportMapper;
 import com.konli.qms.domain.ncm.mapper.Qms8dStageDetailMapper;
+import com.konli.qms.domain.ncm.mapper.QmsAssignRecordMapper;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingAbnormalMapper;
+import com.konli.qms.service.ncm.Ncm8dArchiveService;
 import com.konli.qms.service.ncm.Ncm8dService;
 import com.konli.qms.service.ncm.Ncm8dApprovalConfigService;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.dto.Abnormal8dLaunchRequest;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.ncm.dto.EightDVo;
 import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.ncm.Qms8dFishboneService;
@@ -25,8 +33,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.Map;
+import java.util.Set;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -49,6 +60,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     private final PasswordEncoder passwordEncoder;
     private final NotificationService notificationService;
     private final Qms8dFishboneService fishboneService;
+    private final Ncm8dArchiveService ncm8dArchiveService;
+    private final QmsAssignRecordMapper assignRecordMapper;
+    private final com.konli.qms.service.assign.AssignReassignService assignReassignService;
 
     /** 8D 阶段顺序:D1->D2->D3->D4->D5->D6->D7->D8 */
     private static final String[] STAGES = {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"};
@@ -59,6 +73,25 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     @Override
     public List<Qms8dReport> list() {
         return qms8dReportMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<Qms8dReport> listPage(String keyword, String status, String source, int page, int size) {
+        LambdaQueryWrapper<Qms8dReport> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(Qms8dReport::getD8No, keyword)
+                    .or().like(Qms8dReport::getIssue, keyword)
+                    .or().like(Qms8dReport::getSourceRefId, keyword));
+        }
+        if (StringUtils.hasText(status)) {
+            w.eq(Qms8dReport::getStatus, status);
+        }
+        if (StringUtils.hasText(source)) {
+            w.eq(Qms8dReport::getSource, source);
+        }
+        w.orderByDesc(Qms8dReport::getCreatedAt);
+        IPage<Qms8dReport> ip = qms8dReportMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -81,23 +114,46 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             report.setCurrentStage("D8");
             report.setStatus("已闭环");
             report.setCloseDate(LocalDate.now());
+            // 简易流程为手动快速闭环,无上游触发事件,标记为人工来源(无需来源单号)
+            report.setSource("人工");
             if (report.getCapaTriggered() == null) report.setCapaTriggered(false);
-            if (report.getOrgId() == null) report.setOrgId(resolveOrgId());
+            // 表单可能把 ROOT 超级管理员的组织(字面量 "ROOT")带进来,需归一化为真实组织,否则写入 UUID 列报 500
+        if (report.getOrgId() == null || report.getOrgId().isBlank() || "ROOT".equals(report.getOrgId())) {
+            report.setOrgId(resolveOrgId());
+        }
             qms8dReportMapper.insert(report);
+            // 简易流程直接闭环 -> 触发 8D 归档
+            ncm8dArchiveService.archive(report);
             notify8d(report, "新建 8D 报告(简易闭环)", String.format(
                 "新建并闭环 8D 报告《%s》(单号 %s,严重度 %s)。",
                 report.getIssue(), report.getD8No(), report.getSeverity()));
             return report;
         }
         report.setD8No("8D-" + System.currentTimeMillis());
-        report.setCurrentStage("D1");
         report.setStatus("进行中");
+        // 发起时仅指定负责人;团队由负责人在 D1 阶段自行组建并提交审核,故一律从 D1 开始
+        report.setCurrentStage("D1");
         if (report.getCapaTriggered() == null) {
             report.setCapaTriggered(false);
         }
-        if (report.getOrgId() == null) report.setOrgId(resolveOrgId());
+        // severity 列为 NOT NULL,人工来源前端可能不传严重度,兜底为"一般",避免插入报 500
+        if (report.getSeverity() == null || report.getSeverity().isBlank()) {
+            report.setSeverity("一般");
+        }
+        // 表单可能把 ROOT 超级管理员的组织(字面量 "ROOT")带进来,需归一化为真实组织,否则写入 UUID 列报 500
+        if (report.getOrgId() == null || report.getOrgId().isBlank() || "ROOT".equals(report.getOrgId())) {
+            report.setOrgId(resolveOrgId());
+        }
         if (report.getSource() == null || report.getSource().isBlank()) report.setSource("NCM");
+        // 来源编码归一化(前端短码 SQM/SPC → 存储值 SQM异常/SPC报警)
+        report.setSource(normalizeSource(report.getSource()));
+        // 事件类来源必须回填来源单号,否则会产生"有来源无单号"的脏数据
+        if (requiresSourceRef(report.getSource())
+                && (report.getSourceRefId() == null || report.getSourceRefId().isBlank())) {
+            throw new BusinessException(400, "来源类型为「" + report.getSource() + "」时必须填写来源单号(sourceRefId)");
+        }
         qms8dReportMapper.insert(report);
+        // D1 团队组建不再预填:由负责人在 D1 阶段自行添加团队成员并提交审核
         notify8d(report, "新建 8D 报告", String.format(
             "新建 8D 报告《%s》(单号 %s,严重度 %s),请跟进处理。",
             report.getIssue(), report.getD8No(), report.getSeverity()));
@@ -117,19 +173,72 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         }
     }
 
+    /** 来源类型短码 → 存储值 归一化映射 */
+    private static final Map<String, String> SOURCE_ALIAS = Map.of(
+            "SQM", "SQM异常",
+            "SPC", "SPC报警");
+    /** 无需关联上游事件的来源(手动发起的 8D,允许无来源单号) */
+    private static final Set<String> MANUAL_SOURCES = Set.of("人工");
+
+    /** 前端下拉短码(SQM/SPC)归一化为存储值(SQM异常/SPC报警) */
+    private String normalizeSource(String source) {
+        if (source == null) return null;
+        String mapped = SOURCE_ALIAS.get(source);
+        return mapped != null ? mapped : source;
+    }
+
+    /** 该来源类型是否必须关联上游事件单号(人工来源无需) */
+    private boolean requiresSourceRef(String source) {
+        return source != null && !source.isBlank() && !MANUAL_SOURCES.contains(source);
+    }
+
     /** 站内信通知(8D 报告相关):推送给质量经理/SQE,失败不回滚主流程。 */
     private void notify8d(Qms8dReport r, String title, String content) {
         try {
-            notificationService.notifyRoles(List.of("qmanager", "sqe"),
-                title, content, "ncm_8d", r.getId(), "/ncm/8d-reports", null);
+            notificationService.notify("ncm", "ncm_8d_status",
+                title, content, "ncm_8d", r.getId(), "/ncm/8d-reports");
         } catch (Exception ignored) {
             log.warn("[8D通知] 站内信推送失败: {}", ignored.getMessage());
         }
     }
 
+    /**
+     * D1 团队组建经质量部门签批通过后,逐人通知团队成员已被加入该 8D 团队。
+     * teamMembers 为逗号分隔的 user_id 列表(新前端 D1 提交时写入);为空则不通知。
+     * 仅向形如 UUID 的 token 推送,跳过旧数据以姓名顿号串存储的遗留格式(避免写入无效 user_id)。
+     * 单个成员推送失败不影响其他成员与主流程。
+     */
+    private static final java.util.regex.Pattern UUID_RE =
+            java.util.regex.Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    private void notifyTeamMembers(Qms8dReport r, String teamMembers) {
+        if (!StringUtils.hasText(teamMembers)) return;
+        String[] ids = teamMembers.split(",");
+        String link = "/ncm/8d-reports/" + r.getId();
+        for (String uid : ids) {
+            String id = uid.trim();
+            if (!UUID_RE.matcher(id).matches()) {
+                log.debug("[8D通知] 跳过非 UUID 团队成员 token: {}", id);
+                continue;
+            }
+            try {
+                notificationService.notifyUser(id, "8D 团队组建通知",
+                    String.format("您已被加入 8D 报告《%s》(单号 %s)的团队,请登录系统跟进处理。",
+                        r.getIssue(), r.getD8No()),
+                    "ncm_8d", r.getId(), link);
+            } catch (Exception ex) {
+                log.warn("[8D通知] 团队成员({})站内信推送失败: {}", id, ex.getMessage());
+            }
+        }
+    }
+
     @Override
     @Transactional
-    public Qms8dReport launchFromAbnormal(Qms8dReport report) {
+    public Qms8dReport launchFromAbnormal(Abnormal8dLaunchRequest req) {
+        Qms8dReport report = req.getReport();
+        DefectLaunchRequest launch = req.getLaunch();
+        if (report == null) {
+            throw new BusinessException(400, "缺少 8D 报告主体");
+        }
         String abnormalId = report.getSourceRefId();
         if (abnormalId == null || abnormalId.isBlank()) {
             throw new BusinessException(400, "缺少来源异常单(sourceRefId)");
@@ -149,16 +258,32 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         }
         report.setOrgId(orgId);
         report.setSource("SQM异常");
-        report.setSourceRefId(abnormalId);
+        // 回填业务单号(异常单号)而非主键 UUID,以便追溯跳转与闭环时按单号回写异常单
+        report.setSourceRefId(ab.getAbnormalNo());
         report.setD8No("8D-" + System.currentTimeMillis());
         report.setCurrentStage("D1");
         report.setStatus("进行中");
         report.setCapaTriggered(false);
         report.setFlowType("8D");
+        // 8D 新流程:发起时指定负责人(单选 ownerUserId),团队由负责人在 D1 自行组建
+        if (launch != null && launch.getOwnerUserId() != null && !launch.getOwnerUserId().isBlank()) {
+            report.setOwnerUserId(launch.getOwnerUserId());
+        }
+        String ownerName = resolveOwnerName(launch);
+        if (ownerName != null) {
+            report.setTeam(ownerName);
+            report.setOwnerUserName(ownerName);
+        } else {
+            report.setTeam("质量团队");
+        }
         qms8dReportMapper.insert(report);
         notify8d(report, "从来料异常发起 8D 报告", String.format(
             "已根据来料异常单发起 8D 报告《%s》(单号 %s),请跟进处理。",
             report.getIssue(), report.getD8No()));
+        // 指定负责人时写入指派记录并站内信通知负责人本人
+        if (launch != null && launch.getOwnerUserId() != null && !launch.getOwnerUserId().isBlank()) {
+            saveAbnormalOwnerAssign(ab, report.getId(), report.getD8No(), "8D", launch);
+        }
         SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
         upd.setId(abnormalId);
         upd.setD8Id(report.getId());
@@ -168,9 +293,63 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         return report;
     }
 
+    /** 负责人指派:写 qms_assign_record 并站内信通知负责人本人(8D 新流程:仅指定负责人)。 */
+    private void saveAbnormalOwnerAssign(SqmIncomingAbnormal ab, String bizId, String bizNo,
+                                         String bizType, DefectLaunchRequest launch) {
+        List<String> channels = (launch.getNotifyChannels() == null || launch.getNotifyChannels().isEmpty())
+                ? List.of("站内弹窗") : launch.getNotifyChannels();
+        String channelStr = String.join(",", channels);
+        boolean inbox = channels.contains("站内弹窗");
+        String assignerId = currentOperator();
+        String ownerName = queryUserName(launch.getOwnerUserId());
+        QmsAssignRecord rec = new QmsAssignRecord();
+        rec.setOrgId(ab.getOrgId());
+        rec.setDefectId(ab.getId());
+        rec.setDefectNo(ab.getAbnormalNo());
+        rec.setBizType(bizType);
+        rec.setBizId(bizId);
+        rec.setBizNo(bizNo);
+        rec.setAssigneeUserId(launch.getOwnerUserId());
+        rec.setAssigneeUserName(ownerName != null ? ownerName : launch.getOwnerUserId());
+        rec.setNotifyChannels(channelStr);
+        rec.setAssignerId(assignerId);
+        rec.setRemark(launch.getRemark());
+        assignRecordMapper.insert(rec);
+        if (inbox) {
+            String title = "[" + bizType + "指派] 来料异常 " + ab.getAbnormalNo() + " 指定您为负责人";
+            String content = "来料异常 " + ab.getAbnormalNo() + " 已发起" + bizType + "报告(" + bizNo + "),"
+                    + "您被指定为负责人,请登录系统在 D1 阶段组建团队并提交审核。"
+                    + (launch.getRemark() != null && !launch.getRemark().isBlank() ? "\n指派备注: " + launch.getRemark() : "");
+            String link = "/sqm/abnormals";
+            notificationService.notifyUser(launch.getOwnerUserId(), title, content, "NCM_ASSIGN", bizId, link);
+        }
+    }
+
+    /** 8D 新流程:发起时仅指定负责人(ownerUserId 单选),返回其真实姓名用于 team/owner。 */
+    private String resolveOwnerName(DefectLaunchRequest req) {
+        if (req == null || req.getOwnerUserId() == null || req.getOwnerUserId().isBlank()) {
+            return null;
+        }
+        return queryUserName(req.getOwnerUserId());
+    }
+
+    private String currentOperator() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        return u == null ? "系统" : u.userId();
+    }
+
+    private String queryUserName(String userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT real_name FROM ops.sys_user WHERE id = ?::uuid", String.class, userId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     @Override
     @Transactional
-    public void advanceStage(String d8Id, String stageCode, String content, String owner) {
+    public void advanceStage(String d8Id, String stageCode, String content, String owner, String teamMembers) {
         Qms8dReport report = qms8dReportMapper.selectById(d8Id);
         if (report == null) {
             throw new BusinessException(404, "8D 报告不存在");
@@ -221,12 +400,19 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             detail.setStageCode(stageCode);
             detail.setContent(content);
             detail.setOwner(owner);
+            // D1 团队组建阶段:写入负责人自建团队成员名单
+            if (StringUtils.hasText(teamMembers)) {
+                detail.setTeamMembers(teamMembers);
+            }
             // 需审核:进入待审批并停留当前阶段等待签批;否则标记无需审批
             detail.setApprovalStatus(need ? "待审批" : "无需审批");
             qms8dStageDetailMapper.insert(detail);
         } else {
             existing.setContent(content);
             existing.setOwner(owner);
+            if (StringUtils.hasText(teamMembers)) {
+                existing.setTeamMembers(teamMembers);
+            }
             // 重新提交(被驳回后)回到待审批;已通过的阶段不回退
             if (need && !"已通过".equals(existing.getApprovalStatus())) {
                 existing.setApprovalStatus("待审批");
@@ -234,6 +420,13 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 existing.setApprovalStatus("无需审批");
             }
             qms8dStageDetailMapper.updateById(existing);
+        }
+
+        // 兜底回填主表负责人(便于列表页展示责任人):以本阶段提交的 owner 为准
+        if (owner != null && !owner.isBlank()
+                && (report.getOwnerUserName() == null || report.getOwnerUserName().isBlank())) {
+            report.setOwnerUserName(owner);
+            qms8dReportMapper.updateById(report);
         }
 
         // D4 完成 -> 自动触发 CAPA(若尚未触发)
@@ -266,6 +459,8 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 throw new BusinessException(409, "8D 报告已被他人修改,请刷新后重试");
             }
             closeAbnormalById(report.getSourceRefId());
+            // D8 闭环 -> 触发 8D 归档
+            ncm8dArchiveService.archive(report);
         } else {
             report.setCurrentStage(STAGES[idx + 1]);
             if (qms8dReportMapper.updateById(report) == 0) {
@@ -347,6 +542,10 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         }
         // 签名通过 -> 进入下一阶段(或 D8 闭环)
         int idx = Arrays.asList(STAGES).indexOf(stageCode);
+        // D1 团队组建签批通过:通知各团队成员已被加入团队(避免驳回重改时反复打扰,故仅通过时通知)
+        if ("D1".equals(stageCode) && StringUtils.hasText(detail.getTeamMembers())) {
+            notifyTeamMembers(report, detail.getTeamMembers());
+        }
         advanceCurrent(report, idx);
         notify8d(report, "8D 报告阶段审批通过", String.format(
             "8D 报告《%s》(单号 %s) 的 %s 阶段已审批通过。",
@@ -431,6 +630,8 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (qms8dReportMapper.updateById(report) == 0) {
             throw new BusinessException(409, "8D 报告已被他人修改,请刷新后重试");
         }
+        // 报告已退回进行中,原归档不再有效:软作废旧归档(保留记录与 PDF 留痕,不物理删除)
+        ncm8dArchiveService.invalidate(d8Id, reason);
         notify8d(report, "8D 报告重新打开", String.format(
             "8D 报告《%s》(单号 %s) 已重新打开,退回 D6 重新验证。",
             report.getIssue(), report.getD8No()));
@@ -463,5 +664,21 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 .eq(Qms8dReport::getSourceRefId, sourceRefId)
                 .orderByDesc(Qms8dReport::getCreatedAt)
                 .last("LIMIT 1"));
+    }
+
+    /** 列表级改派责任人(更新 owner_user_id/owner_user_name + 推送被指派人任务中心 + 追加指派记录)。 */
+    @Override
+    @Transactional
+    public void reassign(String d8Id, DefectLaunchRequest req) {
+        Qms8dReport report = qms8dReportMapper.selectById(d8Id);
+        if (report == null) throw new BusinessException(404, "8D 报告不存在");
+        String ownerName = assignReassignService.execute(new com.konli.qms.service.assign.AssignReassignService.ReassignContext(
+                "8D", d8Id, report.getD8No(), report.getOrgId(),
+                "/ncm/8d-reports/" + d8Id, null, null, req, true));
+        Qms8dReport upd = new Qms8dReport();
+        upd.setId(d8Id);
+        upd.setOwnerUserId(req.getOwnerUserId());
+        upd.setOwnerUserName(ownerName);
+        qms8dReportMapper.updateById(upd);
     }
 }

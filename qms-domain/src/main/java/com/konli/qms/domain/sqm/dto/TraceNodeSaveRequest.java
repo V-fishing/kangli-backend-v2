@@ -26,6 +26,8 @@ public class TraceNodeSaveRequest {
     private String remark;
     private String qualificationType; // 合格 / 资格直通 / 常规
 
+    private String stage;             // MES 检验阶段 IQC/IPQC/SQC/FQC/OQC/RQC/PKG(必填,须与 nodeType 映射一致)
+
     // ---- 产出明细(semi/ship) ----
     private String productName;
     private String materialCode;
@@ -57,12 +59,15 @@ public class TraceNodeSaveRequest {
     public static class ComponentItem {
         private String componentType;   // raw / semi
         private String sourceNodeId;    // semi: 引用已存在半成品节点, 拷贝其产品身份
-        private String refNodeId;       // 引用已存在节点(不新建, 直接建 link), 用于多对多组成
-        private String materialCode;    // raw: 物料编码(=批次号)
-        private String materialName;    // raw: 物料名称
-        private String specModel;       // raw: 规格型号
+        private String refNodeId;       // 引用已存在节点(不新建, 直接建 link), 用于多对多组成; 非空时跳过物料身份校验
+        private String materialCode;    // 组件物料代码(物料编码, ≠ 批次号)
+        private String batchNo;         // 组件批号(SON_LOT_NO)
+        private String materialName;    // 组件物料名称
+        private String specModel;       // 组件规格型号
         private BigDecimal usageQty;    // 用量
         private String unit;
-        private String processName;     // 工序
+        private String processName;     // 工序名称
+        private String processCode;     // 工序编码(PROCESS_CODE)
+        private String componentWorkOrder; // 组件工单(SON_TASK)
     }
 }

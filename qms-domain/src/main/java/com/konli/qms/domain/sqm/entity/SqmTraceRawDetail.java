@@ -26,6 +26,9 @@ public class SqmTraceRawDetail {
     @TableField("node_id")
     private String nodeId;
 
+    @TableField("batch_no")
+    private String batchNo;                // 组件批号(SON_LOT_NO)
+
     private String category;
 
     @TableField("wo_no")

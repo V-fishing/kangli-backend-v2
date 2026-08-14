@@ -32,6 +32,10 @@ public class SqmAuditApproval {
     @TableField("role_label")
     private String roleLabel;
 
+    /** 该会签节点的指定审批人(ops.sys_user.id);approve 时校验登录用户须匹配 */
+    @TableField("approver_id")
+    private String approverId;
+
     private String status; // pending / done / rejected
 
     private String operator;

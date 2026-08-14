@@ -55,6 +55,10 @@ public class QmsCapa extends BaseEntity {
 
     private String owner;
 
+    /** 负责人用户 ID,支撑按当前登录用户聚合"我的任务"(V158 加) */
+    @TableField("owner_user_id")
+    private String ownerUserId;
+
     @TableField("due_date")
     private LocalDate dueDate;
 

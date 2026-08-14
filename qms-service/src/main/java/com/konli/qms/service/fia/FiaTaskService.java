@@ -1,5 +1,8 @@
 package com.konli.qms.service.fia;
 
+import com.konli.qms.service.fia.dto.ProductSearchResult;
+import com.konli.qms.service.fia.dto.ProductTreeNode;
+import com.konli.qms.service.fia.dto.TaskStdItemVo;
 import com.konli.qms.domain.fia.dto.PreviewJudgeRequest;
 import com.konli.qms.domain.fia.dto.PreviewJudgeResult;
 import com.konli.qms.domain.fia.dto.StdTraceResult;
@@ -8,13 +11,19 @@ import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
 import com.konli.qms.domain.fia.entity.FiaInspStd;
 import com.konli.qms.domain.fia.entity.FiaTask;
+import com.konli.qms.common.api.PageResult;
 
 import java.util.List;
 import java.util.Map;
 
 public interface FiaTaskService {
 
-    List<FiaTask> list(String orgId, String status, String woNo);
+    List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName);
+
+    PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, int page, int size);
+
+    /** 产品+工序 二级树(去重汇总),供列表筛选构建树 */
+    List<ProductTreeNode> listProductTree(String orgId);
 
     /** 按来源过滤: FACTORY(产线首件) / SUPPLIER(供应商来料首件) */
     List<FiaTask> listBySource(String source);
@@ -88,4 +97,36 @@ public interface FiaTaskService {
 
     /** 某任务的全流程日志(首件检验时间线) */
     List<Map<String, Object>> getTaskLog(String taskId);
+
+    /** 产品料号模糊搜索:标注库中是否已存在(新/旧) */
+    List<ProductSearchResult> searchProduct(String orgId, String keyword, String category);
+
+    /** 工单号自动生成(WO-yyyyMMdd-XXX,同天内自增) */
+    String generateWoNo(String orgId);
+
+    /** 按任务获取关联的检验标准项(供SPC采集页加载参数列表) */
+    List<TaskStdItemVo> getTaskStdItems(String taskId);
+
+    /**
+     * SPC 量产监控严重异常回环:停线整改后重新开工,自动创建一条首件检验任务。
+     * 触发类型固定为"停线重启",复用 create 主流程(工单锁定+标准匹配+通知)。
+     * 返回新建任务;异常由调用方 try-catch 不阻断 SPC 主流程。
+     */
+    FiaTask createFromSetup(String orgId, String woNo, String partNo, String procName, String productName, String lineName, String remark);
+
+    /**
+     * 按 setup(工单 + 物料 + 工序)查询最新一条首件任务,供量产监控前置校验使用。
+     * 返回最新一条(按创建时间倒序);无则返回 null。调用方据此判断首件是否已合格放行。
+     */
+    FiaTask findLatestBySetup(String orgId, String woNo, String partNo, String procName);
+
+    /**
+     * 工装触发首件检验任务(source=TOOLING)。
+     * 通过 tooling.productCode + procName 调用 matchStd 定位 FIA 标准，
+     * woNo 为空时自动生成，复用 create 全流程(工单锁定+标准匹配+待检通知+SPC联动)。
+     * 返回新建任务;异常由调用方 try-catch 不阻断 TLM 主流程。
+     */
+    FiaTask createFromTooling(String orgId, String toolId, String woNo, String partNo,
+                              String procName, String productName, String lineName,
+                              String triggerType, String remark);
 }

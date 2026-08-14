@@ -39,7 +39,10 @@ public class DataInitializer implements CommandLineRunner {
         seedNcmPerms();
         seedSqmPerms();
         seedPatlPerms();
-        seedSqmTrace();
+        seedTlmPerms();
+        // 追溯树演示数据已禁用: 脏演示树改由 rebuild_trace_trees.ps1 按真实流程(MES 对齐)重建。
+        // 仅保留带 VEN 编号的样例供应商主数据种子, 供重建脚本按 VEN 对齐供应商。
+        seedSqmSampleSupplier();
         seedFiaStd();
         // 演示业务数据(15 条假审核),仅 dev profile 灌入,避免污染生产库
         if (environment.acceptsProfiles(Profiles.of("dev"))) {
@@ -172,6 +175,9 @@ public class DataInitializer implements CommandLineRunner {
             assignRoleButtonByCode("sysadmin", ensureButton(orgMenuId, "system.org.create", "组织新增"));
             assignRoleButtonByCode("sysadmin", ensureButton(orgMenuId, "system.org.delete", "组织删除"));
         }
+        // 切换分公司(可配置权限,超管默认拥有,可分配给其他角色;无权限者顶栏不显示切换器)。
+        // 挂在始终存在的 system.org.list 菜单下,避免依赖 seedRbac 才创建的 system.org 菜单(幂等且不受 seedRbac 守卫影响)。
+        assignBtn("system.org.list", "system.org.switch", "切换分公司");
         // 确保 admin 始终有关联 sysadmin 角色(seedRbac 有 count>0 幂等跳过,admin 关联可能被跳过)
         String sysadminRoleId = queryId("SELECT id FROM ops.sys_role WHERE role_code='sysadmin' AND org_id IS NULL");
         if (sysadminRoleId != null) {
@@ -202,6 +208,26 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(spcMenu, "spc.alarm.close", "告警关闭"));
         assignRoleButtonByCode("sysadmin", ensureButton(spcMenu, "spc.capability.list", "能力分析"));
         assignRoleButtonByCode("sysadmin", ensureButton(spcMenu, "spc.rule.list", "判异规则"));
+
+        // SPC 工序主数据(参数的父级分组):作为 SPC 模块子菜单,分配查询/管理/删除按钮
+        String procMenu = ensureChildMenu(spcMenu, "spc.process", "SPC工序管理", "/spc/processes", "spc/processes", 1);
+        assignRoleMenuByCode("sysadmin", procMenu);
+        assignRoleMenuByCode("admin", procMenu);
+        assignRoleButtonByCode("sysadmin", ensureButton(procMenu, "spc.process.list", "工序查询"));
+        assignRoleButtonByCode("admin", ensureButton(procMenu, "spc.process.list", "工序查询"));
+        assignRoleButtonByCode("sysadmin", ensureButton(procMenu, "spc.process.create", "工序管理"));
+        assignRoleButtonByCode("admin", ensureButton(procMenu, "spc.process.create", "工序管理"));
+        assignRoleButtonByCode("sysadmin", ensureButton(procMenu, "spc.process.delete", "工序删除"));
+        assignRoleButtonByCode("admin", ensureButton(procMenu, "spc.process.delete", "工序删除"));
+
+        // SPC 抽样任务创建(独立二级菜单,与首件采集平行):建任务后任务列表进 SPC参数页,列表跳转采集
+        String sampleTaskMenu = ensureChildMenu(spcMenu, "spc.sampletask", "抽样任务创建", "/spc/sample-tasks", "spc/SampleTaskCreate", 4);
+        assignRoleMenuByCode("sysadmin", sampleTaskMenu);
+        assignRoleMenuByCode("admin", sampleTaskMenu);
+        assignRoleButtonByCode("sysadmin", ensureButton(sampleTaskMenu, "spc.sample-task.list", "抽样任务查询"));
+        assignRoleButtonByCode("admin", ensureButton(sampleTaskMenu, "spc.sample-task.list", "抽样任务查询"));
+        assignRoleButtonByCode("sysadmin", ensureButton(sampleTaskMenu, "spc.sample-task.create", "抽样任务创建"));
+        assignRoleButtonByCode("admin", ensureButton(sampleTaskMenu, "spc.sample-task.create", "抽样任务创建"));
     }
 
     /** NCM 权限种子(ncm 菜单 + 不良字典/记录/8D/CAPA 按钮,分配 sysadmin)。幂等。 */
@@ -275,13 +301,69 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(patlMenu, "patl.task.create", "任务管理"));
     }
 
+    /** TLM 工装管理权限种子(tlm 目录 + 台账/维保/异常 菜单 + 16 按钮,分配 sysadmin)。幂等。
+     *  与 V170 Flyway 脚本互补: Flyway 负责多环境基线, 本方法保证启动即幂等补权(包括新增角色场景)。 */
+    private void seedTlmPerms() {
+        String tlmMenu = ensureMenu("tlm", "工装管理", "/tlm", "tlm/index", 10);
+        String toolingMenu = ensureMenu("tlm.tooling.list", "工装台账", "tooling", "tlm/Tooling", 1);
+        String maintMenu = ensureMenu("tlm.maint.list", "工装维保", "maint", "tlm/Maint", 2);
+        String abnormalMenu = ensureMenu("tlm.abnormal.list", "工装异常", "abnormals", "tlm/Abnormal", 3);
+        assignRoleMenuByCode("sysadmin", tlmMenu);
+        assignRoleMenuByCode("sysadmin", toolingMenu);
+        assignRoleMenuByCode("sysadmin", maintMenu);
+        assignRoleMenuByCode("sysadmin", abnormalMenu);
+        // 台账按钮 8
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.create", "工装新增"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.edit", "工装编辑"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.delete", "工装删除"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.scrap", "工装报废"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.repair", "工装送修"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.lock", "工装锁定"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.bind", "工装绑定"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.export", "台账导出"));
+        // 维保按钮 5
+        assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.plan.create", "保养计划新建"));
+        assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.plan.edit", "保养计划编辑"));
+        assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.plan.delete", "保养计划删除"));
+        assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.record.create", "保养记录登记"));
+        assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.record.delete", "保养记录删除"));
+        // 维修/报废按钮 3
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.repair.create", "维修工单新建"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.repair.complete", "维修完成"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.scrap.approve", "报废审批"));
+    }
+
     // ==================== SQM 来料追溯种子(4.4 全链路追溯树) ====================
 
     /**
      * 预置 SQM 来料追溯种子数据(幂等):sqm_trace_node 为空时才灌。
+     * 仅预置一条带 MES VEN 编号的样例供应商(主数据),不构造追溯树。
+     * 追溯树演示数据已禁用,改由 rebuild_trace_trees.ps1 按真实流程重建。
+     */
+    private void seedSqmSampleSupplier() {
+        String orgId = queryId("SELECT id FROM ops.sys_org WHERE org_code='MZ'");
+        if (orgId == null) {
+            log.warn("[SEED] 缺少 MZ 组织,跳过 SQM 样例供应商种子");
+            return;
+        }
+        Long exist = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM ops.sqm_supplier WHERE is_deleted = false AND ven_code = 'VEN00417'", Long.class);
+        if (exist != null && exist > 0) {
+            return;
+        }
+        jdbcTemplate.update(
+                "INSERT INTO ops.sqm_supplier (org_id, supplier_no, supplier_code, name, credit_code, category, level, status, score, contact_person, contact_phone, address, ven_code) " +
+                        "VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?::numeric, ?, ?, ?, ?)",
+                orgId, "SUP-0001", "S001", "华南电子材料有限公司", "91440300MA5SEED001X",
+                "电子料", "A", "合格", "92.50", "李经理", "0755-88880001", "广东省深圳市南山区科技园南区 A 座", "VEN00417");
+        log.info("[SEED] 已预置样例供应商(华南电子材料, VEN00417)");
+    }
+
+    /**
      * 构造两条完整追溯链(来料 incoming -> 原料 raw -> 半成品 semi -> 成品出货 ship -> 客户 customer),
      * 使前端「来料追溯」页面可直接渲染全链路追溯树。
      * 追溯根需 sqm_incoming_lot + sqm_supplier,若无供应商则自动补一条样例供应商。
+     * （已禁用: 追溯树演示数据改由重建脚本按真实流程重建）
      */
     private void seedSqmTrace() {
         // 幂等:以专用演示批次 LOT-2026-0001 是否存在为准(库里可能已有仅含单个来料节点的
@@ -306,15 +388,15 @@ public class DataInitializer implements CommandLineRunner {
         String lot1 = insertLot(orgId, supplierId, "LOT-2026-0001", "BAT-CELL-3000", "储能电芯",
                 "5000", "PCS", "2026-06-01", "合格", "全检", true, "PO-2026-0601", true);
         String n1In = insertNode(orgId, lot1, null, "incoming", "储能电芯来料检验", "IQC-20260601-01",
-                "5000", "PCS", "2026-06-01", supplierId, 0, "IQC 全检合格入库");
+                "5000", "PCS", "2026-06-01", supplierId, 0, "IQC 全检合格入库", "BAT-CELL-3000", "合格");
         String n1Raw = insertNode(orgId, lot1, n1In, "raw", "锂电芯原料上线", "RAW-LC-260602",
-                "5000", "PCS", "2026-06-02", supplierId, 1, "原料扫码上线");
+                "5000", "PCS", "2026-06-02", supplierId, 1, "原料扫码上线", "MC-LC-3000", "合格");
         String n1Semi = insertNode(orgId, lot1, n1Raw, "semi", "电池模组组装", "SEMI-MOD-260605",
-                "480", "套", "2026-06-05", null, 2, "48 芯/模组");
+                "480", "套", "2026-06-05", null, 2, "48 芯/模组", "MOD-48S1P", "合格");
         String n1Ship = insertNode(orgId, lot1, n1Semi, "ship", "储能电池包成品出货", "FG-PACK-260610",
-                "120", "套", "2026-06-10", null, 3, "成品终检合格出货");
+                "120", "套", "2026-06-10", null, 3, "成品终检合格出货", "PACK-61.44kWh", "合格");
         String n1Cust = insertNode(orgId, lot1, n1Ship, "customer", "南方新能源科技有限公司", "CUST-260612",
-                "120", "套", "2026-06-12", null, 4, "客户签收");
+                "120", "套", "2026-06-12", null, 4, "客户签收", "PACK-61.44kWh", "合格");
 
         insertRawDetail(orgId, n1Raw, "锂电芯", "WO-260602-01", "MB-LC-0001", "MC-LC-3000",
                 "磷酸铁锂电芯", "3.2V/280Ah", "张工", "2026-06-02 08:30:00", "P010", "电芯上线");
@@ -334,15 +416,15 @@ public class DataInitializer implements CommandLineRunner {
         String lot2 = insertLot(orgId, supplierId, "LOT-2026-0002", "HS-1200", "外壳塑料件",
                 "8000", "PCS", "2026-06-03", "合格", "抽检", true, "PO-2026-0603", false);
         String n2In = insertNode(orgId, lot2, null, "incoming", "外壳塑料件来料检验", "IQC-20260603-02",
-                "8000", "PCS", "2026-06-03", supplierId, 0, "IQC 抽检合格入库");
+                "8000", "PCS", "2026-06-03", supplierId, 0, "IQC 抽检合格入库", "MAT-ABS-1200", "合格");
         String n2Raw = insertNode(orgId, lot2, n2In, "raw", "ABS 粒料上线", "RAW-ABS-260604",
-                "8000", "PCS", "2026-06-04", supplierId, 1, "注塑原料上线");
+                "8000", "PCS", "2026-06-04", supplierId, 1, "注塑原料上线", "MC-ABS-1200", "合格");
         String n2Semi = insertNode(orgId, lot2, n2Raw, "semi", "外壳注塑成型", "SEMI-HS-260606",
-                "7800", "PCS", "2026-06-06", null, 2, "注塑 + 喷涂");
+                "7800", "PCS", "2026-06-06", null, 2, "注塑 + 喷涂", "HS-1200", "合格");
         String n2Ship = insertNode(orgId, lot2, n2Semi, "ship", "储能机箱成品出货", "FG-BOX-260611",
-                "1900", "台", "2026-06-11", null, 3, "组装后随机出货");
+                "1900", "台", "2026-06-11", null, 3, "组装后随机出货", "BOX-2U", "合格");
         String n2Cust = insertNode(orgId, lot2, n2Ship, "customer", "南方新能源科技有限公司", "CUST-260613",
-                "1900", "台", "2026-06-13", null, 4, "客户签收");
+                "1900", "台", "2026-06-13", null, 4, "客户签收", "BOX-2U", "合格");
 
         insertRawDetail(orgId, n2Raw, "塑料粒料", "WO-260604-02", "MB-ABS-0001", "MC-ABS-1200",
                 "ABS 阻燃粒料", "PA-757", "刘工", "2026-06-04 09:00:00", "P020", "注塑上线");
@@ -384,17 +466,25 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     private void seedOneFiaStd(String orgId, String supplierId, String partNo, String partName) {
-        Long cnt = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM ops.fia_insp_std WHERE org_id = ?::uuid AND part_no = ? AND supplier_id = ?::uuid AND is_deleted = false",
-                Long.class, orgId, partNo, supplierId);
-        if (cnt != null && cnt > 0) {
+        // 注意:std_code 由 partNo + supplierId 前 8 位组成,可能跨 supplier 碰撞(全局唯一约束)。
+        // 因此幂等/跳过判定必须以 code 为准,而非完整 supplier_id。
+        String stdCode = "STD-" + partNo + "-" + supplierId.replace("-", "").substring(0, 8);
+        // 用 count 判定避免 queryForObject 在 0 行时抛 EmptyResultDataAccessException
+        Long exist = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM ops.fia_insp_std WHERE org_id = ?::uuid AND code = ? AND is_deleted = false",
+                Long.class, orgId, stdCode);
+        if (exist != null && exist > 0) {
             return;
         }
-        String stdCode = "STD-" + partNo + "-" + supplierId.replace("-", "").substring(0, 8);
-        String stdId = jdbcTemplate.queryForObject(
+        // ON CONFLICT DO NOTHING 兜底跨 supplier 前 8 位碰撞;随后按 code 取回 id(新插或已存在均可)
+        jdbcTemplate.update(
                 "INSERT INTO ops.fia_insp_std (org_id, code, material, proc_name, aql, inspect_level, sample_plan, ctq_text, std_version, status, part_no, supplier_id) " +
-                        "VALUES (?::uuid, ?, ?, '来料首件', '1.0', 'II', '单次', '关键尺寸/外观 CTQ', 'v1', '生效', ?, ?::uuid) RETURNING id",
-                String.class, orgId, stdCode, partNo, partNo, supplierId);
+                        "VALUES (?::uuid, ?, ?, '来料首件', '1.0', 'II', '单次', '关键尺寸/外观 CTQ', 'v1', '生效', ?, ?::uuid) " +
+                        "ON CONFLICT (code) DO NOTHING",
+                orgId, stdCode, partNo, partNo, supplierId);
+        String stdId = jdbcTemplate.queryForObject(
+                "SELECT id FROM ops.fia_insp_std WHERE org_id = ?::uuid AND code = ? AND is_deleted = false",
+                String.class, orgId, stdCode);
         jdbcTemplate.update(
                 "INSERT INTO ops.fia_insp_std_item (org_id, std_id, seq, item_name, is_ctq, std_value, tolerance, unit, value_type) " +
                         "VALUES (?::uuid, ?::uuid, 1, '外观', true, '无划伤/无变形/无污渍', '', '—', '文本')", orgId, stdId);
@@ -417,10 +507,10 @@ public class DataInitializer implements CommandLineRunner {
             return existing;
         }
         return jdbcTemplate.queryForObject(
-                "INSERT INTO ops.sqm_supplier (org_id, supplier_no, supplier_code, name, credit_code, category, level, status, score, contact_person, contact_phone, address) " +
-                        "VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?::numeric, ?, ?, ?) RETURNING id",
+                "INSERT INTO ops.sqm_supplier (org_id, supplier_no, supplier_code, name, credit_code, category, level, status, score, contact_person, contact_phone, address, ven_code) " +
+                        "VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?::numeric, ?, ?, ?, ?) RETURNING id",
                 String.class, orgId, "SUP-0001", "S001", "华南电子材料有限公司", "91440300MA5SEED001X",
-                "电子料", "A", "合格", "92.50", "李经理", "0755-88880001", "广东省深圳市南山区科技园南区 A 座");
+                "电子料", "A", "合格", "92.50", "李经理", "0755-88880001", "广东省深圳市南山区科技园南区 A 座", "VEN00417");
     }
 
     private String insertLot(String orgId, String supplierId, String lotNo, String partNo, String partName,
@@ -435,12 +525,13 @@ public class DataInitializer implements CommandLineRunner {
 
     private String insertNode(String orgId, String rootLotId, String parentNodeId, String nodeType,
                               String nodeName, String batchNo, String qty, String unit, String nodeDate,
-                              String supplierId, int treeLevel, String remark) {
+                              String supplierId, int treeLevel, String remark,
+                              String materialCode, String qualificationType) {
         return jdbcTemplate.queryForObject(
-                "INSERT INTO ops.sqm_trace_node (org_id, root_lot_id, parent_node_id, node_type, node_name, batch_no, qty, unit, node_date, supplier_id, tree_level, is_valid, remark) " +
-                        "VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?::numeric, ?, ?::date, ?::uuid, ?, '是', ?) RETURNING id",
+                "INSERT INTO ops.sqm_trace_node (org_id, root_lot_id, parent_node_id, node_type, node_name, batch_no, qty, unit, node_date, supplier_id, tree_level, is_valid, remark, material_code, qualification_type) " +
+                        "VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?::numeric, ?, ?::date, ?::uuid, ?, '是', ?, ?, ?) RETURNING id",
                 String.class, orgId, rootLotId, parentNodeId, nodeType, nodeName, batchNo, qty, unit,
-                nodeDate, supplierId, treeLevel, remark);
+                nodeDate, supplierId, treeLevel, remark, materialCode, qualificationType);
     }
 
     private void insertRawDetail(String orgId, String nodeId, String category, String woNo, String materialBarcode,
@@ -509,6 +600,17 @@ public class DataInitializer implements CommandLineRunner {
         String id = queryId("SELECT id FROM ops.sys_menu WHERE menu_code=?", code);
         if (id == null) {
             jdbcTemplate.update("INSERT INTO ops.sys_menu (menu_code, menu_name, menu_type, path, component, sort_order, visible) VALUES (?, ?, '菜单', ?, ?, ?, true)", code, name, path, component, sort);
+            id = queryId("SELECT id FROM ops.sys_menu WHERE menu_code=?", code);
+        }
+        return id;
+    }
+
+    /** 子菜单(带 parent_id),用于模块下的二级页签。幂等。 */
+    private String ensureChildMenu(String parentId, String code, String name, String path, String component, int sort) {
+        String id = queryId("SELECT id FROM ops.sys_menu WHERE menu_code=?", code);
+        if (id == null) {
+            jdbcTemplate.update("INSERT INTO ops.sys_menu (parent_id, menu_code, menu_name, menu_type, path, component, sort_order, visible) VALUES (?::uuid, ?, ?, '菜单', ?, ?, ?, true)",
+                    parentId, code, name, path, component, sort);
             id = queryId("SELECT id FROM ops.sys_menu WHERE menu_code=?", code);
         }
         return id;

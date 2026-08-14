@@ -164,51 +164,6 @@ public class FiaWoLockServiceImpl implements FiaWoLockService {
         return fiaWoLockMapper.selectOne(w);
     }
 
-    @Override
-    public List<FiaWoLockActiveDTO> listActive(String orgId) {
-        boolean admin = CompanyContext.isAdmin();
-        log.warn("[wo-lock] listActive admin={} orgId={}", admin, orgId);
-        LambdaQueryWrapper<FiaWoLock> w = new LambdaQueryWrapper<FiaWoLock>()
-                .eq(FiaWoLock::getLockStatus, STATUS_LOCKED)
-                .eq(FiaWoLock::getWipHold, true)
-                .orderByAsc(FiaWoLock::getLockedAt);
-        if (!admin && orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
-            w.eq(FiaWoLock::getOrgId, orgId);
-        }
-        List<FiaWoLock> locks = fiaWoLockMapper.selectList(w);
-        log.warn("[wo-lock] listActive query count={}", locks.size());
-        if (locks.isEmpty()) {
-            return List.of();
-        }
-        List<String> codes = locks.stream()
-                .map(FiaWoLock::getTaskCode)
-                .filter(Objects::nonNull)
-                .distinct()
-                .collect(Collectors.toList());
-        Map<String, FiaTask> taskMap = new LinkedHashMap<>();
-        if (!codes.isEmpty()) {
-            List<FiaTask> tasks = fiaTaskMapper.selectList(
-                    new LambdaQueryWrapper<FiaTask>().in(FiaTask::getCode, codes));
-            for (FiaTask t : tasks) {
-                taskMap.put(t.getCode(), t);
-            }
-        }
-        List<FiaWoLockActiveDTO> res = new ArrayList<>();
-        for (FiaWoLock l : locks) {
-            FiaWoLockActiveDTO dto = new FiaWoLockActiveDTO();
-            dto.setWoNo(l.getWoNo());
-            dto.setLockReason(l.getLockReason());
-            dto.setLockedAt(l.getLockedAt() != null ? l.getLockedAt().toString() : null);
-            dto.setTaskCode(l.getTaskCode());
-            FiaTask t = l.getTaskCode() != null ? taskMap.get(l.getTaskCode()) : null;
-            if (t != null) {
-                dto.setProductName(t.getProductName());
-                dto.setLineName(t.getLineName());
-            }
-            res.add(dto);
-        }
-        return res;
-    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void unlockAutoInNewTx(String orgId, String woNo, String taskCode) {
@@ -220,7 +175,6 @@ public class FiaWoLockServiceImpl implements FiaWoLockService {
         lockOnFail(orgId, woNo, taskCode);
     }
 
-    @Override
     public List<FiaWoLock> listAll(String orgId, String status, String woNo) {
         LambdaQueryWrapper<FiaWoLock> w = new LambdaQueryWrapper<FiaWoLock>();
         if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
@@ -238,13 +192,41 @@ public class FiaWoLockServiceImpl implements FiaWoLockService {
     }
 
     @Override
+    public List<FiaWoLockActiveDTO> listActive(String orgId) {
+        LambdaQueryWrapper<FiaWoLock> w = new LambdaQueryWrapper<FiaWoLock>();
+        if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
+            w.eq(FiaWoLock::getOrgId, orgId);
+        }
+        w.eq(FiaWoLock::getLockStatus, STATUS_LOCKED);
+        w.eq(FiaWoLock::getWipHold, true);
+        w.orderByAsc(FiaWoLock::getLockedAt);
+        List<FiaWoLock> locks = fiaWoLockMapper.selectList(w);
+        List<FiaWoLockActiveDTO> result = new ArrayList<>();
+        for (FiaWoLock lk : locks) {
+            FiaWoLockActiveDTO dto = new FiaWoLockActiveDTO();
+            dto.setWoNo(lk.getWoNo());
+            dto.setLockReason(lk.getLockReason());
+            dto.setLockedAt(lk.getLockedAt() == null ? null : lk.getLockedAt().toString());
+            dto.setTaskCode(lk.getTaskCode());
+            if (lk.getTaskCode() != null && !lk.getTaskCode().isEmpty()) {
+                FiaTask t = fiaTaskMapper.selectOne(
+                        new LambdaQueryWrapper<FiaTask>().eq(FiaTask::getCode, lk.getTaskCode()));
+                if (t != null) {
+                    dto.setProductName(t.getProductName());
+                    dto.setLineName(t.getLineName());
+                }
+            }
+            result.add(dto);
+        }
+        return result;
+    }
+
     public void release(String orgId, String woNo, String approverId, String releaseReason, String traceTag) {
         FiaWoLock exist = getByWoNo(orgId, woNo);
         String taskCode = exist != null ? exist.getTaskCode() : null;
         unlockByApproval(orgId, woNo, approverId, releaseReason, traceTag, taskCode);
     }
 
-    @Override
     @Transactional
     public void emergencyRelease(String orgId, String woNo, String approverId, String releaseReason, String traceTag) {
         FiaWoLock exist = getByWoNo(orgId, woNo);

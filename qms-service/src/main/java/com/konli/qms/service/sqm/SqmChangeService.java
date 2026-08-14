@@ -1,5 +1,6 @@
 package com.konli.qms.service.sqm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmChangeOrder;
 import com.konli.qms.service.sqm.dto.SqmChangeOrderListVo;
 import com.konli.qms.service.sqm.dto.SqmChangeOrderVo;
@@ -11,6 +12,8 @@ import java.util.Map;
 public interface SqmChangeService {
 
     List<SqmChangeOrderListVo> list();
+
+    PageResult<SqmChangeOrderListVo> listPage(String keyword, String status, String supplierId, int page, int size);
 
     SqmChangeOrderVo get(String id);
 

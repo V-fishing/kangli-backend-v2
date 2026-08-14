@@ -4,7 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.api.fia.dto.CreateFiaTaskRequest;
 import com.konli.qms.api.fia.dto.InspItemResultRequest;
 import com.konli.qms.api.fia.dto.SignRequest;
+import com.konli.qms.service.fia.dto.ProductSearchResult;
+import com.konli.qms.service.fia.dto.ProductTreeNode;
+import com.konli.qms.service.fia.dto.TaskStdItemVo;
 import com.konli.qms.domain.fia.dto.StdTraceResult;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
@@ -56,13 +60,75 @@ public class FiaTaskController {
         return R.ok(fiaDashboardService.dashboard());
     }
 
+    /**
+     * 按 setup(工单+物料+工序)查询最新一条首件任务结论,供量产监控前置校验:
+     * 首件未合格放行时,对应 setup 的量产 SPC 采集不允许提交。
+     */
+    @GetMapping("/by-setup")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<Map<String, Object>> bySetup(@RequestParam(required = false) String woNo,
+                                          @RequestParam(required = false) String partNo,
+                                          @RequestParam(required = false) String procName) {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        FiaTask latest = fiaTaskService.findLatestBySetup(orgId, woNo, partNo, procName);
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (latest == null) {
+            result.put("exists", false);
+            result.put("released", false);
+            result.put("message", "该 setup 尚无首件检验记录,量产监控未启动");
+            return R.ok(result);
+        }
+        // 放行判定:状态=已完成 且 综合判定=合格(或审批放行)
+        boolean released = "已完成".equals(latest.getStatus())
+                && latest.getOverallJudge() != null
+                && ("合格".equals(latest.getOverallJudge()) || "警告".equals(latest.getOverallJudge()));
+        result.put("exists", true);
+        result.put("released", released);
+        result.put("taskId", latest.getId());
+        result.put("code", latest.getCode());
+        result.put("status", latest.getStatus());
+        result.put("overallJudge", latest.getOverallJudge());
+        result.put("woNo", latest.getWoNo());
+        result.put("partNo", latest.getPartNo());
+        result.put("procName", latest.getProcName());
+        result.put("message", released ? "首件已合格放行,可启动量产监控" : "首件未放行,量产监控未启动");
+        return R.ok(result);
+    }
+
     @GetMapping
     @PreAuthorize("hasAuthority('fia.task.list')")
         public R<List<FiaTask>> list(@RequestParam(required = false) String status,
-                                 @RequestParam(required = false) String woNo) {
+                                 @RequestParam(required = false) String woNo,
+                                 @RequestParam(required = false) String productName,
+                                 @RequestParam(required = false) String partNo,
+                                 @RequestParam(required = false) String procName) {
         CompanyContext.CurrentUser u = CompanyContext.get();
         String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
-        return R.ok(fiaTaskService.list(orgId, status, woNo));
+        return R.ok(fiaTaskService.list(orgId, status, woNo, productName, partNo, procName));
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<PageResult<FiaTask>> page(@RequestParam(required = false) String status,
+                                       @RequestParam(required = false) String woNo,
+                                       @RequestParam(required = false) String productName,
+                                       @RequestParam(required = false) String partNo,
+                                       @RequestParam(required = false) String procName,
+                                       @RequestParam(defaultValue = "1") int page,
+                                       @RequestParam(defaultValue = "20") int size) {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        return R.ok(fiaTaskService.listPage(orgId, status, woNo, productName, partNo, procName, page, size));
+    }
+
+    /** 产品→工序 二级树(去重汇总),供列表/筛选构建树 */
+    @GetMapping("/products")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<List<ProductTreeNode>> productTree() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        return R.ok(fiaTaskService.listProductTree(orgId));
     }
 
     @GetMapping("/{id}")
@@ -81,14 +147,35 @@ public class FiaTaskController {
         return R.ok(fiaTaskService.matchStd(orgId, partNo, supplierId, procName));
     }
 
+    /** 产品料号模糊搜索:在所有FIA任务/标准库中检索产品,标注"新"/"旧" */
+    @GetMapping("/search-product")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<List<ProductSearchResult>> searchProduct(@RequestParam String orgId,
+                                                       @RequestParam String keyword,
+                                                       @RequestParam(required = false) String category) {
+        return R.ok(fiaTaskService.searchProduct(orgId, keyword, category));
+    }
+
+    /** 按FIA任务获取关联的检验标准项(供SPC采集页加载参数列表) */
+    @GetMapping("/{id}/std-items")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<List<TaskStdItemVo>> getTaskStdItems(@PathVariable String id) {
+        return R.ok(fiaTaskService.getTaskStdItems(id));
+    }
+
     @PostMapping
     @PreAuthorize("hasAuthority('fia.task.create')")
     @com.konli.qms.common.audit.Auditable(module = "FIA", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'首件任务:' + #req.woNo")
     public R<FiaTask> create(@Valid @RequestBody CreateFiaTaskRequest req) {
+        // 工单号为空时由后端自动生成
+        String woNo = (req.getWoNo() == null || req.getWoNo().isBlank())
+                ? fiaTaskService.generateWoNo(req.getOrgId())
+                : req.getWoNo();
+
         FiaTask task = new FiaTask();
         task.setOrgId(req.getOrgId());
-        task.setWoNo(req.getWoNo());
-        task.setLineName(req.getLineName());
+        task.setWoNo(woNo);
+        task.setLineName(req.getLineName()); // lineName 可选(前端已删除产线字段)
         task.setProductName(req.getProductName());
         task.setProcName(req.getProcName());
         task.setTriggerType(req.getTriggerType());
@@ -97,8 +184,10 @@ public class FiaTaskController {
         task.setSupplierId(req.getSupplierId());
         task.setLotId(req.getLotId());
         task.setBatchNo(req.getBatchNo());
+        task.setStdItemIds(req.getStdItemIds()); // 选中的标准项(空=全量)
         task.setIsUrgent(req.getIsUrgent());
         task.setRemark(req.getRemark());
+        task.setCategory(req.getCategory());
         return R.ok(fiaTaskService.create(task));
     }
 

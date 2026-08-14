@@ -7,7 +7,7 @@ import java.util.List;
 /** 首件审批(豁免/紧急放行/让步接收) */
 public interface FiaApprovalService {
 
-    List<FiaApproval> list();
+    List<FiaApproval> list(String approvalType, String status, String keyword);
 
     FiaApproval get(String id);
 

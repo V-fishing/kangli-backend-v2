@@ -8,6 +8,7 @@ import com.konli.qms.domain.sqm.entity.SqmKeyPartSn;
 import com.konli.qms.domain.sqm.entity.SqmTraceNode;
 import com.konli.qms.domain.sqm.entity.SqmTraceProductDetail;
 import com.konli.qms.domain.sqm.entity.SqmTraceRawDetail;
+import com.konli.qms.domain.sqm.vo.TraceDirection;
 import com.konli.qms.domain.sqm.vo.TraceDirectionNode;
 import com.konli.qms.domain.sqm.vo.TraceFullTreeVO;
 import com.konli.qms.domain.sqm.vo.TraceNodeFullVO;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /** 追溯节点:创建/查询/追溯树。sqm.trace.list / sqm.trace.create */
 @RestController
@@ -50,10 +52,30 @@ public class SqmTraceController {
 
     // ---- 来料批次(物料表): 列表 / 供应商来料入库 ----
 
+    /**
+     * 来料批次列表: 支持 supplierId + iqcPass 过滤, 供前端"供应商 → 已通过 IQC 合格物料"级联下拉。
+     * 例: GET /lots?supplierId=xxx&iqcPass=true 返回该供应商名下全部已通过来料检验的批次。
+     */
     @GetMapping("/lots")
     @PreAuthorize("hasAuthority('sqm.trace.list')")
-    public R<List<SqmIncomingLot>> listLots(@RequestParam(required = false) String keyword) {
-        return R.ok(sqmTraceService.listLots(keyword));
+    public R<List<SqmIncomingLot>> listLots(@RequestParam(required = false) String keyword,
+                                            @RequestParam(required = false) String supplierId,
+                                            @RequestParam(required = false) Boolean iqcPass) {
+        return R.ok(sqmTraceService.listLots(keyword, supplierId, iqcPass));
+    }
+
+    /**
+     * 来料批次分页列表: 大数据量下以分页返回, 避免一次性拉取全部导致前端卡顿。
+     * 供追溯列表页(总表/物料表)分页加载使用; keyword 模糊匹配批次号/物料编码/物料名称。
+     */
+    @GetMapping("/lots/page")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<PageResult<SqmIncomingLot>> listLotsPage(@RequestParam(required = false) String keyword,
+                                                     @RequestParam(required = false) String supplierId,
+                                                     @RequestParam(required = false) String orgId,
+                                                     @RequestParam(defaultValue = "1") int page,
+                                                     @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmTraceService.listLotsPage(keyword, supplierId, orgId, page, size));
     }
 
     /**
@@ -201,10 +223,80 @@ public class SqmTraceController {
         return R.ok(sqmTraceService.listKeyPartSn(lotId));
     }
 
+    // ---- 方案 B: 基于 sqm_trace_relation + 三源表的 MES 追溯树 ----
+
+    /** 以源表业务条码为根查询 MES 导入数据的完整追溯树(节点详情取自三源表)。direction: forward/backward/all(默认 all)。 */
+    @GetMapping("/trace/mes-tree")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<TraceFullTreeVO> getMesTraceTree(@RequestParam String barcode,
+                                              @RequestParam(required = false, defaultValue = "ALL") String direction,
+                                              @RequestParam(required = false) String orgId) {
+        return R.ok(sqmTraceService.traceMesTree(barcode, orgId, TraceDirection.of(direction)));
+    }
+
+    /** 按批号查产品树: 批号可为来料批次号(material_batch_no)或成品/半成品批号(prod_batch_or_sn)。返回森林(可能多棵)。 */
+    @GetMapping("/trace/mes-tree-by-batch")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<List<TraceFullTreeVO>> getMesTraceTreeByBatch(@RequestParam String batchNo,
+                                                           @RequestParam(required = false, defaultValue = "ALL") String direction,
+                                                           @RequestParam(required = false) String orgId) {
+        return R.ok(sqmTraceService.traceByBatchNo(batchNo, orgId, TraceDirection.of(direction)));
+    }
+
+    /** 按来料批次号(lotNo)查 MES 追溯森林: 先由来料批次号定位源表业务条码集合, 再逐条码追溯合并森林。 */
+    @GetMapping("/trace/mes-tree-by-lotno")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<List<TraceFullTreeVO>> getMesTraceTreeByLotNo(@RequestParam String lotNo,
+                                                            @RequestParam(required = false, defaultValue = "ALL") String direction,
+                                                            @RequestParam(required = false) String orgId) {
+        return R.ok(sqmTraceService.traceByLotNo(lotNo, orgId, TraceDirection.of(direction)));
+    }
+
+    /** 方案 B: 往 sqm_trace_relation 手动插入一条 parent→child 条码边(物料表关联半成品/成品)。 */
+    @PostMapping("/trace/mes-relation")
+    @PreAuthorize("hasAuthority('sqm.trace.create')")
+    public R<Void> saveMesRelation(@RequestParam String parentBarcode,
+                                   @RequestParam String childBarcode,
+                                   @RequestParam String relationType,
+                                   @RequestParam(required = false) String orgId) {
+        sqmTraceService.saveRelation(parentBarcode, childBarcode, relationType, orgId);
+        return R.ok();
+    }
+
     @PostMapping("/key-part-sns")
     @PreAuthorize("hasAuthority('sqm.trace.create')")
     public R<Void> createKeyPartSn(@RequestBody SqmKeyPartSn sn) {
         sqmTraceService.createKeyPartSn(sn);
         return R.ok();
+    }
+
+    // ---- 方案 B: 源表分页(三源表路由) ----
+
+    /**
+     * 源表分页: 按 type(material/semi/finished/all) 路由三源表, 返回分页业务记录。
+     * type=all 时仅返回各类型计数 Map(供前端总表分 tab 显示); plantCode 用于组织隔离。
+     */
+    @GetMapping("/trace/source/page")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<PageResult<Map<String, Object>>> sourcePage(@RequestParam(defaultValue = "all") String type,
+                                                         @RequestParam(required = false) String keyword,
+                                                         @RequestParam(required = false) String plantCode,
+                                                         @RequestParam(required = false) String bizType,
+                                                         @RequestParam(defaultValue = "1") int page,
+                                                         @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmTraceService.sourcePage(type, keyword, plantCode, bizType, page, size));
+    }
+
+    // ---- 源表全字段明细(供物料表/半成品表/成品表「详情」弹窗) ----
+
+    /**
+     * 源表全字段明细: 按 sourceType(material/finished/semi/critical) + 业务条码(key)反查三源表,
+     * 返回剔除别名列与审计列后的业务字段 Map,供前端分组卡片弹窗展示全字段。
+     */
+    @GetMapping("/trace/source-detail")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<Map<String, Object>> getSourceDetail(@RequestParam String sourceType,
+                                                  @RequestParam String key) {
+        return R.ok(sqmTraceService.getSourceDetail(sourceType, key));
     }
 }

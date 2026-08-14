@@ -3,8 +3,10 @@ package com.konli.qms.api.sqm.controller;
 import com.konli.qms.api.sqm.dto.ApproveAuditRequest;
 import com.konli.qms.api.sqm.dto.AuditApprovalCfgRequest;
 import com.konli.qms.api.sqm.dto.CloseNcRequest;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.exception.BusinessException;
+import com.konli.qms.common.oss.ObjectStorageService;
 import com.konli.qms.domain.sqm.entity.SqmAuditApproval;
 import com.konli.qms.domain.sqm.entity.SqmAuditApprovalCfg;
 import com.konli.qms.domain.sqm.entity.SqmAuditNc;
@@ -14,6 +16,7 @@ import com.konli.qms.domain.sqm.entity.SqmAuditReportArchive;
 import com.konli.qms.service.sqm.SqmAuditApprovalCfgService;
 import com.konli.qms.service.sqm.SqmAuditReportArchiveService;
 import com.konli.qms.service.sqm.SqmAuditService;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.sqm.dto.AuditorDef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -30,10 +33,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import jakarta.servlet.http.HttpServletRequest;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -46,6 +47,7 @@ public class SqmAuditController {
     private final SqmAuditService sqmAuditService;
     private final SqmAuditReportArchiveService sqmAuditReportArchiveService;
     private final SqmAuditApprovalCfgService approvalCfgService;
+    private final ObjectStorageService objectStorageService;
 
     // ---- 审核计划 ----
 
@@ -53,6 +55,17 @@ public class SqmAuditController {
     @PreAuthorize("hasAuthority('sqm.audit.list')")
     public R<List<SqmAuditPlan>> listPlans() {
         return R.ok(sqmAuditService.listPlans());
+    }
+
+    @GetMapping("/plans/page")
+    @PreAuthorize("hasAuthority('sqm.audit.list')")
+    public R<PageResult<SqmAuditPlan>> listPlansPage(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String auditType,
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmAuditService.listPlansPage(status, auditType, supplierId, page, size));
     }
 
     @PostMapping("/plans")
@@ -78,6 +91,14 @@ public class SqmAuditController {
     @PreAuthorize("hasAuthority('sqm.audit.list')")
     public R<SqmAuditPlan> getPlan(@PathVariable String id) {
         return R.ok(sqmAuditService.getPlan(id));
+    }
+
+    /** 列表级改派审核组长(更新审核组长 + 推送被指派人任务中心)。 */
+    @PostMapping("/plans/{id}/reassign")
+    @PreAuthorize("hasAuthority('sqm.audit.create')")
+    public R<Void> reassignPlan(@PathVariable String id, @RequestBody DefectLaunchRequest req) {
+        sqmAuditService.reassign(id, req);
+        return R.ok();
     }
 
     /** 按来源变更单 id 反查关联审核计划(双向追溯:变更单详情 → 审核计划)。 */
@@ -122,6 +143,8 @@ public class SqmAuditController {
                 d.setRole(it.getRole() == null ? "" : it.getRole());
                 d.setLabel(it.getLabel());
                 d.setVeto(it.isVeto());
+                d.setUserId(it.getUserId());
+                d.setUserIds(it.getUserIds());
                 auditors.add(d);
             }
         }
@@ -201,42 +224,31 @@ public class SqmAuditController {
         return R.ok(sqmAuditReportArchiveService.generatePdf(id));
     }
 
-    // ---- 审核照片上传/下载(简化:本地 logs/photos/ 目录,不接 MinIO) ----
+    // ---- 审核照片上传/下载(统一写入 MinIO) ----
 
     /**
-     * 上传审核照片(存本地 logs/photos/)。
-     * 返回文件路径(fileRef),后续可写入审核记录/NC 的附件字段。
+     * 上传审核照片(统一写入 MinIO,objectKey 形如 audit-photos/{uuid}-{原文件名})。
+     * 返回 objectKey,前端回填到记录的 filePath / 用于下载端点。
      */
     @PostMapping("/records/{recordId}/photos")
     @PreAuthorize("hasAuthority('sqm.audit.create')")
     public R<String> uploadPhoto(@PathVariable String recordId,
                                  @RequestParam("file") MultipartFile file) {
-        try {
-            String original = file.getOriginalFilename();
-            String fileName = "audit-" + recordId + "-" + System.currentTimeMillis()
-                    + "-" + (original == null || original.isBlank() ? "photo" : original);
-            Path path = Paths.get("logs", "photos", fileName);
-            Files.createDirectories(path.getParent());
-            file.transferTo(path.toFile());
-            return R.ok(path.toString());
-        } catch (Exception e) {
-            throw new BusinessException(500, "照片上传失败: " + e.getMessage());
-        }
+        String objectKey = objectStorageService.upload("audit-photos", file);
+        return R.ok(objectKey);
     }
 
-    /** 读取本地照片文件返回(按文件名,存于 logs/photos/)。 */
-    @GetMapping("/photos/{fileName}")
+    /**
+     * 读取 MinIO 中的照片(按 objectKey,含前缀如 audit-photos/{uuid}-name)。
+     * 用 /** 通配捕获含斜杠的 objectKey,避免路径变量匹配失败。
+     */
+    @GetMapping("/photos/**")
     @PreAuthorize("hasAuthority('sqm.audit.list')")
-    public ResponseEntity<byte[]> getPhoto(@PathVariable String fileName) {
+    public ResponseEntity<byte[]> getPhoto(HttpServletRequest request) {
         try {
-            // 防路径穿越:仅取文件名部分
-            String safeName = Paths.get(fileName).getFileName().toString();
-            Path path = Paths.get("logs", "photos", safeName).toAbsolutePath().normalize();
-            Path base = Paths.get("logs", "photos").toAbsolutePath().normalize();
-            if (!path.startsWith(base) || !Files.exists(path)) {
-                throw new BusinessException(404, "照片不存在");
-            }
-            byte[] data = Files.readAllBytes(path);
+            // 取 /photos/ 之后的完整路径作为 objectKey
+            String key = request.getRequestURI().substring(request.getRequestURI().indexOf("/photos/") + "/photos/".length());
+            byte[] data = objectStorageService.download(key);
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.IMAGE_JPEG);
             headers.setContentLength(data.length);

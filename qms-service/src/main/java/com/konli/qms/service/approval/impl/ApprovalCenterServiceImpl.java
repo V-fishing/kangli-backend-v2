@@ -19,6 +19,8 @@ import com.konli.qms.domain.sqm.mapper.SqmAuditApprovalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmAuditPlanMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeApprovalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
+import com.konli.qms.domain.tlm.entity.TlmScrap;
+import com.konli.qms.domain.tlm.mapper.TlmScrapMapper;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.service.approval.ApprovalCenterService;
 import com.konli.qms.service.uop.UserService;
@@ -56,6 +58,7 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
     private final SqmChangeOrderMapper changeOrderMapper;
     private final SqmAuditApprovalMapper auditApprovalMapper;
     private final SqmAuditPlanMapper auditPlanMapper;
+    private final TlmScrapMapper tlmScrapMapper;
     private final UserService userService;
 
     @Override
@@ -183,6 +186,24 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
                 d.setUrl("/sqm/audits");
                 list.add(d);
             }
+        }
+
+        // 5) TLM 工装报废审批(指定审批人 approver_id == 当前用户 且 status=PENDING)
+        List<TlmScrap> scraps = tlmScrapMapper.selectList(new LambdaQueryWrapper<TlmScrap>()
+                .eq(hasOrg, TlmScrap::getOrgId, orgId)
+                .eq(TlmScrap::getApproverId, userId)
+                .eq(TlmScrap::getStatus, "PENDING"));
+        for (TlmScrap s : scraps) {
+            PendingApprovalDTO d = new PendingApprovalDTO();
+            d.setId(s.getId());
+            d.setModule("TLM");
+            d.setBizType("工装报废审批");
+            d.setBizNo(s.getScrapNo());
+            d.setTitle("工装报废审批 · " + (s.getScrapNo() == null ? "" : s.getScrapNo()));
+            d.setApplicant(s.getCreatedBy());
+            d.setAppliedAt(s.getCreatedAt());
+            d.setUrl("/tlm/tooling/" + s.getToolId());
+            list.add(d);
         }
 
         list.sort((x, y) -> {

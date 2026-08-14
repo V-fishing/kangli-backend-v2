@@ -2,6 +2,7 @@ package com.konli.qms.api.patrol.controller;
 
 import com.konli.qms.api.patrol.dto.CreateTaskRequest;
 import com.konli.qms.api.patrol.dto.SubmitRecordRequest;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.patrol.entity.PatlTask;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -30,6 +32,14 @@ public class PatlTaskController {
     @PreAuthorize("hasAuthority('patl.task.list')")
     public R<List<PatlTask>> list() {
         return R.ok(patlTaskService.list());
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('patl.task.list')")
+    public R<PageResult<PatlTask>> page(@RequestParam(required = false) String keyword,
+                                        @RequestParam(defaultValue = "1") int page,
+                                        @RequestParam(defaultValue = "20") int size) {
+        return R.ok(patlTaskService.listPage(keyword, page, size));
     }
 
     @GetMapping("/{id}")

@@ -1,6 +1,7 @@
 package com.konli.qms.api.spc.controller;
 
 import com.konli.qms.api.spc.dto.CloseAlarmRequest;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.domain.spc.entity.SpcAlarm;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -30,6 +32,16 @@ public class SpcAlarmController {
     @PreAuthorize("hasAuthority('spc.alarm.list')")
     public R<List<SpcAlarm>> list() {
         return R.ok(spcAlarmService.list());
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('spc.alarm.list')")
+    public R<PageResult<SpcAlarm>> page(@RequestParam(required = false) String keyword,
+                                        @RequestParam(required = false) String status,
+                                        @RequestParam(required = false) String level,
+                                        @RequestParam(defaultValue = "1") int page,
+                                        @RequestParam(defaultValue = "20") int size) {
+        return R.ok(spcAlarmService.listPage(keyword, status, level, page, size));
     }
 
     @PostMapping("/{id}/close")

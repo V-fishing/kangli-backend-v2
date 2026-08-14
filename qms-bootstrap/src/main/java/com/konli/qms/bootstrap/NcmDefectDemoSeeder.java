@@ -12,8 +12,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -37,15 +39,18 @@ public class NcmDefectDemoSeeder implements ApplicationRunner {
     private static final String[] DICTS = {"A01", "A02", "A03"};
     private static final String[] PROCS = {"SMT-01", "ASSY-02", "CNC-03", "TEST-04"};
     private static final String[] SEVS = {"轻微", "一般", "严重"};
+    private static final String[] STAGES = {"来料不良", "半成品不良", "成品不良", "首件不良"};
 
     @Override
     public void run(ApplicationArguments args) {
         String orgId = getDemoOrgId();
 
-        // 每次 dev 启动重建演示产品(MX-200/300/400/500)不良记录,保证趋势报表开箱即用且数据完整确定。
-        jdbcTemplate.update(
-                "DELETE FROM ops.ncm_defect_record WHERE org_id = ? AND product_model IN (?,?,?,?)",
-                orgId, PRODUCTS[0], PRODUCTS[1], PRODUCTS[2], PRODUCTS[3]);
+        // 幂等灌入:不删除已有演示记录,仅按 defect_no 补齐缺失记录。
+        // 避免每次重启 DELETE 重建导致记录 id 变化,使前端已加载的列表引用失效(发起8D/CAPA 时报"缺陷记录不存在")。
+        List<String> existingNos = jdbcTemplate.queryForList(
+                "SELECT defect_no FROM ops.ncm_defect_record WHERE org_id = ? AND product_model IN (?,?,?,?)",
+                String.class, orgId, PRODUCTS[0], PRODUCTS[1], PRODUCTS[2], PRODUCTS[3]);
+        Set<String> exists = new HashSet<>(existingNos);
 
         ensureDefectDicts(orgId);
 
@@ -68,13 +73,19 @@ public class NcmDefectDemoSeeder implements ApplicationRunner {
                     dc = Math.max(1, dc);
                     double dr = round2(dc * 100.0 / batchTotal);
                     String defectNo = "DR-" + day.format(D) + "-" + p + "-" + r + "-" + (counter++);
+                    // 先完整执行 RAND 生成(保持固定种子的确定性序列与首次灌入一致),再判重跳过,
+                    // 避免提前 continue 改变 Random 状态导致 defectNo 序列漂移、判重失效。
                     String woNo = "WO-" + day.format(D) + "-" + PRODUCTS[p] + "-" + r;
                     String dict = DICTS[RAND.nextInt(DICTS.length)];
                     String proc = PROCS[RAND.nextInt(PROCS.length)];
                     String sev = dict.equals("A02") ? "严重" : SEVS[RAND.nextInt(SEVS.length)];
+                    String stage = STAGES[counter % STAGES.length];
                     LocalDateTime occurred = day.atTime(8 + RAND.nextInt(10), RAND.nextInt(60));
+                    if (exists.contains(defectNo)) {
+                        continue; // 已存在,跳过,保留原 id
+                    }
                     batch.add(new Object[]{
-                            UUID.randomUUID().toString(), orgId, defectNo, woNo, proc, dict, sev,
+                            UUID.randomUUID().toString(), orgId, defectNo, woNo, proc, dict, sev, stage,
                             dc, batchTotal, dr, PRODUCTS[p], OPERATOR, occurred
                     });
                 }
@@ -82,9 +93,9 @@ public class NcmDefectDemoSeeder implements ApplicationRunner {
         }
 
         String sql = "INSERT INTO ops.ncm_defect_record "
-                + "(id, org_id, defect_no, wo_no, process_code, defect_dict_code, severity, "
+                + "(id, org_id, defect_no, wo_no, process_code, defect_dict_code, severity, stage, "
                 + "defect_count, batch_total, defect_rate, product_model, operator_id, source, occurred_at, created_at, is_deleted, version) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'手动',?,now(),false,0)";
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'手动',?,now(),false,0)";
         jdbcTemplate.batchUpdate(sql, batch);
         log.info("[NCM 种子] 灌入不良记录 {} 条(近 90 天, 跨 {} 产品)", batch.size(), PRODUCTS.length);
     }

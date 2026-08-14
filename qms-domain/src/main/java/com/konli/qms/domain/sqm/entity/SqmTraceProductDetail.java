@@ -60,6 +60,9 @@ public class SqmTraceProductDetail {
     @TableField("batch_no")
     private String batchNo;
 
+    @TableField("product_barcode")
+    private String productBarcode;        // 产品条码=产品批号(MES 条码规则)
+
     @TableField("production_date")
     private LocalDate productionDate;
 

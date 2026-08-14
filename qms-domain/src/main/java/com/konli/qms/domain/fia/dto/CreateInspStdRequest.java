@@ -20,6 +20,9 @@ public class CreateInspStdRequest {
     @NotBlank
     private String procName;
 
+    /** 绑定的 SPC 工序字典记录 id(与 spc_process 同源,避免工序文本漂移错配) */
+    private String spcProcessId;
+
     private String aql;
     private String inspectLevel;
     private String samplePlan;

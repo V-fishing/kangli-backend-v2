@@ -46,13 +46,13 @@ public class SpcControlLimit {
     private BigDecimal xbarLcl;
 
     @TableField("r_ucl")
-    private BigDecimal rUcl;
+    private BigDecimal rucl;
 
     @TableField("r_cl")
-    private BigDecimal rCl;
+    private BigDecimal rcl;
 
     @TableField("r_lcl")
-    private BigDecimal rLcl;
+    private BigDecimal rlcl;
 
     @TableField("calc_at")
     private LocalDateTime calcAt;

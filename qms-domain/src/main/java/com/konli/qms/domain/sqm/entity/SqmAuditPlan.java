@@ -32,6 +32,10 @@ public class SqmAuditPlan extends BaseEntity {
     @TableField("audit_lead")
     private String auditLead;
 
+    /** 审核组长用户 ID,支撑按当前登录用户聚合"我的任务"(V161 加) */
+    @TableField("audit_lead_user_id")
+    private String auditLeadUserId;
+
     @TableField("auditor_team")
     private String auditorTeam;
 

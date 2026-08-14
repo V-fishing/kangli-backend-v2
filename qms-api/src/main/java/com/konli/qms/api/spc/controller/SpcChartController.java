@@ -22,20 +22,24 @@ public class SpcChartController {
     private final SpcSubgroupService spcSubgroupService;
     private final SpcDashboardService spcDashboardService;
 
-    /** 控制图数据:子组时间序列 + 当前激活控制限。 */
+    /** 控制图数据:子组时间序列 + 当前激活控制限。stage 可选: FIRST/Routine/ALL;sampleTaskId 可选按抽样任务过滤。 */
     @GetMapping("/control-chart")
     @PreAuthorize("hasAuthority('spc.param.list')")
     public R<ControlChartVo> controlChart(@RequestParam String paramId,
                                           @RequestParam(required = false) String startTime,
-                                          @RequestParam(required = false) String endTime) {
-        return R.ok(spcSubgroupService.getControlChart(paramId, startTime, endTime));
+                                          @RequestParam(required = false) String endTime,
+                                          @RequestParam(required = false) String stage,
+                                          @RequestParam(required = false) String sampleTaskId) {
+        return R.ok(spcSubgroupService.getControlChart(paramId, startTime, endTime, stage, sampleTaskId));
     }
 
-    /** 过程能力直方图:基于参数子组均值分箱(不传 paramId 时返回空)。 */
+    /** 过程能力直方图:基于参数子组均值分箱。stage 可选: FIRST/ROUTINE/ALL;sampleTaskId 可选按抽样任务过滤。 */
     @GetMapping("/histogram")
     @PreAuthorize("hasAuthority('spc.param.list')")
-    public R<SpcHistogramVo> histogram(@RequestParam(required = false) String paramId) {
-        return R.ok(spcSubgroupService.getHistogram(paramId));
+    public R<SpcHistogramVo> histogram(@RequestParam(required = false) String paramId,
+                                       @RequestParam(required = false) String stage,
+                                       @RequestParam(required = false) String sampleTaskId) {
+        return R.ok(spcSubgroupService.getHistogram(paramId, stage, sampleTaskId));
     }
 
     /** SPC 看板:Cpk 分布 / 待确认告警 / 今日采集完成率。 */

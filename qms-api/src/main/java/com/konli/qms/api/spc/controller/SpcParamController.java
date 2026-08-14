@@ -1,5 +1,6 @@
 package com.konli.qms.api.spc.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.spc.entity.SpcParam;
 import com.konli.qms.service.spc.SpcParamService;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -26,14 +28,37 @@ public class SpcParamController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('spc.param.list')")
-    public R<List<SpcParam>> list() {
-        return R.ok(spcParamService.list());
+    public R<List<SpcParam>> list(@RequestParam(required = false) String productName,
+                                  @RequestParam(required = false) String procName) {
+        return R.ok(spcParamService.list(productName, procName));
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('spc.param.list')")
+    public R<PageResult<SpcParam>> page(@RequestParam(required = false) String productName,
+                                        @RequestParam(required = false) String procName,
+                                        @RequestParam(required = false) String keyword,
+                                        @RequestParam(defaultValue = "1") int page,
+                                        @RequestParam(defaultValue = "20") int size) {
+        return R.ok(spcParamService.listPage(productName, procName, keyword, page, size));
+    }
+
+    @PostMapping("/from-fia-task")
+    @PreAuthorize("hasAuthority('spc.param.create')")
+    public R<List<SpcParam>> fromFiaTask(@RequestParam String taskId) {
+        return R.ok(spcParamService.ensureFromFiaTask(taskId));
     }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('spc.param.list')")
     public R<SpcParam> get(@PathVariable String id) {
         return R.ok(spcParamService.get(id));
+    }
+
+    @GetMapping("/by-std")
+    @PreAuthorize("hasAuthority('spc.param.list')")
+    public R<List<SpcParam>> listByStd(@RequestParam String stdId) {
+        return R.ok(spcParamService.listByStd(stdId));
     }
 
     @PostMapping

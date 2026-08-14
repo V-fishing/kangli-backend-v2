@@ -1,8 +1,11 @@
 package com.konli.qms.api.ncm.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
+import com.konli.qms.common.audit.Auditable;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.service.ncm.NcmDefectRecordService;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +53,20 @@ public class NcmDefectRecordController {
         return R.ok(ncmDefectRecordService.create(record));
     }
 
+    @GetMapping("/defect-records/page")
+    @PreAuthorize("hasAuthority('ncm.record.list')")
+    public R<PageResult<NcmDefectRecord>> listPage(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String defectDictCode,
+            @RequestParam(required = false) String woNo,
+            @RequestParam(required = false) String severity,
+            @RequestParam(required = false) String stage,
+            @RequestParam(required = false) String source,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(ncmDefectRecordService.listPage(keyword, defectDictCode, woNo, severity, stage, source, page, size));
+    }
+
     // ---------------- 分析报表 ----------------
 
     /** 多维分析:按 dim(processCode/defectDictCode/deviceCode/batchNo) 分组,可选时间范围 */
@@ -94,24 +111,40 @@ public class NcmDefectRecordController {
         return R.ok(ncmDefectRecordService.checkTrendAnomaly());
     }
 
-    /** 不良记录一键发起8D(跨模块:defect->8D) */
+    /** 指派候选:启用用户 + 启用角色 + 通知渠道(供「指派处理人」弹窗下拉) */
+    @GetMapping("/assign-candidates")
+    @PreAuthorize("hasAuthority('ncm.record.list')")
+    public R<Map<String, Object>> assignCandidates() {
+        return R.ok(ncmDefectRecordService.assignCandidates());
+    }
+
+    /** 不良记录一键发起8D(跨模块:defect->8D),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-8d")
     @PreAuthorize("hasAuthority('ncm.8d.create')")
-    public R<Object> launch8dFromDefect(@PathVariable String id) {
-        return R.ok(ncmDefectRecordService.launch8dFromDefect(id));
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+            detailExpr = "'由不良记录发起8D' + (#req != null && #req.ownerUserId != null ? (':负责人 ' + #req.ownerUserId) : '')")
+    public R<Object> launch8dFromDefect(@PathVariable String id,
+                                        @RequestBody(required = false) DefectLaunchRequest req) {
+        return R.ok(ncmDefectRecordService.launch8dFromDefect(id, req));
     }
 
-    /** 不良记录一键发起CAPA(跨模块:defect->CAPA) */
+    /** 不良记录一键发起CAPA(跨模块:defect->CAPA),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-capa")
     @PreAuthorize("hasAuthority('ncm.capa.create')")
-    public R<Object> launchCapaFromDefect(@PathVariable String id) {
-        return R.ok(ncmDefectRecordService.launchCapaFromDefect(id));
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+            detailExpr = "'由不良记录发起CAPA'")
+    public R<Object> launchCapaFromDefect(@PathVariable String id,
+                                          @RequestBody(required = false) DefectLaunchRequest req) {
+        return R.ok(ncmDefectRecordService.launchCapaFromDefect(id, req));
     }
 
-    /** 不良记录一键发起CA(跨模块:defect->CA) */
+    /** 不良记录一键发起CA(跨模块:defect->CA),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-ca")
     @PreAuthorize("hasAuthority('ncm.record.create')")
-    public R<Object> launchCaFromDefect(@PathVariable String id) {
-        return R.ok(ncmDefectRecordService.launchCaFromDefect(id));
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+            detailExpr = "'由不良记录发起CA'")
+    public R<Object> launchCaFromDefect(@PathVariable String id,
+                                        @RequestBody(required = false) DefectLaunchRequest req) {
+        return R.ok(ncmDefectRecordService.launchCaFromDefect(id, req));
     }
 }

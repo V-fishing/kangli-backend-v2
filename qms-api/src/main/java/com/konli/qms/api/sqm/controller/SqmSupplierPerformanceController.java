@@ -1,6 +1,7 @@
 package com.konli.qms.api.sqm.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.sqm.entity.SqmAuditFreqRule;
 import com.konli.qms.domain.sqm.entity.SqmSupplierPerformance;
@@ -29,32 +30,41 @@ public class SqmSupplierPerformanceController {
     private final SqmAuditFreqRuleMapper sqmAuditFreqRuleMapper;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    @PreAuthorize("hasAuthority('sqm.capa')")
     public R<List<SqmSupplierPerformance>> list(@RequestParam(required = false) String supplierId) {
         return R.ok(sqmSupplierPerformanceService.list(supplierId));
     }
 
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('sqm.capa')")
+    public R<PageResult<SqmSupplierPerformance>> page(@RequestParam(required = false) String supplierId,
+                                                     @RequestParam(required = false) String period,
+                                                     @RequestParam(defaultValue = "1") int page,
+                                                     @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmSupplierPerformanceService.listPage(supplierId, period, page, size));
+    }
+
     @GetMapping("/{id}")
-    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    @PreAuthorize("hasAuthority('sqm.capa')")
     public R<SqmSupplierPerformance> get(@PathVariable String id) {
         return R.ok(sqmSupplierPerformanceService.get(id));
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    @PreAuthorize("hasAuthority('sqm.capa')")
     public R<SqmSupplierPerformance> create(@RequestBody SqmSupplierPerformance performance) {
         return R.ok(sqmSupplierPerformanceService.create(performance));
     }
 
     @PostMapping("/calc")
-    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    @PreAuthorize("hasAuthority('sqm.capa')")
     public R<SqmSupplierPerformance> calc(@RequestParam String supplierId, @RequestParam String period) {
         return R.ok(sqmSupplierPerformanceService.calc(supplierId, period));
     }
 
     /** 供应商绩效→审核频次联动:按供应商等级查推荐审核频次(查sqm_audit_freq_rule) */
     @GetMapping("/audit-freq")
-    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    @PreAuthorize("hasAuthority('sqm.capa')")
     public R<java.util.Map<String, Object>> getAuditFreq(@RequestParam String supplierLevel) {
         SqmAuditFreqRule rule = sqmAuditFreqRuleMapper.selectOne(
                 new LambdaQueryWrapper<SqmAuditFreqRule>().eq(SqmAuditFreqRule::getLevel, supplierLevel));

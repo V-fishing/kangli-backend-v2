@@ -6,6 +6,7 @@ import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.PermissionLoader;
 import com.konli.qms.domain.uop.entity.SysButton;
 import com.konli.qms.domain.uop.entity.SysDataScope;
+import com.konli.qms.domain.uop.entity.SysMenu;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.domain.uop.entity.SysRoleButton;
 import com.konli.qms.domain.uop.entity.SysRoleMenu;
@@ -13,6 +14,7 @@ import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.entity.SysUserRole;
 import com.konli.qms.domain.uop.mapper.SysButtonMapper;
 import com.konli.qms.domain.uop.mapper.SysDataScopeMapper;
+import com.konli.qms.domain.uop.mapper.SysMenuMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleButtonMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleMapper;
 import com.konli.qms.domain.uop.mapper.SysRoleMenuMapper;
@@ -24,13 +26,21 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class RoleServiceImpl implements RoleService {
 
     private final SysRoleMapper sysRoleMapper;
+    private final SysMenuMapper sysMenuMapper;
     private final SysButtonMapper sysButtonMapper;
     private final SysRoleMenuMapper sysRoleMenuMapper;
     private final SysRoleButtonMapper sysRoleButtonMapper;
@@ -107,8 +117,10 @@ public class RoleServiceImpl implements RoleService {
     @Transactional
     public void assignMenus(String roleId, List<String> menuIds) {
         sysRoleMenuMapper.delete(new LambdaQueryWrapper<SysRoleMenu>().eq(SysRoleMenu::getRoleId, roleId));
-        if (menuIds != null) {
-            for (String mid : menuIds) {
+        if (menuIds != null && !menuIds.isEmpty()) {
+            // 祖先闭包归一化：选了子级菜单必须连带其所有祖先目录，避免"有子无父"的矛盾数据
+            Set<String> expanded = expandWithAncestors(menuIds, loadMenuParentMap());
+            for (String mid : expanded) {
                 SysRoleMenu rm = new SysRoleMenu();
                 rm.setRoleId(roleId);
                 rm.setMenuId(mid);
@@ -122,15 +134,59 @@ public class RoleServiceImpl implements RoleService {
     @Transactional
     public void assignButtons(String roleId, List<String> buttonIds) {
         sysRoleButtonMapper.delete(new LambdaQueryWrapper<SysRoleButton>().eq(SysRoleButton::getRoleId, roleId));
-        if (buttonIds != null) {
+        if (buttonIds != null && !buttonIds.isEmpty()) {
             for (String bid : buttonIds) {
                 SysRoleButton rb = new SysRoleButton();
                 rb.setRoleId(roleId);
                 rb.setButtonId(bid);
                 sysRoleButtonMapper.insert(rb);
             }
+            // 按钮隐含其所属页面：把按钮挂载的菜单(及其祖先)补进 sys_role_menu，避免"有按钮无页面"
+            List<SysButton> buttons = sysButtonMapper.selectBatchIds(buttonIds);
+            Set<String> ownerMenuIds = new LinkedHashSet<>();
+            for (SysButton b : buttons) {
+                if (b.getMenuId() != null) {
+                    ownerMenuIds.add(b.getMenuId());
+                }
+            }
+            if (!ownerMenuIds.isEmpty()) {
+                Set<String> required = expandWithAncestors(ownerMenuIds, loadMenuParentMap());
+                Set<String> existing = new LinkedHashSet<>(roleMenus(roleId));
+                for (String mid : required) {
+                    if (!existing.contains(mid)) {
+                        SysRoleMenu rm = new SysRoleMenu();
+                        rm.setRoleId(roleId);
+                        rm.setMenuId(mid);
+                        sysRoleMenuMapper.insert(rm);
+                    }
+                }
+            }
         }
         permissionLoader.evictAll();
+    }
+
+    /** 加载全量菜单，构建 id → parentId 映射（parentId 为 null 表示顶级）。 */
+    private Map<String, String> loadMenuParentMap() {
+        List<SysMenu> all = sysMenuMapper.selectList(null);
+        Map<String, String> idToParent = new HashMap<>();
+        for (SysMenu m : all) {
+            idToParent.put(m.getId(), m.getParentId());
+        }
+        return idToParent;
+    }
+
+    /** 把选中的菜单集合向上回溯补齐所有祖先，返回去重后的闭包集合。 */
+    private Set<String> expandWithAncestors(Collection<String> menuIds, Map<String, String> idToParent) {
+        Set<String> result = new LinkedHashSet<>(menuIds);
+        for (String id : new ArrayList<>(result)) {
+            String p = idToParent.get(id);
+            int guard = 0;
+            while (p != null && guard++ < 64) { // guard 防御环状 parentId 造成死循环
+                result.add(p);
+                p = idToParent.get(p);
+            }
+        }
+        return result;
     }
 
     @Override
@@ -161,7 +217,22 @@ public class RoleServiceImpl implements RoleService {
 
     @Override
     public List<SysButton> listButtons() {
-        return sysButtonMapper.selectList(null);
+        List<SysButton> buttons = sysButtonMapper.selectList(null);
+        // 带出所属菜单名（含 visible=false 的隐藏菜单，树接口不返回，按钮分组需要展示）
+        Set<String> menuIds = buttons.stream()
+                .map(SysButton::getMenuId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(Collectors.toSet());
+        if (!menuIds.isEmpty()) {
+            Map<String, String> nameMap = sysMenuMapper.selectBatchIds(menuIds).stream()
+                    .collect(Collectors.toMap(SysMenu::getId, SysMenu::getMenuName, (a, b) -> a));
+            buttons.forEach(b -> {
+                if (b.getMenuId() != null) {
+                    b.setMenuName(nameMap.get(b.getMenuId()));
+                }
+            });
+        }
+        return buttons;
     }
 
     @Override

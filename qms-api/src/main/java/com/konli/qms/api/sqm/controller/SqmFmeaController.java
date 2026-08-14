@@ -1,5 +1,6 @@
 package com.konli.qms.api.sqm.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
@@ -50,6 +51,16 @@ public class SqmFmeaController {
     @Operation(summary = "FMEA 风险项列表")
     public R<List<QmsFmeaRisk>> list(@RequestParam(required = false) String status) {
         return R.ok(service.list(status));
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('sqm.fmea.list')")
+    @Operation(summary = "FMEA 风险项列表(分页)")
+    public R<PageResult<QmsFmeaRisk>> page(@RequestParam(required = false) String status,
+                                           @RequestParam(required = false) String keyword,
+                                           @RequestParam(defaultValue = "1") int page,
+                                           @RequestParam(defaultValue = "20") int size) {
+        return R.ok(service.listPage(status, keyword, page, size));
     }
 
     @PostMapping

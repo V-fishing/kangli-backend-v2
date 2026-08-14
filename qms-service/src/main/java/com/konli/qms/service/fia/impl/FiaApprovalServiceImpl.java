@@ -23,8 +23,28 @@ public class FiaApprovalServiceImpl implements FiaApprovalService {
     private final ApplicationContext applicationContext;
 
     @Override
-    public List<FiaApproval> list() {
-        return fiaApprovalMapper.selectList(null);
+    public List<FiaApproval> list(String approvalType, String status, String keyword) {
+        // 组织隔离:超管(dataScope=all)全量;普通用户仅见本组织数据 + org_id 为 NULL 的全局数据
+        LambdaQueryWrapper<FiaApproval> qw = new LambdaQueryWrapper<>();
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        if (u != null && !"all".equals(u.dataScope())) {
+            String switchOrg = CompanyContext.getSwitchOrgId();
+            final String effOrg = (switchOrg != null && !switchOrg.isBlank()) ? switchOrg : u.orgId();
+            if (effOrg != null && !effOrg.isBlank()) {
+                qw.and(w -> w.eq(FiaApproval::getOrgId, effOrg).or().isNull(FiaApproval::getOrgId));
+            }
+        }
+        if (approvalType != null && !approvalType.isBlank()) {
+            qw.eq(FiaApproval::getApprovalType, approvalType);
+        }
+        if (status != null && !status.isBlank()) {
+            qw.eq(FiaApproval::getStatus, status);
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            qw.like(FiaApproval::getCode, keyword.trim());
+        }
+        qw.orderByDesc(FiaApproval::getApplyAt);
+        return fiaApprovalMapper.selectList(qw);
     }
 
     @Override

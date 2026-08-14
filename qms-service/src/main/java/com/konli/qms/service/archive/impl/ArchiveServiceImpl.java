@@ -88,9 +88,50 @@ public class ArchiveServiceImpl implements ArchiveService {
             unionParts.add(sql.toString());
         }
 
-        // 8D 归档表暂未建,type=8d 返回空
-        if ("8d".equals(t)) {
-            return new ArrayList<>();
+        // 8D 归档子查询:archiveNo=archive_no, refId=report_id, refNo=d8_no
+        if (t.isEmpty() || "8d".equals(t)) {
+            StringBuilder sql = new StringBuilder();
+            sql.append("SELECT '8d' AS archive_type, ")
+               .append("a.archive_no AS archive_no, ")
+               .append("a.report_id AS ref_id, ")
+               .append("a.d8_no AS ref_no, ")
+               .append("a.archive_date AS archive_date, ")
+               .append("a.retention_until AS retention_until, ")
+               .append("a.report_hash AS report_hash ")
+               .append("FROM ops.qms_8d_archived_report a ")
+               .append("WHERE a.status != '已作废'");
+            if (kw != null) {
+                sql.append(" AND (a.archive_no LIKE ? OR a.d8_no LIKE ?)");
+                args.add("%" + kw + "%");
+                args.add("%" + kw + "%");
+            }
+            if (!orgClause.isEmpty()) {
+                sql.append(" AND a.org_id = ").append(orgIdLiteral());
+            }
+            unionParts.add(sql.toString());
+        }
+
+        // Patrol 归档子查询:archiveNo=archive_no, refId=task_id, refNo=task_no
+        if (t.isEmpty() || "patrol".equals(t)) {
+            StringBuilder sql = new StringBuilder();
+            sql.append("SELECT 'patrol' AS archive_type, ")
+               .append("a.archive_no AS archive_no, ")
+               .append("a.task_id AS ref_id, ")
+               .append("a.task_no AS ref_no, ")
+               .append("a.archive_date AS archive_date, ")
+               .append("a.retention_until AS retention_until, ")
+               .append("a.report_hash AS report_hash ")
+               .append("FROM ops.patl_archived_report a ")
+               .append("WHERE 1=1");
+            if (kw != null) {
+                sql.append(" AND (a.archive_no LIKE ? OR a.task_no LIKE ?)");
+                args.add("%" + kw + "%");
+                args.add("%" + kw + "%");
+            }
+            if (!orgClause.isEmpty()) {
+                sql.append(" AND a.org_id = ").append(orgIdLiteral());
+            }
+            unionParts.add(sql.toString());
         }
 
         if (unionParts.isEmpty()) {
@@ -158,6 +199,35 @@ public class ArchiveServiceImpl implements ArchiveService {
             args.add(d);
         }
 
+        // 8D 归档到期提醒
+        {
+            StringBuilder sql = new StringBuilder();
+            sql.append("SELECT '8d' AS archive_type, ")
+               .append("archive_no AS archive_no, ")
+               .append("report_id AS ref_id, ")
+               .append("retention_until ")
+               .append("FROM ops.qms_8d_archived_report WHERE status != '已作废' AND retention_until <= CURRENT_DATE + ?::int");
+            if (!orgClause.isEmpty()) {
+                sql.append(" AND org_id = ").append(orgIdLiteral());
+            }
+            unionParts.add(sql.toString());
+            args.add(d);
+        }
+        // Patrol 归档到期提醒
+        {
+            StringBuilder sql = new StringBuilder();
+            sql.append("SELECT 'patrol' AS archive_type, ")
+               .append("archive_no AS archive_no, ")
+               .append("task_id AS ref_id, ")
+               .append("retention_until ")
+               .append("FROM ops.patl_archived_report WHERE retention_until <= CURRENT_DATE + ?::int");
+            if (!orgClause.isEmpty()) {
+                sql.append(" AND org_id = ").append(orgIdLiteral());
+            }
+            unionParts.add(sql.toString());
+            args.add(d);
+        }
+
         String unionSql = String.join(" UNION ALL ", unionParts);
         String finalSql = "SELECT * FROM (" + unionSql + ") u ORDER BY retention_until ASC";
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(finalSql, args.toArray());
@@ -201,6 +271,34 @@ public class ArchiveServiceImpl implements ArchiveService {
             m.put("log", buildAuditLog(planId, rows.get(0)));
             return m;
         }
+        if ("8d".equals(t)) {
+            String archOrg = orgQualified();
+            String sql = "SELECT a.archive_no, a.report_id, a.d8_no, a.archive_date, a.report_hash, a.retention_until, "
+                    + "a.status, a.pdf_ref, "
+                    + "r.issue, r.severity, r.source, r.source_ref_id, r.flow_type, r.status AS report_status, r.team, r.close_date "
+                    + "FROM ops.qms_8d_archived_report a "
+                    + "LEFT JOIN ops.qms_8d_report r ON r.id = a.report_id "
+                    + "WHERE a.report_id = ? AND a.status != '已作废' ORDER BY a.archive_date DESC LIMIT 1" + archOrg;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, refId);
+            if (rows.isEmpty()) return null;
+            Map<String, Object> m = mapDetail8d(rows.get(0));
+            m.put("log", build8dLog(refId, rows.get(0)));
+            return m;
+        }
+        if ("patrol".equals(t)) {
+            String archOrg = orgQualified();
+            String sql = "SELECT a.archive_no, a.task_id, a.task_no, a.route_id, a.archive_date, a.report_hash, a.retention_until, "
+                    + "a.pdf_ref, "
+                    + "t.shift, t.plan_time, t.finish_time, t.inspector_id, t.total_points, t.done_points, t.abnormal_count, t.status AS task_status, "
+                    + "rt.name AS route_name "
+                    + "FROM ops.patl_archived_report a "
+                    + "LEFT JOIN ops.patl_task t ON t.id = a.task_id "
+                    + "LEFT JOIN ops.patl_route rt ON rt.id = a.route_id "
+                    + "WHERE a.task_id = ?" + archOrg;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, refId);
+            if (rows.isEmpty()) return null;
+            return mapDetailPatrol(rows.get(0));
+        }
         // 默认 fia
         String sql = "SELECT r.report_no, r.task_id, r.wo_no, r.archive_date, r.status, r.pdf_ref, r.report_hash, r.retention_until, "
                 + "t.code AS task_code, t.line_name, t.proc_name, t.product_name, t.supplier_id, t.overall_judge, t.disposition, t.status AS task_status "
@@ -242,6 +340,55 @@ public class ArchiveServiceImpl implements ArchiveService {
         }
         m.put("archiveDate", toDateStr(row.get("archive_date")));
         m.put("status", row.get("status"));
+        m.put("reportHash", row.get("report_hash"));
+        m.put("retentionUntil", toDateStr(row.get("retention_until")));
+        m.put("pdfRef", row.get("pdf_ref"));
+        Object pdfRef = row.get("pdf_ref");
+        m.put("hasPdf", pdfRef != null && !String.valueOf(pdfRef).startsWith("placeholder://"));
+        return m;
+    }
+
+    private Map<String, Object> mapDetail8d(Map<String, Object> row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("archiveType", "8d");
+        m.put("archiveNo", row.get("archive_no"));
+        m.put("refId", row.get("report_id"));
+        m.put("refNo", row.get("d8_no"));
+        m.put("issue", row.get("issue"));
+        m.put("severity", row.get("severity"));
+        m.put("source", row.get("source"));
+        m.put("sourceRefId", row.get("source_ref_id"));
+        m.put("flowType", row.get("flow_type"));
+        m.put("reportStatus", row.get("report_status"));
+        m.put("team", row.get("team"));
+        m.put("closeDate", toDateStr(row.get("close_date")));
+        m.put("archiveDate", toDateStr(row.get("archive_date")));
+        m.put("status", row.get("status"));
+        m.put("reportHash", row.get("report_hash"));
+        m.put("retentionUntil", toDateStr(row.get("retention_until")));
+        m.put("pdfRef", row.get("pdf_ref"));
+        Object pdfRef = row.get("pdf_ref");
+        m.put("hasPdf", pdfRef != null && !String.valueOf(pdfRef).startsWith("placeholder://"));
+        return m;
+    }
+
+    private Map<String, Object> mapDetailPatrol(Map<String, Object> row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("archiveType", "patrol");
+        m.put("archiveNo", row.get("archive_no"));
+        m.put("refId", row.get("task_id"));
+        m.put("refNo", row.get("task_no"));
+        m.put("routeId", row.get("route_id"));
+        m.put("routeName", row.get("route_name"));
+        m.put("shift", row.get("shift"));
+        m.put("planTime", toDateTimeStr(row.get("plan_time")));
+        m.put("finishTime", toDateTimeStr(row.get("finish_time")));
+        m.put("inspectorId", row.get("inspector_id"));
+        m.put("totalPoints", row.get("total_points"));
+        m.put("donePoints", row.get("done_points"));
+        m.put("abnormalCount", row.get("abnormal_count"));
+        m.put("archiveDate", toDateStr(row.get("archive_date")));
+        m.put("status", row.get("task_status"));
         m.put("reportHash", row.get("report_hash"));
         m.put("retentionUntil", toDateStr(row.get("retention_until")));
         m.put("pdfRef", row.get("pdf_ref"));
@@ -321,6 +468,34 @@ public class ArchiveServiceImpl implements ArchiveService {
         return log;
     }
 
+    /**
+     * 构造 8D 整改归档的流程轨迹:各阶段(D1-D8)审批节点 → 报告闭环 → 归档报告。
+     * 阶段节点时间优先取审批时间,否则取计划日期;操作人优先取审批人,否则取责任人。
+     * 阶段明细缺失时,仍保留「报告闭环」「归档报告」两个节点,避免轨迹恒为空。
+     */
+    private List<Map<String, Object>> build8dLog(String reportId, Map<String, Object> mainRow) {
+        List<Map<String, Object>> log = new ArrayList<>();
+        try {
+            String sql = "SELECT stage_code, approval_status, owner, approved_by, approved_at, plan_date "
+                    + "FROM ops.qms_8d_stage_detail WHERE d8_id = ? ORDER BY stage_code";
+            List<Map<String, Object>> stages = jdbcTemplate.queryForList(sql, reportId);
+            for (Map<String, Object> s : stages) {
+                String code = s.get("stage_code") == null ? "" : String.valueOf(s.get("stage_code"));
+                String appr = s.get("approval_status") == null ? null : String.valueOf(s.get("approval_status"));
+                String node = code + " 阶段" + (appr == null || appr.isEmpty() ? "" : ("·" + appr));
+                Object time = s.get("approved_at") != null ? s.get("approved_at") : s.get("plan_date");
+                Object operator = s.get("approved_by") != null ? s.get("approved_by") : s.get("owner");
+                addLog(log, node, toDateTimeStr(time), operator);
+            }
+        } catch (Exception ignored) {
+            // 轨迹缺失不影响详情主体返回
+        }
+        Object close = mainRow.get("close_date");
+        if (close != null) addLog(log, "报告闭环", toDateStr(close), null);
+        addLog(log, "归档报告", toDateStr(mainRow.get("archive_date")), null);
+        return log;
+    }
+
     private void addLog(List<Map<String, Object>> log, String node, String time, Object operator) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("node", node);
@@ -346,6 +521,19 @@ public class ArchiveServiceImpl implements ArchiveService {
             return "";
         }
         return "AND org_id = '" + orgId.replace("'", "''") + "'";
+    }
+
+    /** 同 {@link #orgFilter()} 但限定为归档表别名 a(用于含 LEFT JOIN 的详情查询,避免列歧义)。 */
+    private String orgQualified() {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        if (u == null || CompanyContext.isAdmin()) {
+            return "";
+        }
+        String orgId = u.orgId();
+        if (orgId == null || orgId.isBlank()) {
+            return "";
+        }
+        return "AND a.org_id = '" + orgId.replace("'", "''") + "'";
     }
 
     /** 返回 org_id 字面量(形如 '...'),非管理员场景下使用;管理员场景调用方不应使用此方法。 */

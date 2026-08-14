@@ -1,5 +1,6 @@
 package com.konli.qms.api.sqm.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.service.sqm.SqmSupplierService;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -30,10 +32,27 @@ public class SqmSupplierController {
         return R.ok(sqmSupplierService.list());
     }
 
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<PageResult<SqmSupplier>> page(@RequestParam(required = false) String keyword,
+                                           @RequestParam(required = false) String level,
+                                           @RequestParam(required = false) String status,
+                                           @RequestParam(defaultValue = "1") int page,
+                                           @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmSupplierService.listPage(keyword, level, status, page, size));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<SqmSupplier> get(@PathVariable String id) {
         return R.ok(sqmSupplierService.get(id));
+    }
+
+    /** 按 MES 供应商编号(VEN 编号, 如 VEN00417)解析供应商, 供 MES 对接/脚本按 VEN 对齐。 */
+    @GetMapping("/by-ven/{venCode}")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<SqmSupplier> getByVenCode(@PathVariable String venCode) {
+        return R.ok(sqmSupplierService.findByVenCode(venCode));
     }
 
     @PostMapping

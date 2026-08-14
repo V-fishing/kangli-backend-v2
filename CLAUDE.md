@@ -130,3 +130,31 @@ QMS-backend/
 - 子表/日志表(无审计字段)用 plain entity(不 extends BaseEntity),自有 `@TableId(type = IdType.ASSIGN_UUID)`。
 - `currentOperator()` 取当前用户:`CompanyContext.get().userId()`,无上下文返回 "系统"。
 - 开发文档在 `开发文档/`,TODO 在 `TODO.md`。
+
+## 跨端协同强约束（与前端规范双向对齐）
+
+**本文件与前端 `qms-web-new/AGENTS.md` 铁律第 9/10 条、`开发文档/qms-frontend-docs/qms-frontend-conventions.md` §2.4/§2.5 为同一套规则的两端。** 任何一端新增功能，另一端必须同步落地，禁止"只改一端"导致权限/配置缺位。
+
+### C1. 菜单 / 按钮权限码必须后端 seed
+
+- 前端加了菜单入口或操作按钮（引用 `menu_code` / `btn_code`），后端 `DataInitializer` 必须同步 `seed{Module}Perms()`：
+  - 菜单写 `sys_menu`（`menu_code` 唯一），并关联 `sys_role_menu`；
+  - 按钮写 `sys_role_button`（`{module}.{resource}.{action}` 格式），并关联角色。
+- Controller 方法用 `@PreAuthorize("hasAuthority('{module}.{resource}.{action}')")`，码须与 `sys_role_button.btn_code` 完全一致。
+- 多环境一致性：菜单/按钮种子优先走 Flyway 幂等迁移（同模块其他种子范式）；`DataInitializer` 已有的域 seed 方法亦须补齐，禁止只在前端加 UI 不补后端权限，也禁止前端写死绕过守卫。
+
+### C2. 负责人推送 / 审核 / 通知必须后端登记配置
+
+- **指定负责人（进个人任务中心）**：指派带签批节点的，在 `ApprovalCenterServiceImpl.myPending()`（及聚合链）加本模块分支，签名/会签人从审核配置读取，禁止把审批人写死在业务代码。纯指派不带审批的，确认个人任务中心聚合分支已覆盖。
+- **审核 / 会签 / 签批**：在系统审核配置页（`前端 src/views/sqm/AuditApprovalConfig.vue`，后端 `SqmAuditApprovalConfigServiceImpl` / `Ncm8dApprovalConfigServiceImpl` 范式）新增对应配置区块或复用会签范式；新模块接入须在此登记节点，而非硬编码审批人。
+- **通知 / 推送**：任何 `NotificationService.notify(module, eventCode, ...)` 调用前，必须先在 `ops.notify_config` 有 `module="<本模块>"` 的对应 `event_code` 行（如工装 `module="tlm"`），否则推送静默失败。预警类（`@Scheduled` 扫描 Job，照搬 `SqmSupplierCertServiceImpl.scanCertExpiry()` 范式）的事件码同样须在通知配置有行。
+- **一致性**：后端 `module` / `event_code`、审核配置 key、权限码（`C1`）三者命名须与前端引用一致；通知/审核配置种子同样走 Flyway 幂等迁移，保证多环境一致。
+- **验证**：跨分公司账号（如 `mz.qmanager`）收不到推送/待办时，按序排查：通知配置是否配该 `module×event_code`、审核配置是否授权该角色、Redis 权限缓存 `qms:perms:{userId}` 是否清理（`permissionLoader.evictAll()` / `evictUser`）。
+
+### C3. 落地检查清单（新增模块/功能时）
+
+1. `sys_menu` / `sys_role_button` 行已 seed + 角色关联（C1）
+2. `@PreAuthorize` 码与 `btn_code` 一致（C1）
+3. 涉及指派/审核 → `ApprovalCenter` 聚合分支 + 审核配置区块（C2）
+4. 涉及通知 → `notify_config` 的 `module×event_code` 行 + 渠道配置（C2）
+5. 上述种子走 Flyway 幂等迁移，跨环境一致（C1/C2）

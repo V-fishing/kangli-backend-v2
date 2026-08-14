@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** 触发事件类型管理。fia.std.create。 */
+/** 触发事件类型管理。查询 fia.std.list,写 fia.std.create/delete。 */
 @RestController
 @RequestMapping("/api/v1/fia/triggers")
 @RequiredArgsConstructor
@@ -27,13 +27,13 @@ public class FiaTriggerTypeController {
     private final FiaTriggerTypeService fiaTriggerTypeService;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('fia.std.create')")
+    @PreAuthorize("hasAuthority('fia.std.list')")
     public R<List<FiaTriggerType>> list() {
         return R.ok(fiaTriggerTypeService.list());
     }
 
     @GetMapping("/stats")
-    @PreAuthorize("hasAuthority('fia.std.create')")
+    @PreAuthorize("hasAuthority('fia.std.list')")
     public R<List<TriggerTypeStat>> stats() {
         return R.ok(fiaTriggerTypeService.stats());
     }

@@ -1,7 +1,10 @@
 package com.konli.qms.service.ncm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
+import com.konli.qms.service.ncm.dto.AbnormalCapaLaunchRequest;
 import com.konli.qms.service.ncm.dto.CapaVo;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 
 import java.util.List;
 
@@ -10,12 +13,15 @@ public interface NcmCapaService {
 
     List<QmsCapa> list();
 
+    PageResult<QmsCapa> listPage(String keyword, int page, int size);
+
     CapaVo get(String id);
 
     QmsCapa create(QmsCapa capa);
 
-    /** 从来料异常单发起 CAPA,并回写异常单 capaId/rectifyType/status。 */
-    QmsCapa launchFromAbnormal(QmsCapa capa);
+    /** 从来料异常单发起 CAPA,并回写异常单 capaId/rectifyType/status。
+     *  支持在发起时指定负责人(ownerUserId)。 */
+    QmsCapa launchFromAbnormal(AbnormalCapaLaunchRequest req);
 
     /** 独立事务创建 CAPA(联动场景:失败不回滚调用方主事务)。 */
     QmsCapa createInNewTx(QmsCapa capa);
@@ -31,4 +37,7 @@ public interface NcmCapaService {
 
     /** SR-CAR:效果验证无效->重新分析。progress=0,status=分析中。 */
     void reset(String capaId, String reason);
+
+    /** 列表级改派责任人(更新 owner_user_id/owner + 推送被指派人任务中心)。 */
+    void reassign(String capaId, DefectLaunchRequest req);
 }

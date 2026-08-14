@@ -29,4 +29,10 @@ public interface SqmAuditReportArchiveService {
      * retentionUntil = now + 15 年,落 sqm_audit_report_archive,返回归档记录。</p>
      */
     SqmAuditReportArchive generatePdf(String recordId);
+
+    /**
+     * 历史补归档:为已闭环(记录状态=已完成)但尚未生成归档条目的审核记录补生成归档。
+     * 幂等(已有 archive_id 的跳过),返回补生成的条数。
+     */
+    int backfill();
 }

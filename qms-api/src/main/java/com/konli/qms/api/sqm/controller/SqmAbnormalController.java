@@ -2,8 +2,10 @@ package com.konli.qms.api.sqm.controller;
 
 import com.konli.qms.domain.sqm.dto.AbnormalRectificationRequest;
 import com.konli.qms.api.sqm.dto.CloseAbnormalRequest;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.sqm.SqmAbnormalService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -31,6 +34,18 @@ public class SqmAbnormalController {
     @PreAuthorize("hasAuthority('sqm.abnormal.list')")
     public R<List<SqmIncomingAbnormal>> listAbnormals() {
         return R.ok(sqmAbnormalService.listAbnormals());
+    }
+
+    @GetMapping("/abnormals/page")
+    @PreAuthorize("hasAuthority('sqm.abnormal.list')")
+    public R<PageResult<SqmIncomingAbnormal>> listAbnormalsPage(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String level,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmAbnormalService.listAbnormalsPage(keyword, level, status, supplierId, page, size));
     }
 
     @PostMapping("/abnormals")
@@ -66,6 +81,14 @@ public class SqmAbnormalController {
     @PreAuthorize("hasAuthority('sqm.abnormal.escalation-check')")
     public R<Void> checkEscalation() {
         sqmAbnormalService.checkRepeatEscalation();
+        return R.ok();
+    }
+
+    /** 列表级改派责任人(更新 handler_id + 推送被指派人任务中心)。 */
+    @PostMapping("/abnormals/{id}/reassign")
+    @PreAuthorize("hasAuthority('sqm.abnormal.create')")
+    public R<Void> reassign(@PathVariable String id, @RequestBody DefectLaunchRequest req) {
+        sqmAbnormalService.reassign(id, req);
         return R.ok();
     }
 }

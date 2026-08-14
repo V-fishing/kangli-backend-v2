@@ -57,6 +57,15 @@ public class QmsFmeaRisk extends BaseEntity {
 
     private String owner;
 
+    @TableField("owner_dept")
+    private String ownerDept;
+
+    @TableField("owner_dept_code")
+    private String ownerDeptCode;
+
+    @TableField("owner_user_id")
+    private String ownerUserId;
+
     @TableField("target_date")
     private LocalDate targetDate;
 

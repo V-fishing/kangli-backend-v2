@@ -95,7 +95,7 @@ public class SpcControlLimitServiceImpl implements SpcControlLimitService {
         SpcControlLimit cl = new SpcControlLimit();
         cl.setOrgId(param.getOrgId());
         cl.setParamId(paramId);
-        cl.setChartType(param.getChartType() != null ? param.getChartType() : "Xbar-R");
+        cl.setChartType(param.getChartType() != null ? param.getChartType() : "Xbar");
         // Xbar 图控制限
         cl.setXbarCl(BigDecimal.valueOf(avgXbar).setScale(4, RoundingMode.HALF_UP));
         cl.setXbarUcl(BigDecimal.valueOf(avgXbar + kSigma).setScale(4, RoundingMode.HALF_UP));
@@ -103,9 +103,9 @@ public class SpcControlLimitServiceImpl implements SpcControlLimitService {
         // R 图控制限(基于组内 σ,使用 d3)
         double rCl = avgRange;
         double rSigma = (d2 == 0 ? 0 : avgRange / d2) * d3;
-        cl.setRCl(BigDecimal.valueOf(rCl).setScale(4, RoundingMode.HALF_UP));
-        cl.setRUcl(BigDecimal.valueOf(rCl + kVal * rSigma).setScale(4, RoundingMode.HALF_UP));
-        cl.setRLcl(BigDecimal.valueOf(Math.max(0, rCl - kVal * rSigma)).setScale(4, RoundingMode.HALF_UP));
+        cl.setRcl(BigDecimal.valueOf(rCl).setScale(4, RoundingMode.HALF_UP));
+        cl.setRucl(BigDecimal.valueOf(rCl + kVal * rSigma).setScale(4, RoundingMode.HALF_UP));
+        cl.setRlcl(BigDecimal.valueOf(Math.max(0, rCl - kVal * rSigma)).setScale(4, RoundingMode.HALF_UP));
 
         cl.setNSubgroups(recent.size());
         cl.setBaselineSource("前" + recent.size() + "子组");
@@ -130,8 +130,8 @@ public class SpcControlLimitServiceImpl implements SpcControlLimitService {
                 || limits.getXbarCl().compareTo(limits.getXbarLcl()) <= 0) {
             throw new BusinessException(400, "控制限必须满足 UCL > CL > LCL");
         }
-        if (limits.getRUcl() != null && limits.getRLcl() != null
-                && limits.getRUcl().compareTo(limits.getRLcl()) < 0) {
+        if (limits.getRucl() != null && limits.getRlcl() != null
+                && limits.getRucl().compareTo(limits.getRlcl()) < 0) {
             throw new BusinessException(400, "R 图控制限必须满足 UCL ≥ LCL");
         }
         // 旧基线(自动+人工)全部置为非 active
@@ -144,13 +144,13 @@ public class SpcControlLimitServiceImpl implements SpcControlLimitService {
         SpcControlLimit cl = new SpcControlLimit();
         cl.setOrgId(param.getOrgId());
         cl.setParamId(paramId);
-        cl.setChartType(limits.getChartType() != null ? limits.getChartType() : (param.getChartType() != null ? param.getChartType() : "Xbar-R"));
+        cl.setChartType(limits.getChartType() != null ? limits.getChartType() : (param.getChartType() != null ? param.getChartType() : "Xbar"));
         cl.setXbarUcl(limits.getXbarUcl());
         cl.setXbarCl(limits.getXbarCl());
         cl.setXbarLcl(limits.getXbarLcl());
-        cl.setRUcl(limits.getRUcl());
-        cl.setRCl(limits.getRCl());
-        cl.setRLcl(limits.getRLcl());
+        cl.setRucl(limits.getRucl());
+        cl.setRcl(limits.getRcl());
+        cl.setRlcl(limits.getRlcl());
         // n_subgroups 数据库非空:人工覆盖非基于子组统计,未传时记 0。
         cl.setNSubgroups(limits.getNSubgroups() != null ? limits.getNSubgroups() : 0);
         cl.setBaselineSource("人工覆盖");

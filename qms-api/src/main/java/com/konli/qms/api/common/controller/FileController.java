@@ -2,6 +2,7 @@ package com.konli.qms.api.common.controller;
 
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.exception.BusinessException;
+import com.konli.qms.common.oss.ObjectStorageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -15,44 +16,30 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
-/** 通用文件上传/下载(存于 logs/files,按相对文件名访问,防路径穿越)。 */
+/**
+ * 通用文件上传/下载(统一写入 MinIO,objectKey 形如 files/{uuid}-{原文件名})。
+ * 返回 path=objectKey,供业务表存储;下载按 objectKey 从 MinIO 取回。
+ */
 @RestController
 @RequestMapping("/api/v1/files")
 @RequiredArgsConstructor
 public class FileController {
 
-    private static final String BASE = System.getProperty("user.dir")
-            + File.separator + "logs" + File.separator + "files";
+    private final ObjectStorageService objectStorageService;
 
     @PostMapping("/upload")
     @PreAuthorize("isAuthenticated()")
-    public R<Map<String, String>> upload(@RequestParam("file") MultipartFile file) throws IOException {
+    public R<Map<String, String>> upload(@RequestParam("file") MultipartFile file) {
         if (file.isEmpty()) {
             throw new BusinessException(400, "文件为空");
         }
-        String original = file.getOriginalFilename();
-        String ext = "";
-        if (original != null && original.contains(".")) {
-            ext = original.substring(original.lastIndexOf("."));
-        }
-        String stored = UUID.randomUUID().toString().replace("-", "") + ext;
-        File dir = new File(BASE);
-        if (!dir.exists() && !dir.mkdirs()) {
-            throw new BusinessException(500, "无法创建文件目录");
-        }
-        file.transferTo(new File(dir, stored));
+        String objectKey = objectStorageService.upload("files", file);
         Map<String, String> res = new HashMap<>();
-        res.put("path", stored);
-        res.put("fileName", original != null ? original : stored);
+        res.put("path", objectKey);
+        res.put("fileName", file.getOriginalFilename() != null ? file.getOriginalFilename() : objectKey);
         return R.ok(res);
     }
 
@@ -60,16 +47,11 @@ public class FileController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<byte[]> download(@RequestParam String path) {
         try {
-            String safeName = Paths.get(path).getFileName().toString();
-            Path base = Paths.get(BASE).toAbsolutePath().normalize();
-            Path full = base.resolve(safeName).normalize();
-            if (!full.startsWith(base) || !Files.exists(full)) {
-                throw new BusinessException(404, "文件不存在");
-            }
-            byte[] data = Files.readAllBytes(full);
+            byte[] data = objectStorageService.download(path);
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-            headers.setContentDispositionFormData("attachment", safeName);
+            String name = path.contains("/") ? path.substring(path.lastIndexOf('/') + 1) : path;
+            headers.setContentDispositionFormData("attachment", name);
             headers.setContentLength(data.length);
             return new ResponseEntity<>(data, headers, HttpStatus.OK);
         } catch (BusinessException e) {

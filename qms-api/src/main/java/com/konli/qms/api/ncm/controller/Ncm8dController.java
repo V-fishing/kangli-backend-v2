@@ -2,11 +2,15 @@ package com.konli.qms.api.ncm.controller;
 
 import com.konli.qms.api.ncm.dto.AdvanceStageRequest;
 import com.konli.qms.api.ncm.dto.StageApproveDTO;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
+import com.konli.qms.common.audit.Auditable;
 import com.konli.qms.domain.ncm.entity.Qms8dApprovalConfig;
 import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.service.ncm.Ncm8dApprovalConfigService;
 import com.konli.qms.service.ncm.Ncm8dService;
+import com.konli.qms.service.ncm.dto.Abnormal8dLaunchRequest;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import com.konli.qms.service.ncm.dto.EightDVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -44,6 +48,16 @@ public class Ncm8dController {
         return R.ok(ncm8dService.list());
     }
 
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('ncm.8d.list')")
+    public R<PageResult<Qms8dReport>> page(@RequestParam(required = false) String keyword,
+                                           @RequestParam(required = false) String status,
+                                           @RequestParam(required = false) String source,
+                                           @RequestParam(defaultValue = "1") int page,
+                                           @RequestParam(defaultValue = "20") int size) {
+        return R.ok(ncm8dService.listPage(keyword, status, source, page, size));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('ncm.8d.list')")
     public R<EightDVo> get(@PathVariable String id) {
@@ -52,25 +66,31 @@ public class Ncm8dController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('ncm.8d.create')")
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'发起8D报告'")
     public R<Qms8dReport> create(@RequestBody Qms8dReport report) {
         return R.ok(ncm8dService.create(report));
     }
 
     @PostMapping("/launch")
     @PreAuthorize("hasAuthority('ncm.8d.create')")
-    public R<Qms8dReport> launchFromAbnormal(@RequestBody Qms8dReport report) {
-        return R.ok(ncm8dService.launchFromAbnormal(report));
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'由异常发起8D报告'")
+    public R<Qms8dReport> launchFromAbnormal(@RequestBody Abnormal8dLaunchRequest req) {
+        return R.ok(ncm8dService.launchFromAbnormal(req));
     }
 
     @PostMapping("/{id}/advance")
     @PreAuthorize("hasAuthority('ncm.8d.advance')")
+    @Auditable(module = "NCM", action = "ADVANCE", recordExpr = "#id",
+            detailExpr = "'推进 ' + #req.stageCode")
     public R<Void> advance(@PathVariable String id, @RequestBody AdvanceStageRequest req) {
-        ncm8dService.advanceStage(id, req.getStageCode(), req.getContent(), req.getOwner());
+        ncm8dService.advanceStage(id, req.getStageCode(), req.getContent(), req.getOwner(), req.getTeamMembers());
         return R.ok();
     }
 
     @PostMapping("/{id}/approve")
     @PreAuthorize("hasAuthority('ncm.8d.approve')")
+    @Auditable(module = "NCM", action = "APPROVE", recordExpr = "#id",
+            detailExpr = "'签批 ' + #dto.stageCode + ':' + (#dto.approved ? '通过' : '驳回')")
     public R<Void> approve(@PathVariable String id, @RequestBody StageApproveDTO dto) {
         ncm8dService.approveStage(id, dto.getStageCode(), dto.isApproved(), dto.getComment(), dto.getPassword());
         return R.ok();
@@ -78,8 +98,20 @@ public class Ncm8dController {
 
     @PostMapping("/{id}/reopen")
     @PreAuthorize("hasAuthority('ncm.8d.reopen')")
+    @Auditable(module = "NCM", action = "REOPEN", recordExpr = "#id",
+            detailExpr = "'重新打开8D' + (#reason != null && #reason != '' ? (':' + #reason) : '')")
     public R<Void> reopen(@PathVariable String id, @RequestParam(required = false) String reason) {
         ncm8dService.reopen(id, reason);
+        return R.ok();
+    }
+
+    /** 列表级改派责任人(更新负责人 + 推送被指派人任务中心)。 */
+    @PostMapping("/{id}/reassign")
+    @PreAuthorize("hasAuthority('ncm.8d.create')")
+    @Auditable(module = "NCM", action = "REASSIGN", recordExpr = "#id",
+            detailExpr = "'改派8D责任人'")
+    public R<Void> reassign(@PathVariable String id, @RequestBody DefectLaunchRequest req) {
+        ncm8dService.reassign(id, req);
         return R.ok();
     }
 

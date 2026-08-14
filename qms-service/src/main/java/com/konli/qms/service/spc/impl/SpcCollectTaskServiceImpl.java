@@ -1,11 +1,15 @@
 package com.konli.qms.service.spc.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.spc.entity.SpcCollectTask;
 import com.konli.qms.domain.spc.entity.SpcParam;
 import com.konli.qms.domain.spc.mapper.SpcCollectTaskMapper;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.spc.SpcCollectTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +36,7 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
     private final SpcCollectTaskMapper spcCollectTaskMapper;
     private final SpcParamMapper spcParamMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final NotificationService notificationService;
 
     /** 临期提醒提前量(分钟)。 */
     private static final int DUE_SOON_WINDOW_MIN = 30;
@@ -41,6 +46,20 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
         return spcCollectTaskMapper.selectList(
                 Wrappers.lambdaQuery(SpcCollectTask.class)
                         .orderByDesc(SpcCollectTask::getNextDueAt));
+    }
+
+    @Override
+    public PageResult<SpcCollectTask> listPage(String status, String collectMode, int page, int size) {
+        LambdaQueryWrapper<SpcCollectTask> w = Wrappers.lambdaQuery(SpcCollectTask.class);
+        if (status != null && !status.trim().isEmpty()) {
+            w.eq(SpcCollectTask::getStatus, status);
+        }
+        if (collectMode != null && !collectMode.trim().isEmpty()) {
+            w.eq(SpcCollectTask::getCollectMode, collectMode);
+        }
+        w.orderByDesc(SpcCollectTask::getNextDueAt);
+        IPage<SpcCollectTask> ip = spcCollectTaskMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override
@@ -248,13 +267,7 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
         String content = String.format(
                 "SPC 采集缺失告警:参数 %s,应采集时间 %s 已到期未录入(%s)。请班组长安排补录。",
                 paramName, task.getNextDueAt(), reason);
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) "
-                        + "VALUES (?, 'SPC_COLLECT_MISSING', ?, '站内', ?, ?, '告警', '已发送', now())",
-                java.util.UUID.fromString(task.getOrgId()),
-                task.getId(),
-                resolveReceiver(task),
-                content);
+        notifyCollect(task, "spc_collect_missing", "告警", content);
     }
 
     private void notifyAssigned(SpcCollectTask task) {
@@ -262,13 +275,7 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
         String content = String.format(
                 "SPC 采集任务已下发:参数 %s,采集频率 %s。请按时采集并在到期前录入。",
                 paramName, task.getCollectFreq() != null ? task.getCollectFreq() : "-");
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) "
-                        + "VALUES (?, 'SPC_COLLECT_ASSIGNED', ?, '站内', ?, ?, '提示', '已发送', now())",
-                java.util.UUID.fromString(task.getOrgId()),
-                task.getId(),
-                resolveReceiver(task),
-                content);
+        notifyCollect(task, "spc_collect_assigned", "提示", content);
     }
 
     private void notifyDueSoon(SpcCollectTask task) {
@@ -276,13 +283,7 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
         String content = String.format(
                 "SPC 采集临期提醒:参数 %s 将于 %s 到期,请尽快录入。",
                 paramName, task.getNextDueAt() != null ? task.getNextDueAt().toString() : "-");
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) "
-                        + "VALUES (?, 'SPC_COLLECT_DUE_SOON', ?, '站内', ?, ?, '告警', '已发送', now())",
-                java.util.UUID.fromString(task.getOrgId()),
-                task.getId(),
-                resolveReceiver(task),
-                content);
+        notifyCollect(task, "spc_collect_due_soon", "告警", content);
     }
 
     private void notifyCollected(SpcCollectTask task) {
@@ -293,20 +294,37 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
                 task.getLastAt() != null ? task.getLastAt().toString() : "-",
                 task.getLastValue() != null ? task.getLastValue().toString() : "-",
                 task.getNextDueAt() != null ? task.getNextDueAt().toString() : "-");
-        jdbcTemplate.update(
-                "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) "
-                        + "VALUES (?, 'SPC_COLLECT_DONE', ?, '站内', ?, ?, '提示', '已发送', now())",
-                java.util.UUID.fromString(task.getOrgId()),
-                task.getId(),
-                resolveReceiver(task),
-                content);
+        notifyCollect(task, "spc_collect_done", "提示", content);
     }
 
-    private String resolveReceiver(SpcCollectTask task) {
-        if (task.getCollector() != null && !task.getCollector().isBlank()) {
-            return task.getCollector();
+    /**
+     * SPC 采集通知统一入口: 按 notify_config 配置发站内信 + 写 notification_log 留痕。
+     * 接收角色由配置决定(默认 shiftleader 班组长), 不再写死"班组长"字面量。
+     */
+    private void notifyCollect(SpcCollectTask task, String eventCode, String level, String content) {
+        String title = "SPC 采集通知";
+        try {
+            notificationService.notify("spc", eventCode, title, content,
+                    "spc_collect", task.getId(), "/spc/collect-tasks");
+        } catch (Exception e) {
+            log.warn("[SPC采集] 站内信推送失败(忽略): {}", e.getMessage());
         }
-        return "班组长";
+        // 留痕: receiver 取配置角色中文名(去重)
+        String receiver = String.join(",", notificationService.resolveRoleNames("spc", eventCode));
+        if (receiver.isBlank()) receiver = "班组长";
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) "
+                            + "VALUES (?, ?, ?, '站内', ?, ?, ?, '已发送', now())",
+                    java.util.UUID.fromString(task.getOrgId()),
+                    "SPC_COLLECT_" + eventCode.replace("spc_collect_", "").toUpperCase(),
+                    task.getId(),
+                    receiver,
+                    content,
+                    level);
+        } catch (Exception e) {
+            log.warn("[SPC采集] 日志落库失败(忽略): {}", e.getMessage());
+        }
     }
 
     private String resolveParamName(String paramId) {

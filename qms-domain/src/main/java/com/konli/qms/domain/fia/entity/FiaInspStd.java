@@ -22,9 +22,14 @@ public class FiaInspStd extends BaseEntity {
     private String partNo;
     @TableField("supplier_id")
     private String supplierId;
+    /** 产品品类: material(物料)/semi(半成品)/product(成品) */
+    private String category;
     private String material;
     @TableField("proc_name")
     private String procName;
+    /** SPC 工序字典外键(制造工序,与 proc_name 同源),强绑定避免文本漂移 */
+    @TableField("spc_process_id")
+    private String spcProcessId;
     private String aql;
     @TableField("inspect_level")
     private String inspectLevel;

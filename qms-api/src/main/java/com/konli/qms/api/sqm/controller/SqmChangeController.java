@@ -1,6 +1,7 @@
 package com.konli.qms.api.sqm.controller;
 
 import com.konli.qms.api.sqm.dto.ApproveChangeRequest;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.sqm.entity.SqmChangeOrder;
 import com.konli.qms.service.sqm.SqmChangeService;
@@ -31,6 +32,17 @@ public class SqmChangeController {
     @PreAuthorize("hasAuthority('sqm.change.list')")
     public R<List<SqmChangeOrderListVo>> list() {
         return R.ok(sqmChangeService.list());
+    }
+
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('sqm.change.list')")
+    public R<PageResult<SqmChangeOrderListVo>> page(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String supplierId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(sqmChangeService.listPage(keyword, status, supplierId, page, size));
     }
 
     @GetMapping("/{id}")

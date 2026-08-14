@@ -29,8 +29,12 @@ public class SqmAuditApprovalCfgServiceImpl implements SqmAuditApprovalCfgServic
 
     @Override
     public SqmAuditApprovalCfg getByType(String auditType) {
-        return mapper.selectOne(new LambdaQueryWrapper<SqmAuditApprovalCfg>()
-                .eq(SqmAuditApprovalCfg::getAuditType, auditType));
+        // DataScopeInterceptor 可能注入 "org_id = ? OR org_id IS NULL" 条件,与 audit_type 条件组合后
+        // OR 平级会命中所有全局(org_id IS NULL)配置行,selectOne 将抛 TooManyResultsException。
+        // 该表行数极少,改为 selectList 全量取出后在内存按 audit_type 精确匹配。
+        return mapper.selectList(null).stream()
+                .filter(c -> auditType != null && auditType.equals(c.getAuditType()))
+                .findFirst().orElse(null);
     }
 
     @Override

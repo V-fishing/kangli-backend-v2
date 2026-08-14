@@ -1,17 +1,30 @@
 package com.konli.qms.service.ncm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.ncm.entity.NcmDefectDict;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
+import com.konli.qms.domain.ncm.entity.QmsAssignRecord;
 import com.konli.qms.domain.ncm.mapper.NcmDefectDictMapper;
 import com.konli.qms.domain.ncm.mapper.NcmDefectRecordMapper;
+import com.konli.qms.domain.ncm.mapper.QmsAssignRecordMapper;
 import com.konli.qms.domain.ncm.entity.NcmCorrectiveAction;
+import com.konli.qms.domain.notify.entity.NotifyChannel;
+import com.konli.qms.domain.notify.mapper.NotifyChannelMapper;
 import com.konli.qms.service.ncm.Ncm8dService;
 import com.konli.qms.service.ncm.NcmCapaService;
 import com.konli.qms.service.ncm.NcmCorrectiveActionService;
 import com.konli.qms.service.ncm.NcmDefectRecordService;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
+import com.konli.qms.service.sqm.SqmFmeaService;
+import com.konli.qms.service.notify.DirectNotifyService;
+import com.konli.qms.service.notify.NotificationService;
+import com.konli.qms.service.notify.NotifyConfigService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -41,10 +54,128 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
     private final Ncm8dService ncm8dService;
     private final NcmCapaService ncmCapaService;
     private final NcmCorrectiveActionService ncmCorrectiveActionService;
+    private final QmsAssignRecordMapper qmsAssignRecordMapper;
+    private final NotificationService notificationService;
+    private final NotifyConfigService notifyConfigService;
+    private final DirectNotifyService directNotifyService;
+    private final NotifyChannelMapper notifyChannelMapper;
+    private final SqmFmeaService sqmFmeaService;
+
+    private static final ObjectMapper om = new ObjectMapper();
 
     @Override
     public List<NcmDefectRecord> list() {
         return ncmDefectRecordMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<NcmDefectRecord> listPage(String keyword, String defectDictCode, String woNo, String severity, String stage, String source, int page, int size) {
+        if (page < 1) page = 1;
+        if (size < 1) size = 20;
+        LambdaQueryWrapper<NcmDefectRecord> qw = new LambdaQueryWrapper<>();
+        if (keyword != null && !keyword.isBlank()) {
+            String kw = keyword.trim();
+            qw.and(w -> w.like(NcmDefectRecord::getDefectNo, kw)
+                    .or().like(NcmDefectRecord::getWoNo, kw)
+                    .or().like(NcmDefectRecord::getProcessCode, kw)
+                    .or().like(NcmDefectRecord::getDefectDictCode, kw));
+        }
+        if (defectDictCode != null && !defectDictCode.isBlank()) {
+            qw.like(NcmDefectRecord::getDefectDictCode, defectDictCode.trim());
+        }
+        if (woNo != null && !woNo.isBlank()) {
+            qw.like(NcmDefectRecord::getWoNo, woNo.trim());
+        }
+        if (severity != null && !severity.isBlank()) {
+            qw.eq(NcmDefectRecord::getSeverity, severity.trim());
+        }
+        if (stage != null && !stage.isBlank()) {
+            qw.eq(NcmDefectRecord::getStage, stage.trim());
+        }
+        if (source != null && !source.isBlank()) {
+            qw.eq(NcmDefectRecord::getSource, source.trim());
+        }
+        qw.orderByDesc(NcmDefectRecord::getCreatedAt);
+        Page<NcmDefectRecord> p = ncmDefectRecordMapper.selectPage(new Page<>(page, size), qw);
+        // 回填报告状态:实时 JOIN 报告表取最新 status
+        fillMeasureStatus(p.getRecords());
+        PageResult<NcmDefectRecord> pr = new PageResult<>();
+        pr.setRecords(p.getRecords());
+        pr.setTotal(p.getTotal());
+        pr.setPage(page);
+        pr.setSize(size);
+        return pr;
+    }
+
+    /** 批量回填缺陷记录关联的 8D/CAPA/CA 报告状态。 */
+    private void fillMeasureStatus(List<NcmDefectRecord> records) {
+        if (records == null || records.isEmpty()) return;
+        // 收集所有关联单号
+        List<String> d8Nos = new ArrayList<>();
+        List<String> capaNos = new ArrayList<>();
+        List<String> caNos = new ArrayList<>();
+        for (NcmDefectRecord r : records) {
+            if (r.getD8No() != null && !r.getD8No().isBlank()) d8Nos.add(r.getD8No());
+            if (r.getCapaNo() != null && !r.getCapaNo().isBlank()) capaNos.add(r.getCapaNo());
+            if (r.getCaNo() != null && !r.getCaNo().isBlank()) caNos.add(r.getCaNo());
+        }
+        // 批量查 8D 状态 + id
+        Map<String, String> d8StatusMap = new java.util.HashMap<>();
+        Map<String, String> d8IdMap = new java.util.HashMap<>();
+        if (!d8Nos.isEmpty()) {
+            String inClause = d8Nos.stream().map(s -> "'" + s.replace("'", "''") + "'")
+                    .collect(java.util.stream.Collectors.joining(","));
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id::text AS id, d8_no, status FROM ops.qms_8d_report WHERE d8_no IN (" + inClause + ") AND is_deleted = false");
+            for (Map<String, Object> row : rows) {
+                String no = String.valueOf(row.get("d8_no"));
+                d8StatusMap.put(no, String.valueOf(row.get("status")));
+                d8IdMap.put(no, String.valueOf(row.get("id")));
+            }
+        }
+        // 批量查 CAPA 状态 + id
+        Map<String, String> capaStatusMap = new java.util.HashMap<>();
+        Map<String, String> capaIdMap = new java.util.HashMap<>();
+        if (!capaNos.isEmpty()) {
+            String inClause = capaNos.stream().map(s -> "'" + s.replace("'", "''") + "'")
+                    .collect(java.util.stream.Collectors.joining(","));
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id::text AS id, capa_no, status FROM ops.qms_capa WHERE capa_no IN (" + inClause + ") AND is_deleted = false");
+            for (Map<String, Object> row : rows) {
+                String no = String.valueOf(row.get("capa_no"));
+                capaStatusMap.put(no, String.valueOf(row.get("status")));
+                capaIdMap.put(no, String.valueOf(row.get("id")));
+            }
+        }
+        // 批量查 CA 状态 + id
+        Map<String, String> caStatusMap = new java.util.HashMap<>();
+        Map<String, String> caIdMap = new java.util.HashMap<>();
+        if (!caNos.isEmpty()) {
+            String inClause = caNos.stream().map(s -> "'" + s.replace("'", "''") + "'")
+                    .collect(java.util.stream.Collectors.joining(","));
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id::text AS id, ca_no, status FROM ops.ncm_corrective_action WHERE ca_no IN (" + inClause + ") AND is_deleted = false");
+            for (Map<String, Object> row : rows) {
+                String no = String.valueOf(row.get("ca_no"));
+                caStatusMap.put(no, String.valueOf(row.get("status")));
+                caIdMap.put(no, String.valueOf(row.get("id")));
+            }
+        }
+        // 回填到每条记录
+        for (NcmDefectRecord r : records) {
+            if (r.getD8No() != null) {
+                r.setD8Status(d8StatusMap.get(r.getD8No()));
+                r.setD8Id(d8IdMap.get(r.getD8No()));
+            }
+            if (r.getCapaNo() != null) {
+                r.setCapaStatus(capaStatusMap.get(r.getCapaNo()));
+                r.setCapaId(capaIdMap.get(r.getCapaNo()));
+            }
+            if (r.getCaNo() != null) {
+                r.setCaStatus(caStatusMap.get(r.getCaNo()));
+                r.setCaId(caIdMap.get(r.getCaNo()));
+            }
+        }
     }
 
     @Override
@@ -90,6 +221,18 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
                     .divide(BigDecimal.valueOf(record.getBatchTotal()), 4, RoundingMode.HALF_UP));
         }
         ncmDefectRecordMapper.insert(record);
+        // SR-PTL:严重不良记录->自动触发 FMEA 风险项(RPN 达到阈值入清单)
+        if ("严重".equals(record.getSeverity())) {
+            try {
+                String fm = record.getDefectNo() + " " + (record.getRemark() == null ? "" : record.getRemark());
+                if (fm.length() > 255) {
+                    fm = fm.substring(0, 255);
+                }
+                sqmFmeaService.createAuto(SqmFmeaService.SRC_NCM_DEFECT,
+                        record.getId().toString(), record.getOrgId(),
+                        record.getProductModel(), record.getStage(), fm, "严重");
+            } catch (Exception ignored) {}
+        }
         return record;
     }
 
@@ -532,23 +675,40 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
     }
 
     @Override
-    public Object launch8dFromDefect(String defectId) {
+    @Transactional
+    public Object launch8dFromDefect(String defectId, DefectLaunchRequest req) {
         NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
         if (def == null) throw new BusinessException(400, "缺陷记录不存在");
+        if (def.getD8No() != null && !def.getD8No().isBlank()) {
+            throw new BusinessException(400, "该不良记录已发起8D报告(" + def.getD8No() + "),不可重复发起");
+        }
         com.konli.qms.domain.ncm.entity.Qms8dReport r = new com.konli.qms.domain.ncm.entity.Qms8dReport();
         r.setOrgId(def.getOrgId());
         r.setSource("不良记录");
         r.setSourceRefId(defectId);
         r.setIssue("不良:" + def.getDefectNo());
         r.setSeverity(def.getSeverity() != null ? def.getSeverity() : "中");
-        r.setTeam("质量团队");
-        return ncm8dService.create(r);
+        // 8D 新流程:发起时仅指定负责人(单选),团队由负责人在 D1 自行组建
+        String team = resolveOwnerName(req);
+        r.setTeam(team != null ? team : "质量团队");
+        r.setOwnerUserName(team);
+        com.konli.qms.domain.ncm.entity.Qms8dReport created =
+                (com.konli.qms.domain.ncm.entity.Qms8dReport) ncm8dService.create(r);
+        // 回写缺陷记录:记录关联 8D 单号
+        def.setD8No(created.getD8No());
+        ncmDefectRecordMapper.updateById(def);
+        saveAssignAndNotify(def, "8D", created.getId(), created.getD8No(), req);
+        return created;
     }
 
     @Override
-    public Object launchCapaFromDefect(String defectId) {
+    @Transactional
+    public Object launchCapaFromDefect(String defectId, DefectLaunchRequest req) {
         NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
         if (def == null) throw new BusinessException(400, "缺陷记录不存在");
+        if (def.getCapaNo() != null && !def.getCapaNo().isBlank()) {
+            throw new BusinessException(400, "该不良记录已发起CAPA报告(" + def.getCapaNo() + "),不可重复发起");
+        }
         com.konli.qms.domain.ncm.entity.QmsCapa capa = new com.konli.qms.domain.ncm.entity.QmsCapa();
         capa.setOrgId(def.getOrgId());
         capa.setIssue("不良:" + def.getDefectNo() + " 工序:" + def.getProcessCode());
@@ -556,22 +716,273 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
         capa.setSourceRefId(def.getId());
         capa.setSourceType("不良记录");
         capa.setCapaType("纠正");
-        capa.setOwner("质量团队");
+        String owner = resolveAssignees(req);
+        capa.setOwner(owner != null ? owner : "质量团队");
         capa.setDueDate(LocalDate.now().plusDays(30));
         ncmCapaService.create(capa);
+        // 回写缺陷记录:记录关联 CAPA 单号
+        def.setCapaNo(capa.getCapaNo());
+        ncmDefectRecordMapper.updateById(def);
+        saveAssignAndNotify(def, "CAPA", capa.getId(), capa.getCapaNo(), req);
         return capa;
     }
 
     @Override
-    public Object launchCaFromDefect(String defectId) {
+    @Transactional
+    public Object launchCaFromDefect(String defectId, DefectLaunchRequest req) {
         NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
         if (def == null) throw new BusinessException(400, "缺陷记录不存在");
+        if (def.getCaNo() != null && !def.getCaNo().isBlank()) {
+            throw new BusinessException(400, "该不良记录已发起纠正措施(" + def.getCaNo() + "),不可重复发起");
+        }
         NcmCorrectiveAction ca = new NcmCorrectiveAction();
         ca.setOrgId(def.getOrgId());
         ca.setDefectNo(def.getDefectNo());
         ca.setIssue("不良:" + def.getDefectNo() + " 工序:" + (def.getProcessCode() != null ? def.getProcessCode() : "-"));
-        ca.setOwner(def.getOperatorId() != null ? def.getOperatorId() : "质量团队");
+        String caOwner = resolveAssignees(req);
+        ca.setOwner(caOwner != null ? caOwner : (def.getOperatorId() != null ? def.getOperatorId() : "质量团队"));
         ca.setDueDate(LocalDate.now().plusDays(7));
-        return ncmCorrectiveActionService.create(ca);
+        NcmCorrectiveAction created = (NcmCorrectiveAction) ncmCorrectiveActionService.create(ca);
+        // 回写缺陷记录:记录关联 CA 单号
+        def.setCaNo(created.getCaNo());
+        ncmDefectRecordMapper.updateById(def);
+        saveAssignAndNotify(def, "CA", created.getId(), created.getCaNo(), req);
+        return created;
+    }
+
+    @Override
+    public Map<String, Object> assignCandidates() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("users", jdbcTemplate.queryForList(
+                "SELECT id::text AS id, username, real_name AS \"realName\" "
+                        + "FROM ops.sys_user WHERE status = '启用' AND is_deleted = false "
+                        + "ORDER BY real_name"));
+        result.put("roles", jdbcTemplate.queryForList(
+                "SELECT id::text AS id, role_code AS \"roleCode\", role_name AS \"roleName\" "
+                        + "FROM ops.sys_role WHERE is_deleted = false "
+                        + "ORDER BY role_name"));
+        result.put("channels", listNotifyChannels());
+        return result;
+    }
+
+    /**
+     * 保存指派记录并发送站内信通知:
+     * - 每个被指派用户 notifyUser,每个被指派角色 notifyRoles(排除指派人自身);
+     * - 通知方式记录到 assign_record.notify_channels;当前站内信必定发送,外部渠道(邮件/短信/钉钉)
+     *   已作为候选可选,待后续接入真实外部发送实现后按选择外发。
+     */
+    private void saveAssignAndNotify(NcmDefectRecord def, String bizType,
+                                     String bizId, String bizNo, DefectLaunchRequest req) {
+        if (req == null) {
+            return;
+        }
+        List<String> channels = (req.getNotifyChannels() == null || req.getNotifyChannels().isEmpty())
+                ? List.of("站内弹窗") : req.getNotifyChannels();
+        String channelStr = String.join(",", channels);
+        boolean inbox = channels.contains("站内弹窗");
+        // 点对点外发渠道(排除站内弹窗; DirectNotifyService 内部再过滤 direct 类型+启用)
+        List<String> directChannels = channels.stream()
+                .filter(c -> c != null && !"站内弹窗".equals(c.trim()))
+                .map(String::trim).toList();
+        String assignerId = currentOperator();
+        String title = "[" + bizType + "指派] 不良记录 " + def.getDefectNo() + " 指派给您处理";
+        String content = "不良记录 " + def.getDefectNo() + " 已发起" + bizType + "报告(" + bizNo + "),请及时登录系统处理。"
+                + (req.getRemark() != null && !req.getRemark().isBlank() ? "\n指派备注: " + req.getRemark() : "");
+        String link = "/ncm/defect-records/" + def.getId();
+
+        // 8D 新流程:仅指定负责人(ownerUserId 单选),通知负责人本人
+        if (req.getOwnerUserId() != null && !req.getOwnerUserId().isBlank()) {
+            String ownerName = queryUserName(req.getOwnerUserId());
+            QmsAssignRecord rec = buildAssignRecord(def, bizType, bizId, bizNo, channelStr, assignerId, req.getRemark());
+            rec.setAssigneeUserId(req.getOwnerUserId());
+            rec.setAssigneeUserName(ownerName != null ? ownerName : req.getOwnerUserId());
+            qmsAssignRecordMapper.insert(rec);
+            if (inbox) {
+                String ownerTitle = "[" + bizType + "指派] 不良记录 " + def.getDefectNo() + " 指定您为负责人";
+                String ownerContent = "不良记录 " + def.getDefectNo() + " 已发起" + bizType + "报告(" + bizNo + "),"
+                        + "您被指定为负责人,请登录系统在 D1 阶段组建团队并提交审核。"
+                        + (req.getRemark() != null && !req.getRemark().isBlank() ? "\n指派备注: " + req.getRemark() : "");
+                notificationService.notifyUser(req.getOwnerUserId(), ownerTitle, ownerContent, "NCM_ASSIGN", bizId, link);
+            }
+            // 点对点外发到负责人个人
+            directNotifyService.sendToUser(def.getOrgId(), assignerId, queryUserName(assignerId),
+                    loadDirectReceiver(req.getOwnerUserId()), directChannels, title, content, bizType, bizId, bizNo);
+            return;
+        }
+        if (req.getAssigneeUserIds() != null) {
+            for (String uid : req.getAssigneeUserIds()) {
+                if (uid == null || uid.isBlank()) {
+                    continue;
+                }
+                QmsAssignRecord rec = buildAssignRecord(def, bizType, bizId, bizNo, channelStr, assignerId, req.getRemark());
+                rec.setAssigneeUserId(uid);
+                rec.setAssigneeUserName(queryUserName(uid));
+                qmsAssignRecordMapper.insert(rec);
+                if (inbox) {
+                    notificationService.notifyUser(uid, title, content, "NCM_ASSIGN", bizId, link);
+                }
+                // 点对点外发到处理人个人
+                directNotifyService.sendToUser(def.getOrgId(), assignerId, queryUserName(assignerId),
+                        loadDirectReceiver(uid), directChannels, title, content, bizType, bizId, bizNo);
+            }
+        }
+        if (req.getAssignRoleCodes() != null) {
+            for (String roleCode : req.getAssignRoleCodes()) {
+                if (roleCode == null || roleCode.isBlank()) {
+                    continue;
+                }
+                QmsAssignRecord rec = buildAssignRecord(def, bizType, bizId, bizNo, channelStr, assignerId, req.getRemark());
+                rec.setAssigneeRoleCode(roleCode);
+                rec.setAssigneeRoleName(queryRoleName(roleCode));
+                qmsAssignRecordMapper.insert(rec);
+                if (inbox) {
+                    notificationService.notifyRoles(
+                            List.of(roleCode), title, content, "NCM_ASSIGN", bizId, link, assignerId);
+                }
+            }
+        }
+    }
+
+    private QmsAssignRecord buildAssignRecord(NcmDefectRecord def, String bizType,
+                                              String bizId, String bizNo, String channelStr,
+                                              String assignerId, String remark) {
+        QmsAssignRecord rec = new QmsAssignRecord();
+        rec.setOrgId(def.getOrgId());
+        rec.setDefectId(def.getId());
+        rec.setDefectNo(def.getDefectNo());
+        rec.setBizType(bizType);
+        rec.setBizId(bizId);
+        rec.setBizNo(bizNo);
+        rec.setNotifyChannels(channelStr);
+        rec.setAssignerId(assignerId);
+        rec.setRemark(remark);
+        return rec;
+    }
+
+    /**
+     * 将指派信息(被指派人姓名 + 被指派角色名)解析为可读文本,用于带入 8D/CAPA/CA 的团队/负责人字段。
+     * 空指派返回 null,由调用方使用默认值。
+     */
+    private String resolveAssignees(DefectLaunchRequest req) {
+        if (req == null) return null;
+        List<String> parts = new ArrayList<>();
+        if (req.getAssigneeUserIds() != null) {
+            for (String uid : req.getAssigneeUserIds()) {
+                if (uid == null || uid.isBlank()) continue;
+                String name = queryUserName(uid);
+                parts.add(name != null ? name : uid);
+            }
+        }
+        if (req.getAssignRoleCodes() != null) {
+            for (String rc : req.getAssignRoleCodes()) {
+                if (rc == null || rc.isBlank()) continue;
+                String name = queryRoleName(rc);
+                parts.add(name != null ? name : rc);
+            }
+        }
+        return parts.isEmpty() ? null : String.join("、", parts);
+    }
+
+    /**
+     * 8D 新流程:发起时仅指定负责人(ownerUserId 单选),返回其真实姓名用于 team/owner。
+     * 空负责人返回 null,由调用方使用默认值。
+     */
+    private String resolveOwnerName(DefectLaunchRequest req) {
+        if (req == null || req.getOwnerUserId() == null || req.getOwnerUserId().isBlank()) {
+            return null;
+        }
+        String name = queryUserName(req.getOwnerUserId());
+        return name != null ? name : req.getOwnerUserId();
+    }
+
+    private String queryUserName(String userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT real_name FROM ops.sys_user WHERE id = ?::uuid", String.class, userId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 加载接收人点对点信息(姓名/账号/邮箱/手机号),用于 钉钉/企微/邮件/短信 桥接。 */
+    private DirectNotifyService.DirectReceiver loadDirectReceiver(String userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT real_name, username, email, phone FROM ops.sys_user WHERE id = ?::uuid",
+                    (rs, row) -> new DirectNotifyService.DirectReceiver(
+                            userId,
+                            rs.getString("real_name"),
+                            rs.getString("username"),
+                            rs.getString("email"),
+                            rs.getString("phone")),
+                    userId);
+        } catch (Exception e) {
+            return new DirectNotifyService.DirectReceiver(userId, queryUserName(userId), null, null, null);
+        }
+    }
+
+    private String queryRoleName(String roleCode) {
+        try {
+            // role_code 在不同组织下可能多行,取第一个即可
+            return jdbcTemplate.queryForObject(
+                    "SELECT role_name FROM ops.sys_role WHERE role_code = ? LIMIT 1", String.class, roleCode);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 通知渠道:ncm_assign 事件配置渠道 + 所有点对点(direct)渠道;未配置凭据的 direct 渠道标记不可选。 */
+    private List<Map<String, Object>> listNotifyChannels() {
+        List<String> resolved = notifyConfigService.resolveChannels("ncm", "ncm_assign");
+        if (resolved == null || resolved.isEmpty()) {
+            resolved = List.of("站内弹窗");
+        }
+        List<Map<String, Object>> channels = new ArrayList<>();
+        for (String ch : resolved) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("code", ch);
+            c.put("name", ch);
+            c.put("enabled", true);
+            c.put("checked", true);
+            channels.add(c);
+        }
+        // 追加所有 direct 渠道(按 code 去重)
+        List<NotifyChannel> direct = notifyChannelMapper.selectList(
+                new LambdaQueryWrapper<NotifyChannel>().eq(NotifyChannel::getChannelType, "direct"));
+        for (NotifyChannel dc : direct) {
+            if (channels.stream().anyMatch(c -> dc.getChannel().equals(c.get("code")))) {
+                continue;
+            }
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("code", dc.getChannel());
+            c.put("name", dc.getChannel());
+            c.put("enabled", Boolean.TRUE.equals(dc.getIsEnabled()) && isDirectConfigured(dc));
+            c.put("checked", false);
+            channels.add(c);
+        }
+        return channels;
+    }
+
+    /** direct 渠道是否已配置有效凭据(未脱敏, 本地判断)。 */
+    private boolean isDirectConfigured(NotifyChannel ch) {
+        String json = ch.getConfigJson();
+        if (json == null || json.isBlank()) return false;
+        try {
+            JsonNode n = om.readTree(json);
+            String type = n.path("type").asText("");
+            return switch (type) {
+                case "dingtalk" -> hasText(n, "appKey") && hasText(n, "appSecret");
+                case "wecom" -> hasText(n, "corpId") && hasText(n, "secret");
+                case "mail" -> hasText(n, "host");
+                case "sms" -> hasText(n, "provider");
+                default -> false;
+            };
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean hasText(JsonNode n, String field) {
+        return n.hasNonNull(field) && !n.path(field).asText("").isBlank();
     }
 }

@@ -34,5 +34,10 @@
             <groupId>com.openhtmltopdf</groupId>
             <artifactId>openhtmltopdf-pdfbox</artifactId>
         </dependency>
+        <!-- Jakarta Mail: 点对点邮件通知(DirectNotifyServiceImpl) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
     </dependencies>
 </project>

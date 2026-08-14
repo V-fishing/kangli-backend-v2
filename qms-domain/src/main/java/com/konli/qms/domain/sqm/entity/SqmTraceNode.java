@@ -46,6 +46,12 @@ public class SqmTraceNode extends BaseEntity {
     @TableField("material_code")
     private String materialCode;          // 物料号(与 batch_no 组成物料条码; 按物料号正向/召回追溯 Q3 用)
 
+    @TableField("production_order_no")
+    private String productionOrderNo;     // 生产工单(MES 工单枢纽 TASK_NO/WORK_ORDER)
+
+    @TableField("stage")
+    private String stage;                  // MES 检验阶段 IQC/IPQC/SQC/FQC/OQC/RQC/PKG
+
     private BigDecimal qty;               // NUMERIC(14,2)
 
     private String unit;

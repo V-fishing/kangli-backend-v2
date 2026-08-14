@@ -24,6 +24,9 @@ public class SqmSupplier extends BaseEntity {
     @TableField("supplier_code")
     private String supplierCode;
 
+    @TableField("ven_code")
+    private String venCode;                // MES 供应商编号(如 VEN00417)
+
     private String name;
 
     @TableField("credit_code")

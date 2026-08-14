@@ -6,6 +6,7 @@ import com.konli.qms.domain.sqm.entity.SqmKeyPartSn;
 import com.konli.qms.domain.sqm.entity.SqmTraceNode;
 import com.konli.qms.domain.sqm.entity.SqmTraceProductDetail;
 import com.konli.qms.domain.sqm.entity.SqmTraceRawDetail;
+import com.konli.qms.domain.sqm.vo.TraceDirection;
 import com.konli.qms.domain.sqm.vo.TraceDirectionNode;
 import com.konli.qms.domain.sqm.vo.TraceFullTreeVO;
 import com.konli.qms.domain.sqm.dto.TraceNodeSaveRequest;
@@ -17,11 +18,27 @@ import java.util.List;
 /** 来料批次 + 追溯节点:创建/查询/追溯树。sqm.trace.* */
 public interface SqmTraceService {
 
-    /** 来料批次列表,支持 keyword 模糊搜索（批次号/物料编码/物料名称）。 */
-    List<SqmIncomingLot> listLots(String keyword);
+    /** 来料批次列表,支持 keyword 模糊搜索（批次号/物料编码/物料名称）。
+     *  supplierId/iqcPass 为可选过滤,用于前端"供应商→合格物料"级联下拉(只列已通过 IQC 的来料)。 */
+    List<SqmIncomingLot> listLots(String keyword, String supplierId, Boolean iqcPass);
+
+    /** 来料批次分页列表,支持 keyword 模糊搜索(批次号/物料编码/物料名称) + orgId 组织隔离。
+     *  供追溯列表页大数据量分页加载,避免一次性返回全量导致前端卡顿。 */
+    PageResult<SqmIncomingLot> listLotsPage(String keyword, String supplierId, String orgId, int page, int size);
 
     /** 按批次号查询来料批次(批次号全局唯一)。 */
     SqmIncomingLot getLotByLotNo(String lotNo);
+
+    /**
+     * 方案 B 源表分页: 按 type 路由三源表, 返回分页业务记录(含 bizKey / bizType 展示字段)。
+     * type ∈ {material, semi, finished, all}:
+     *  - material: qms.material_inspection, 搜索 material_code/material_name/material_barcode/material_batch_no
+     *  - semi:     qms.finished_goods_inspection(category='半成品'), 搜索 prod_batch_or_sn/material_code/product_name
+     *  - finished: qms.finished_goods_inspection(category='成品'),     搜索同上
+     *  - all:     仅返回各类型的计数(供前端总表分 tab 显示), 不做跨表 UNION 排序
+     * plantCode 用于组织隔离(三源表仅 plant_code 文本列), 为空表示全局视图。
+     */
+    PageResult<java.util.Map<String, Object>> sourcePage(String type, String keyword, String plantCode, String bizType, int page, int size);
 
     SqmIncomingLot createLot(SqmIncomingLot lot);
 
@@ -122,4 +139,45 @@ public interface SqmTraceService {
      * backward=反向(本节点由哪些下层节点组成,即"来源"),其他值=全部连通分量。
      */
     List<TraceDirectionNode> traceDirection(String nodeId, String direction);
+
+    /**
+     * 方案 B: 以源表业务条码(来料 material_barcode / 成品 prod_batch_or_sn / 半成品 prod_batch_or_sn)为根,
+     * 沿 sqm_trace_relation 递归其上下游连通分量, 回查三源表拼出完整嵌套追溯树。
+     * 节点权威 = 三源表, 关系表仅存边。direction 控制返回方向(默认 ALL=全链路)。
+     */
+    TraceFullTreeVO traceMesTree(String barcode, String orgId);
+
+    /** 同 {@link #traceMesTree(String, String)} 但按方向裁剪:forward=下游树, backward=上游树(含客户占位), all=双向。 */
+    TraceFullTreeVO traceMesTree(String barcode, String orgId, TraceDirection direction);
+
+    /**
+     * 按批号查产品树:以来料批次号(material_batch_no)或成品/半成品批号(prod_batch_or_sn)反查命中条码,
+     * 对每个命中条码调用 traceMesTree 并合并为森林(可能多棵根树)。direction 同 traceMesTree。
+     */
+    java.util.List<TraceFullTreeVO> traceByBatchNo(String batchNo, String orgId, TraceDirection direction);
+
+    /**
+     * 按来料批次号(lotNo, 即 sqm_incoming_lot.lot_no, 对应源表 record_no)查 MES 追溯森林。
+     * 先由 lotNo 在 sqm_incoming_lot 定位其 material_barcode 集合(一个批次号可能对应多条来料记录,
+     * 故可能多棵根树),对每个条码调用 traceMesTree 并合并为森林。无对应条码时返回空森林。
+     */
+    java.util.List<TraceFullTreeVO> traceByLotNo(String lotNo, String orgId, TraceDirection direction);
+
+    /**
+     * 方案 B: 往 ops.sqm_trace_relation 插入一条 parent→child 的条码边。
+     * 用于在前端物料表页签手动把关键件(keypart)/来料批(incoming)关联到半成品/成品。
+     * orgId 在内部用写入型 resolve 解析(防伪造), 边已存在则幂等跳过, 防自环。
+     */
+    void saveRelation(String parentBarcode, String childBarcode, String relationType, String orgId);
+
+    /**
+     * 源表明细查询:按 sourceType 路由三源表,以业务条码(key)反查并复用 toDetailMap 返回全字段 Map。
+     * sourceType ∈ {material, finished, semi, critical}:
+     *  - material:  来料检验 qms.material_inspection, key=material_barcode(兼容 material_batch_no)
+     *  - finished:  成品检验 qms.finished_goods_inspection(category='成品'), key=prod_batch_or_sn
+     *  - semi:      半成品检验 qms.finished_goods_inspection(category='半成品'), key=prod_batch_or_sn
+     *  - critical:  关键件绑定 qms.critical_material_binding, key=product_barcode(兼容 work_order_no)
+     * 返回剔除别名列与审计列后的业务字段 Map,供前端分组卡片弹窗渲染。
+     */
+    java.util.Map<String, Object> getSourceDetail(String sourceType, String key);
 }

@@ -22,8 +22,8 @@ import java.util.stream.Collectors;
 public class Ncm8dApprovalConfigServiceImpl implements Ncm8dApprovalConfigService {
 
     private static final String[] STAGES = {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"};
-    /** 未配置时的默认:仅 D3/D5/D7 需审批(与历史业务规则一致)。 */
-    private static final List<String> DEFAULT_APPROVAL = Arrays.asList("D3", "D5", "D7");
+    /** 未配置时的默认:D1(团队组建,需质量部审核)+ D3/D5/D7 需审批。 */
+    private static final List<String> DEFAULT_APPROVAL = Arrays.asList("D1", "D3", "D5", "D7");
 
     private final Qms8dApprovalConfigMapper mapper;
 

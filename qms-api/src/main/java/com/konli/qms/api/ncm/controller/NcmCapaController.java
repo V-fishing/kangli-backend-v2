@@ -1,9 +1,12 @@
 package com.konli.qms.api.ncm.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.dto.AbnormalCapaLaunchRequest;
 import com.konli.qms.service.ncm.dto.CapaVo;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +34,14 @@ public class NcmCapaController {
         return R.ok(ncmCapaService.list());
     }
 
+    @GetMapping("/page")
+    @PreAuthorize("hasAuthority('ncm.capa.list')")
+    public R<PageResult<QmsCapa>> page(@RequestParam(required = false) String keyword,
+                                       @RequestParam(defaultValue = "1") int page,
+                                       @RequestParam(defaultValue = "20") int size) {
+        return R.ok(ncmCapaService.listPage(keyword, page, size));
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('ncm.capa.list')")
     public R<CapaVo> get(@PathVariable String id) {
@@ -46,8 +57,8 @@ public class NcmCapaController {
     /** 从来料异常单发起 CAPA(回写异常单 capaId/rectifyType/status)。 */
     @PostMapping("/launch")
     @PreAuthorize("hasAuthority('ncm.capa.create')")
-    public R<QmsCapa> launchFromAbnormal(@RequestBody QmsCapa capa) {
-        return R.ok(ncmCapaService.launchFromAbnormal(capa));
+    public R<QmsCapa> launchFromAbnormal(@RequestBody AbnormalCapaLaunchRequest req) {
+        return R.ok(ncmCapaService.launchFromAbnormal(req));
     }
 
     @PostMapping("/{id}/progress")
@@ -61,6 +72,14 @@ public class NcmCapaController {
     @PreAuthorize("hasAuthority('ncm.capa.close')")
     public R<Void> close(@PathVariable String id) {
         ncmCapaService.close(id);
+        return R.ok();
+    }
+
+    /** 列表级改派责任人(更新负责人 + 推送被指派人任务中心)。 */
+    @PostMapping("/{id}/reassign")
+    @PreAuthorize("hasAuthority('ncm.capa.create')")
+    public R<Void> reassign(@PathVariable String id, @RequestBody DefectLaunchRequest req) {
+        ncmCapaService.reassign(id, req);
         return R.ok();
     }
 

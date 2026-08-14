@@ -1,5 +1,6 @@
 package com.konli.qms.service.patrol;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.patrol.entity.PatlAbnormal;
 import com.konli.qms.domain.patrol.entity.PatlTask;
 import com.konli.qms.service.patrol.dto.PatlTaskVo;
@@ -10,6 +11,8 @@ import java.util.List;
 public interface PatlTaskService {
 
     List<PatlTask> list();
+
+    PageResult<PatlTask> listPage(String keyword, int page, int size);
 
     /** 详情:任务 + 记录。 */
     PatlTaskVo get(String id);
@@ -25,6 +28,8 @@ public interface PatlTaskService {
 
     /** 异常列表。 */
     List<PatlAbnormal> listAbnormals();
+
+    PageResult<PatlAbnormal> listAbnormalsPage(String keyword, int page, int size);
 
     /** 关闭异常。 */
     void closeAbnormal(String id, String handleRemark);

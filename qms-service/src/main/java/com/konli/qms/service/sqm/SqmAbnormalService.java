@@ -1,10 +1,12 @@
 package com.konli.qms.service.sqm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalMeasure;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalBatchVerify;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.dto.AbnormalRectificationRequest;
+import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 
 import java.util.List;
 import java.util.Map;
@@ -13,6 +15,8 @@ import java.util.Map;
 public interface SqmAbnormalService {
 
     List<SqmIncomingAbnormal> listAbnormals();
+
+    PageResult<SqmIncomingAbnormal> listAbnormalsPage(String keyword, String level, String status, String supplierId, int page, int size);
 
     SqmIncomingAbnormal create(SqmIncomingAbnormal abnormal);
 
@@ -31,6 +35,9 @@ public interface SqmAbnormalService {
 
     /** 加载整改记录(措施+批验) */
     Map<String, List<?>> loadRectificationDetail(String id);
+
+    /** 列表级改派责任人(更新 handler_id + 推送被指派人任务中心)。 */
+    void reassign(String id, DefectLaunchRequest req);
 
     // ---- FMEA ----
 

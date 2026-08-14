@@ -1,5 +1,6 @@
 package com.konli.qms.service.spc;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.spc.entity.SpcRule;
 import com.konli.qms.service.spc.dto.SpcRuleTriggerVo;
 
@@ -9,6 +10,8 @@ import java.util.List;
 public interface SpcRuleService {
 
     List<SpcRule> list();
+
+    PageResult<SpcRule> listPage(String keyword, int page, int size);
 
     void toggle(String id, boolean enabled);
 

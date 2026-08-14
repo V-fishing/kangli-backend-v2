@@ -53,10 +53,10 @@ public class OverdueNotificationScheduler {
             if (t.getPlanTime() == null) continue;
             long days = ChronoUnit.DAYS.between(t.getPlanTime().toLocalDate(), LocalDate.now());
             if (days < 1) continue; // 当天不过期报警
-            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+            notificationService.notify("schedule", "patrol_overdue",
                     "巡检任务超期",
                     "巡检任务" + t.getTaskNo() + " 已超期" + days + "天未完成,请尽快处理。",
-                    "patrol_overdue", t.getId(), "/patrol/tasks", null);
+                    "patrol_overdue", t.getId(), "/patrol/tasks");
         }
     }
 
@@ -70,10 +70,10 @@ public class OverdueNotificationScheduler {
             if (t.getSlaDueAt() == null) continue;
             long days = ChronoUnit.DAYS.between(t.getSlaDueAt().toLocalDate(), LocalDate.now());
             if (days < 1) continue;
-            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+            notificationService.notify("schedule", "fia_overdue",
                     "首件检验超期提醒",
                     "校验单" + t.getCode() + "(工单" + t.getWoNo() + ") 已超期" + days + "天,请及时处理。",
-                    "fia_overdue", t.getId(), "/fia/tasks", null);
+                    "fia_overdue", t.getId(), "/fia/tasks");
         }
     }
 
@@ -87,10 +87,10 @@ public class OverdueNotificationScheduler {
             if (nc.getDeadline() == null) continue;
             long days = ChronoUnit.DAYS.between(nc.getDeadline(), LocalDate.now());
             if (days < 1) continue;
-            notificationService.notifyRoles(List.of("qmanager", "purchaser"),
+            notificationService.notify("schedule", "audit_nc_overdue",
                     "审核NC整改超期",
                     "审核不符合项" + nc.getNcNo() + " 整改超期" + days + "天,请尽快推进。",
-                    "audit_nc_overdue", nc.getId(), "/sqm/audit", null);
+                    "audit_nc_overdue", nc.getId(), "/sqm/audit");
         }
     }
 
@@ -104,10 +104,10 @@ public class OverdueNotificationScheduler {
             if (ca.getDueDate() == null) continue;
             long days = ChronoUnit.DAYS.between(ca.getDueDate(), LocalDate.now());
             if (days < 1) continue;
-            notificationService.notifyRoles(List.of("qmanager", "sqe"),
+            notificationService.notify("schedule", "capa_overdue",
                     "纠正措施超期",
                     "纠正措施" + ca.getCaNo() + "(" + (ca.getIssue() != null ? ca.getIssue() : "") + ") 超期" + days + "天,请尽快处理。",
-                    "capa_overdue", ca.getId(), "/ncm/capa", null);
+                    "capa_overdue", ca.getId(), "/ncm/capa");
         }
     }
 }

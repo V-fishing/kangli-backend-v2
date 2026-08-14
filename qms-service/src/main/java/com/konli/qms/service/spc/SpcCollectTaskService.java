@@ -1,5 +1,6 @@
 package com.konli.qms.service.spc;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.spc.entity.SpcCollectTask;
 
 import java.util.List;
@@ -8,6 +9,8 @@ import java.util.List;
 public interface SpcCollectTaskService {
 
     List<SpcCollectTask> list();
+
+    PageResult<SpcCollectTask> listPage(String status, String collectMode, int page, int size);
 
     SpcCollectTask create(SpcCollectTask task);
 

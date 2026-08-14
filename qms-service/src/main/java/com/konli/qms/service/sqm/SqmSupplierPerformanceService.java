@@ -1,5 +1,6 @@
 package com.konli.qms.service.sqm;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmSupplierPerformance;
 
 import java.math.BigDecimal;
@@ -9,6 +10,8 @@ import java.util.List;
 public interface SqmSupplierPerformanceService {
 
     List<SqmSupplierPerformance> list(String supplierId);
+
+    PageResult<SqmSupplierPerformance> listPage(String supplierId, String period, int page, int size);
 
     SqmSupplierPerformance get(String id);
 

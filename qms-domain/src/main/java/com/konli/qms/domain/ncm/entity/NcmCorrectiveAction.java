@@ -27,6 +27,14 @@ public class NcmCorrectiveAction extends BaseEntity {
 
     private String owner;
 
+    /** 责任人用户 ID,支撑按当前登录用户聚合"我的任务"(V159 加) */
+    @TableField("owner_user_id")
+    private String ownerUserId;
+
+    /** 责任人姓名(由 owner 关联 sys_user 解析,非持久化字段)。 */
+    @TableField(exist = false)
+    private String ownerName;
+
     @TableField("due_date")
     private LocalDate dueDate;
 

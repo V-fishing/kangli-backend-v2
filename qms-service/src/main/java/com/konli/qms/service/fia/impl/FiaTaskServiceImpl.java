@@ -1,6 +1,9 @@
 package com.konli.qms.service.fia.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.fia.entity.FiaApproval;
@@ -17,9 +20,16 @@ import com.konli.qms.domain.fia.mapper.FiaInspStdItemMapper;
 import com.konli.qms.domain.fia.mapper.FiaInspStdMapper;
 import com.konli.qms.domain.fia.mapper.FiaTaskLogMapper;
 import com.konli.qms.domain.fia.mapper.FiaTaskMapper;
+import com.konli.qms.service.fia.dto.ProductSearchResult;
+import com.konli.qms.service.fia.dto.ProductTreeNode;
+import com.konli.qms.service.fia.dto.TaskStdItemVo;
 import com.konli.qms.domain.spc.entity.SpcParam;
+import com.konli.qms.domain.spc.entity.SpcSpecStandard;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
+import com.konli.qms.domain.spc.mapper.SpcSpecStandardMapper;
+import com.konli.qms.domain.sqm.entity.SqmSupplier;
+import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import com.konli.qms.service.fia.FiaApprovalService;
@@ -31,11 +41,14 @@ import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.service.sqm.SqmTraceService;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
+import com.konli.qms.domain.tlm.entity.TlmTooling;
+import com.konli.qms.domain.tlm.mapper.TlmToolingMapper;
 import com.konli.qms.service.fia.SignConfigService;
 import com.konli.qms.domain.fia.dto.PreviewJudgeRequest;
 import com.konli.qms.domain.fia.dto.PreviewJudgeResult;
 import com.konli.qms.domain.fia.dto.StdTraceResult;
 import com.konli.qms.service.fia.dto.FiaTaskVo;
+import com.konli.qms.service.spc.SpcParamService;
 import com.konli.qms.service.spc.SpcSubgroupService;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
 import lombok.RequiredArgsConstructor;
@@ -57,12 +70,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -84,6 +100,9 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final SysUserMapper sysUserMapper;
     private final PasswordEncoder passwordEncoder;
     private final SpcParamMapper spcParamMapper;
+    private final SpcSpecStandardMapper spcSpecStandardMapper;
+    private final SqmSupplierMapper sqmSupplierMapper;
+    private final SpcParamService spcParamService;
     private final SpcSubgroupService spcSubgroupService;
     private final FiaApprovalService fiaApprovalService;
     private final FiaWoLockService fiaWoLockService;
@@ -91,9 +110,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final NcmDefectRecordService ncmDefectRecordService;
     private final SqmTraceService sqmTraceService;
     private final NotificationService notificationService;
+    private final TlmToolingMapper tlmToolingMapper;
 
     @Override
-        public List<FiaTask> list(String orgId, String status, String woNo) {
+        public List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName) {
         LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
         if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
             w.eq(FiaTask::getOrgId, orgId);
@@ -104,8 +124,67 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (woNo != null && !woNo.trim().isEmpty()) {
             w.like(FiaTask::getWoNo, woNo.trim());
         }
+        if (productName != null && !productName.trim().isEmpty()) {
+            w.like(FiaTask::getProductName, productName.trim());
+        }
+        if (partNo != null && !partNo.trim().isEmpty()) {
+            w.like(FiaTask::getPartNo, partNo.trim());
+        }
+        if (procName != null && !procName.trim().isEmpty()) {
+            w.like(FiaTask::getProcName, procName.trim());
+        }
         w.orderByDesc(FiaTask::getCreatedAt);
         return fiaTaskMapper.selectList(w);
+    }
+
+    @Override
+    public PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, int page, int size) {
+        LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
+        if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
+            w.eq(FiaTask::getOrgId, orgId);
+        }
+        if (status != null && !status.trim().isEmpty()) {
+            w.eq(FiaTask::getStatus, status);
+        }
+        if (woNo != null && !woNo.trim().isEmpty()) {
+            w.like(FiaTask::getWoNo, woNo.trim());
+        }
+        if (productName != null && !productName.trim().isEmpty()) {
+            w.like(FiaTask::getProductName, productName.trim());
+        }
+        if (partNo != null && !partNo.trim().isEmpty()) {
+            w.like(FiaTask::getPartNo, partNo.trim());
+        }
+        if (procName != null && !procName.trim().isEmpty()) {
+            w.like(FiaTask::getProcName, procName.trim());
+        }
+        w.orderByDesc(FiaTask::getCreatedAt);
+        IPage<FiaTask> ip = fiaTaskMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
+    }
+
+    /**
+     * 产品→工序 二级树(去重汇总):从 FiaTask 当前组织的任务聚合产品(按 productName 去重)
+     * 与每个产品的工序列表,供列表筛选构建树。复用 list() 以继承一致的数据权限(org switch / dataScope)。
+     */
+    @Override
+    public List<ProductTreeNode> listProductTree(String orgId) {
+        // 复用 list():其内部已按 orgId / dataScope / 组织切换 正确处理权限,避免自建查询被拦截器二次改写
+        List<FiaTask> rows = this.list(orgId, null, null, null, null, null);
+        Map<String, ProductTreeNode> byName = new LinkedHashMap<>();
+        for (FiaTask t : rows) {
+            String name = t.getProductName();
+            if (name == null || name.isEmpty()) continue;
+            ProductTreeNode node = byName.get(name);
+            if (node == null) {
+                node = new ProductTreeNode(name, t.getPartNo(), t.getCategory(), new ArrayList<>());
+                byName.put(name, node);
+            }
+            if (t.getProcName() != null && !t.getProcName().isEmpty() && !node.getProcNames().contains(t.getProcName())) {
+                node.getProcNames().add(t.getProcName());
+            }
+        }
+        return new ArrayList<>(byName.values());
     }
 
     @Override
@@ -141,6 +220,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private static final Pattern UUID_RE =
             Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    private static void blankToNull(java.util.function.Supplier<String> getter, java.util.function.Consumer<String> setter) {
+        String v = getter.get();
+        if (v != null && v.isBlank()) setter.accept(null);
+    }
+
     private static final Pattern NUM_RE = Pattern.compile("-?\\d+(?:\\.\\d+)?");
     private static final Pattern TOL_PM_RE = Pattern.compile("±\\s*(\\d+(?:\\.\\d+)?)");
     private static final Pattern TOL_RANGE_RE = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[~\\-]\\s*(\\d+(?:\\.\\d+)?)");
@@ -166,19 +250,17 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (partNo == null || partNo.isBlank()) {
             return null;
         }
-        // 1) 物料编码 + 工序(标准由工厂自有标准库判定,与供应商无关)
-        FiaInspStd std = fiaInspStdMapper.selectOne(
-                stdQuery(orgId, partNo, procName));
+        // 工序已指定: 必须以「物料编码 + 工序」双字段精确匹配,匹配不到即返回 null,
+        // 不允许退回「仅物料编码」或通用默认标准,避免工序形同虚设、错配其他工序的标准。
+        if (procName != null && !procName.isBlank()) {
+            return fiaInspStdMapper.selectOne(stdQuery(orgId, partNo, procName));
+        }
+        // 工序未指定(兼容旧调用/自动任务): 退回「仅物料编码」宽松匹配,保证不漏料。
+        FiaInspStd std = fiaInspStdMapper.selectOne(stdQuery(orgId, partNo, null));
         if (std != null) {
             return std;
         }
-        // 2) 仅物料编码
-        std = fiaInspStdMapper.selectOne(
-                stdQuery(orgId, partNo, null));
-        if (std != null) {
-            return std;
-        }
-        // 3) 兜底:通用默认标准(保证来料全量覆盖,避免漏料而无法建单/判定)
+        // 兜底: 通用默认标准(仅工序为空时生效,保证来料全量覆盖)
         return fiaInspStdMapper.selectOne(
                 new LambdaQueryWrapper<FiaInspStd>()
                         .eq(FiaInspStd::getOrgId, orgId)
@@ -202,12 +284,306 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     @Override
+    public List<ProductSearchResult> searchProduct(String orgId, String keyword, String category) {
+        List<ProductSearchResult> results = new ArrayList<>();
+        Set<String> seenPartNos = new HashSet<>();
+        // orgId 可能为虚拟根(如 "ROOT",非 UUID),此时按 org 过滤会触发 uuid 类型转换 500;
+        // 集团管理员视角下跳过 org 过滤,退化为跨组织检索产品料号。
+        boolean orgFilter = isValidUuid(orgId);
+
+        // 1) 从 FiaTask 历史查找已出现的产品
+        LambdaQueryWrapper<FiaTask> taskW = new LambdaQueryWrapper<FiaTask>()
+                .eq(orgFilter, FiaTask::getOrgId, orgId)
+                .and(w -> w.like(FiaTask::getPartNo, keyword).or().like(FiaTask::getProductName, keyword));
+        if (category != null && !category.isBlank()) {
+            taskW.eq(FiaTask::getCategory, category);
+        }
+        taskW.orderByDesc(FiaTask::getCreatedAt).last("LIMIT 10");
+        List<FiaTask> tasks = fiaTaskMapper.selectList(taskW);
+        for (FiaTask t : tasks) {
+            String pn = t.getPartNo() != null ? t.getPartNo() : t.getProductName();
+            if (pn != null && !pn.isBlank() && seenPartNos.add(pn)) {
+                ProductSearchResult r = new ProductSearchResult();
+                r.setPartNo(t.getPartNo());
+                r.setProductName(t.getProductName() != null && !t.getProductName().isBlank()
+                        ? t.getProductName() : t.getPartNo());
+                r.setExists(true);
+                r.setCategory(t.getCategory());  // 物料/半成品/成品
+                // 匹配历史供应商
+                if (t.getSupplierId() != null) {
+                    SqmSupplier sup = sqmSupplierMapper.selectById(t.getSupplierId());
+                    r.setMatchedSupplierId(t.getSupplierId());
+                    r.setMatchedSupplierName(sup != null ? sup.getName() : null);
+                }
+                results.add(r);
+            }
+        }
+
+        // 2) 从 FiaInspStd 查找标准库中的产品，产品名/品类以来料追溯节点(成品/半成品/物料)为权威来源实时关联
+        LambdaQueryWrapper<FiaInspStd> stdW = new LambdaQueryWrapper<FiaInspStd>()
+                .eq(orgFilter, FiaInspStd::getOrgId, orgId)
+                .eq(FiaInspStd::getIsDeleted, false)
+                .and(w -> w.like(FiaInspStd::getPartNo, keyword).or().like(FiaInspStd::getMaterial, keyword));
+        stdW.orderByDesc(FiaInspStd::getCreatedAt).last("LIMIT 10");
+        List<FiaInspStd> stds = fiaInspStdMapper.selectList(stdW);
+        for (FiaInspStd s : stds) {
+            String pn = s.getPartNo() != null ? s.getPartNo() : s.getMaterial();
+            if (pn != null && !pn.isBlank() && seenPartNos.add(pn)) {
+                ProductSearchResult r = new ProductSearchResult();
+                r.setPartNo(pn);
+                String stdMat = s.getMaterial();
+                // 以来料追溯三源表(material_inspection/finished_goods_inspection/critical_material_binding)为权威来源补全产品名与品类
+                ProductInfo info = resolveFromSourceTables(orgId, stdMat != null ? stdMat : pn);
+                if (info != null) {
+                    r.setProductName(info.name());
+                    r.setCategory(info.category());
+                } else {
+                    // 三源表均无匹配时，产品名兜底取标准库 material 字段(而非料号)，避免返回空名
+                    r.setProductName(stdMat != null && !stdMat.isBlank() ? stdMat : pn);
+                    r.setCategory(s.getCategory());
+                }
+                r.setExists(true);
+                results.add(r);
+            }
+        }
+
+        // 3) 补充供应商信息：优先以来料追溯 material_inspection 关联 sqm_supplier(ven_code=supplier_code,
+        //    这是最权威的真实来料供应商)，其次回退到历史首件任务反查。
+        for (ProductSearchResult r : results) {
+            boolean needSupplier = r.isExists() && (r.getMatchedSupplierId() == null || r.getMatchedSupplierId().isBlank());
+            boolean needCategory = r.isExists() && (r.getCategory() == null || r.getCategory().isBlank());
+            if (needSupplier || needCategory) {
+                // 3a) 优先从 material_inspection 关联供应商主数据
+                if (needSupplier) {
+                    SqmSupplier sup = resolveSupplierByMaterialCode(r.getPartNo());
+                    if (sup != null) {
+                        r.setMatchedSupplierId(sup.getId());
+                        r.setMatchedSupplierName(sup.getName());
+                    }
+                }
+                // 3b) 仍缺失则回退到历史首件任务反查(确保老数据兼容)
+                if ((needSupplier && (r.getMatchedSupplierId() == null || r.getMatchedSupplierId().isBlank()))
+                        || needCategory) {
+                    LambdaQueryWrapper<FiaTask> histW = new LambdaQueryWrapper<FiaTask>()
+                            .eq(orgFilter, FiaTask::getOrgId, orgId)
+                            .eq(FiaTask::getPartNo, r.getPartNo())
+                            .orderByDesc(FiaTask::getCreatedAt)
+                            .last("LIMIT 1");
+                    FiaTask hist = fiaTaskMapper.selectList(histW).stream().findFirst().orElse(null);
+                    if (hist != null) {
+                        if (needCategory && hist.getCategory() != null) {
+                            r.setCategory(hist.getCategory());
+                        }
+                        if (needSupplier && (r.getMatchedSupplierId() == null || r.getMatchedSupplierId().isBlank())
+                                && hist.getSupplierId() != null) {
+                            SqmSupplier sup = sqmSupplierMapper.selectById(hist.getSupplierId());
+                            r.setMatchedSupplierId(hist.getSupplierId());
+                            r.setMatchedSupplierName(sup != null ? sup.getName() : null);
+                        }
+                    }
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * 按 material_code 从 material_inspection 关联 sqm_supplier 解析真实来料供应商。
+     * material_inspection.supplier_code = sqm_supplier.ven_code (MES 供应商编号, 全局唯一)。
+     */
+    private SqmSupplier resolveSupplierByMaterialCode(String materialCode) {
+        if (materialCode == null || materialCode.isBlank()) return null;
+        String sql = "SELECT s.id, s.org_id, s.name FROM qms.material_inspection mi "
+                + "JOIN ops.sqm_supplier s ON s.ven_code = mi.supplier_code "
+                + "WHERE mi.is_deleted='0' AND mi.material_code = ? LIMIT 1";
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, materialCode);
+        if (rows.isEmpty()) return null;
+        Map<String, Object> row = rows.get(0);
+        SqmSupplier sup = new SqmSupplier();
+        sup.setId(str(row.get("id")));
+        sup.setName(str(row.get("name")));
+        return sup;
+    }
+
+    /** 产品名与品类解析结果（来自来料追溯三源表） */
+    private record ProductInfo(String name, String category) {}
+
+    /**
+     * 以来料追溯三源表为权威来源解析产品名与品类（方案B：节点权威=三源表，sqm_trace_node 已清空）。
+     * 按 material_code 同时命中 material_inspection / finished_goods_inspection / critical_material_binding，
+     * 取真实 material_name / product_name 作为产品名，按源表类型映射品类：
+     *   material_inspection -> material
+     *   finished_goods_inspection category='成品' -> product / '半成品' -> semi
+     *   critical_material_binding -> material
+     * 优先级沿用 product(成品) > semi > material，保证同一料号多表命中时取最具体品类。
+     */
+    private ProductInfo resolveFromSourceTables(String orgId, String materialCode) {
+        if (materialCode == null || materialCode.isBlank()) {
+            return null;
+        }
+        // 三源表为 MES 同步的全局追溯数据,按 material_code 唯一关联,不按 org_id 过滤(与 SqmTraceServiceImpl 源表查询一致)
+
+        // 1) 来料 material_inspection：material_code + material_name
+        String sqlIncoming = "SELECT mi.material_name AS name FROM qms.material_inspection mi"
+                + " WHERE mi.is_deleted='0' AND mi.material_code = ?";
+        // 2) 成品/半成品 finished_goods_inspection：material_code + product_name + category
+        String sqlFinished = "SELECT fi.product_name AS name, fi.category AS cat FROM qms.finished_goods_inspection fi"
+                + " WHERE fi.is_deleted='0' AND fi.category IN ('成品','半成品') AND fi.material_code = ?";
+        // 3) 关键件 critical_material_binding：material_code（取关联产品名，无独立名称列时回退料号）
+        String sqlCritical = "SELECT cb.product_barcode AS name FROM qms.critical_material_binding cb"
+                + " WHERE cb.is_deleted='0' AND cb.material_code = ?";
+
+        Object[] argsIn = new Object[]{materialCode};
+        Object[] argsFin = new Object[]{materialCode};
+        Object[] argsCrit = new Object[]{materialCode};
+
+        // 成品（最优先）
+        List<Map<String, Object>> finished = jdbcTemplate.queryForList(sqlFinished, argsFin);
+        if (finished != null && !finished.isEmpty()) {
+            Map<String, Object> row = finished.get(0);
+            String cat = "成品".equals(String.valueOf(row.get("cat"))) ? "product" : "semi";
+            String name = str(row.get("name"));
+            if (name != null && !name.isBlank()) {
+                return new ProductInfo(name, cat);
+            }
+        }
+        // 半成品已并入上面 finished 查询，此处只需处理来料与关键件（优先级 semi > material 已由 finished 先行覆盖）
+
+        // 来料
+        List<Map<String, Object>> incoming = jdbcTemplate.queryForList(sqlIncoming, argsIn);
+        if (incoming != null && !incoming.isEmpty()) {
+            String name = str(incoming.get(0).get("name"));
+            if (name != null && !name.isBlank()) {
+                return new ProductInfo(name, "material");
+            }
+        }
+
+        // 关键件（归物料类首件）
+        List<Map<String, Object>> critical = jdbcTemplate.queryForList(sqlCritical, argsCrit);
+        if (critical != null && !critical.isEmpty()) {
+            String name = str(critical.get(0).get("name"));
+            if (name != null && !name.isBlank()) {
+                return new ProductInfo(name, "material");
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public String generateWoNo(String orgId) {
+        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String prefix = "WO-" + today + "-";
+        // 同天内最大序号查询(行锁防并发)
+        String sql = "SELECT wo_no FROM ops.fia_task WHERE wo_no LIKE ? AND org_id = ? ORDER BY wo_no DESC LIMIT 1 FOR UPDATE";
+        List<String> rows;
+        try {
+            rows = jdbcTemplate.queryForList(sql, String.class, prefix + "%", orgId);
+        } catch (Exception e) {
+            // 若 FOR UPDATE 在只读事务失败，退化为无锁查询
+            rows = jdbcTemplate.queryForList(
+                    "SELECT wo_no FROM ops.fia_task WHERE wo_no LIKE ? AND org_id = ? ORDER BY wo_no DESC LIMIT 1",
+                    String.class, prefix + "%", orgId);
+        }
+        int seq = 1;
+        if (!rows.isEmpty()) {
+            String lastWo = rows.get(0);
+            String numPart = lastWo.substring(prefix.length());
+            try {
+                seq = Integer.parseInt(numPart) + 1;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return prefix + String.format("%03d", seq);
+    }
+
+    @Override
+    public List<TaskStdItemVo> getTaskStdItems(String taskId) {
+        String realId = resolveTaskId(taskId);
+        if (realId == null) {
+            return Collections.emptyList();
+        }
+        List<FiaInspItem> items = fiaInspItemMapper.selectList(
+                new LambdaQueryWrapper<FiaInspItem>().eq(FiaInspItem::getTaskId, realId).orderByAsc(FiaInspItem::getSeq));
+        List<TaskStdItemVo> vos = new ArrayList<>();
+        for (FiaInspItem it : items) {
+            TaskStdItemVo vo = new TaskStdItemVo();
+            vo.setItemId(it.getId());
+            vo.setStdItemId(it.getStdItemId());
+            vo.setItemName(it.getItemName());
+            vo.setStdValue(it.getStdValue());
+            vo.setTolerance(it.getTolerance());
+            vo.setUnit(it.getUnit());
+            vo.setIsCtq(it.getIsCtq());
+            // 查找关联的 SPC 参数
+            if (it.getStdItemId() != null) {
+                List<SpcParam> fkParams = spcParamMapper.selectList(
+                        new LambdaQueryWrapper<SpcParam>()
+                                .eq(SpcParam::getFiaStdItemId, it.getStdItemId())
+                                .eq(SpcParam::getIsActive, true)
+                                .last("LIMIT 1"));
+                if (!fkParams.isEmpty()) {
+                    vo.setSpcParamId(fkParams.get(0).getId());
+                    vo.setSpcParamName(fkParams.get(0).getParamName());
+                }
+            }
+            vos.add(vo);
+        }
+        return vos;
+    }
+
+    @Override
     @Transactional
     public FiaTask create(FiaTask task) {
         // 默认 source=FACTORY (产线首件), 若未显式设置
         if (task.getSource() == null || task.getSource().isBlank()) {
             task.setSource("FACTORY");
         }
+        // 前端可能传空字符串,修复为空字符串的 UUID 字段为 null
+        blankToNull(task::getSupplierId, task::setSupplierId);
+        blankToNull(task::getLotId, task::setLotId);
+        blankToNull(task::getInspectorId, task::setInspectorId);
+
+        // -- 供应商规则:按 category 处理 --
+        String cat = task.getCategory();
+        if ("semi".equals(cat) || "product".equals(cat)) {
+            // 半成品/成品:统一绑定"工厂自产"(真实供应商主数据,非字符串字面量),前端不可编辑
+            com.konli.qms.domain.sqm.entity.SqmSupplier factorySelf = sqmSupplierMapper.selectOne(
+                    new LambdaQueryWrapper<com.konli.qms.domain.sqm.entity.SqmSupplier>()
+                            .eq(com.konli.qms.domain.sqm.entity.SqmSupplier::getName, "工厂自产")
+                            .last("limit 1"));
+            if (factorySelf == null || factorySelf.getId() == null) {
+                throw new BusinessException(400, "系统未维护'工厂自产'供应商,请先创建名称为'工厂自产'的供应商");
+            }
+            task.setSupplierId(factorySelf.getId());
+        } else if ("material".equals(cat)) {
+            // 物料类:新产品前端必选供应商(从供应商管理模块选);旧产品自动匹配
+            if (task.getSupplierId() == null || task.getSupplierId().isBlank()) {
+                // 尝试自动匹配:查历史任务中相同料号的供应商
+                if (task.getPartNo() != null && !task.getPartNo().isBlank()) {
+                    FiaTask hist = fiaTaskMapper.selectOne(
+                            new LambdaQueryWrapper<FiaTask>()
+                                    .eq(FiaTask::getPartNo, task.getPartNo())
+                                    .eq(FiaTask::getOrgId, task.getOrgId())
+                                    .isNotNull(FiaTask::getSupplierId)
+                                    .orderByDesc(FiaTask::getCreatedAt)
+                                    .last("LIMIT 1"));
+                    if (hist != null && hist.getSupplierId() != null) {
+                        task.setSupplierId(hist.getSupplierId());
+                    }
+                }
+            }
+            // 物料类必须要有供应商(新产品前端必选,后端兜底校验)
+            if (task.getSupplierId() == null || task.getSupplierId().isBlank()) {
+                throw new BusinessException(400, "物料类首件检验必须选择供应商");
+            }
+        }
+
+        // 产线名称:前端首件创建页未收集,为空时兜底为默认产线,避免 line_name NOT NULL 约束报错
+        if (task.getLineName() == null || task.getLineName().isBlank()) {
+            task.setLineName("FIA-Demo-Line");
+        }
+
         FiaInspStd std = resolveInspStd(task.getStdId());
         // 自动匹配:stdId 为空时按(物料+工序)从标准库匹配
         if (std == null && task.getProductName() != null && task.getProcName() != null) {
@@ -229,6 +605,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         task.setCode("FA-" + System.currentTimeMillis());
         task.setStdVersion(std.getStdVersion());
+        // 工单号:前端不收集,create 时自动生成(WO-日期-序号),避免 wo_no NOT NULL 约束
+        if (task.getWoNo() == null || task.getWoNo().isBlank()) {
+            task.setWoNo(generateWoNo(task.getOrgId()));
+        }
         if (task.getAql() == null) task.setAql(std.getAql());
         if (task.getStatus() == null) {
             task.setStatus(FiaTaskStatus.PENDING);
@@ -237,8 +617,26 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         task.setSlaDueAt(LocalDateTime.now().plusHours(2));
         fiaTaskMapper.insert(task);
 
-        List<FiaInspStdItem> stdItems = fiaInspStdItemMapper.selectList(
+        List<FiaInspStdItem> allStdItems = fiaInspStdItemMapper.selectList(
                 new LambdaQueryWrapper<FiaInspStdItem>().eq(FiaInspStdItem::getStdId, task.getStdId()).orderByAsc(FiaInspStdItem::getSeq));
+        // 按前端选中的标准项过滤(空=全量,向后兼容);同时以 stdId 归属二次校验,防止越权引用其它标准项
+        List<FiaInspStdItem> stdItems;
+        List<String> selIds = task.getStdItemIds();
+        if (selIds != null && !selIds.isEmpty()) {
+            Set<String> selSet = new HashSet<>(selIds);
+            stdItems = allStdItems.stream()
+                    .filter(si -> selSet.contains(si.getId()) && si.getStdId().equals(task.getStdId()))
+                    .sorted(Comparator.comparing(FiaInspStdItem::getSeq))
+                    .collect(Collectors.toList());
+            // 容错:若所选 ID 与标准项主键一个都匹配不上(如 SPC 参数未回填 fia_std_item_id 关联),
+            // 回退为全量标准项,避免创建出"零检验项"的任务。
+            if (stdItems.isEmpty()) {
+                log.info("[FIA] stdItemIds 与标准项无匹配({}, std_id={}),回退全量标准项", selIds.size(), task.getStdId());
+                stdItems = allStdItems;
+            }
+        } else {
+            stdItems = allStdItems;
+        }
         for (FiaInspStdItem si : stdItems) {
             FiaInspItem it = new FiaInspItem();
             it.setOrgId(task.getOrgId());
@@ -270,13 +668,90 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         return task;
     }
 
+    /**
+     * SPC 量产监控严重异常回环:停线整改后重新开工,自动创建一条首件检验任务。
+     * 触发类型固定为"停线重启",复用 create 全主流程(工单锁定+标准匹配+待检通知)。
+     * 异常由调用方 try-catch,不阻断 SPC 主流程。
+     */
+    @Override
+    @Transactional
+    public FiaTask createFromSetup(String orgId, String woNo, String partNo, String procName,
+                                   String productName, String lineName, String remark) {
+        FiaTask task = new FiaTask();
+        task.setOrgId(orgId);
+        task.setWoNo(woNo);
+        task.setPartNo(partNo);
+        task.setProcName(procName);
+        task.setProductName(productName != null && !productName.isBlank() ? productName : partNo);
+        task.setLineName(lineName != null && !lineName.isBlank() ? lineName : "FIA-Demo-Line");
+        // 触发类型:停线重启(对应首件触发类型枚举)
+        task.setTriggerType("停线重启");
+        task.setSource("FACTORY");
+        task.setRemark(remark != null && !remark.isBlank() ? remark : "SPC 量产监控报警级异常触发停线整改后自动重开首件");
+        // 反查历史任务的供应商/标准,保证标准匹配链路可用
+        if (partNo != null && !partNo.isBlank()) {
+            FiaTask hist = fiaTaskMapper.selectOne(
+                    new LambdaQueryWrapper<FiaTask>()
+                            .eq(FiaTask::getPartNo, partNo)
+                            .eq(FiaTask::getOrgId, orgId)
+                            .orderByDesc(FiaTask::getCreatedAt)
+                            .last("LIMIT 1"));
+            if (hist != null) {
+                if (hist.getSupplierId() != null) task.setSupplierId(hist.getSupplierId());
+                if (hist.getCategory() != null) task.setCategory(hist.getCategory());
+            }
+        }
+        return create(task);
+    }
+
+    /**
+     * 工装触发首件检验任务(source=TOOLING)。
+     * 通过 tooling.productCode(即 partNo) + procName 调用 matchStd 定位 FIA 标准，
+     * woNo 为空时自动生成，复用 create 全流程(工单锁定+标准匹配+待检通知+SPC联动)。
+     */
+    @Override
+    @Transactional
+    public FiaTask createFromTooling(String orgId, String toolId, String woNo, String partNo,
+                                     String procName, String productName, String lineName,
+                                     String triggerType, String remark) {
+        // 前置校验: 必须有产品编码和工序名称才能匹配标准
+        if (partNo == null || partNo.isBlank()) {
+            throw new BusinessException(400, "工装缺少产品编码(product_code)，无法匹配 FIA 检验标准");
+        }
+        if (procName == null || procName.isBlank()) {
+            throw new BusinessException(400, "工装缺少工序名称(proc_name)，无法匹配 FIA 检验标准");
+        }
+        // 匹配标准: 以 productCode 作 partNo，procName 作工序名
+        FiaInspStd std = matchStd(orgId, partNo, null, procName);
+        if (std == null) {
+            throw new BusinessException(400,
+                    String.format("未找到检验标准(产品编码=%s, 工序=%s)，请先在 FIA 标准库中创建对应标准", partNo, procName));
+        }
+
+        FiaTask task = new FiaTask();
+        task.setOrgId(orgId);
+        task.setToolId(toolId);
+        task.setWoNo(woNo);
+        task.setPartNo(partNo);
+        task.setProcName(procName);
+        task.setProductName(productName != null && !productName.isBlank() ? productName : partNo);
+        task.setLineName(lineName != null && !lineName.isBlank() ? lineName : "FIA-Demo-Line");
+        task.setTriggerType(triggerType != null && !triggerType.isBlank() ? triggerType : "工装维修后");
+        task.setSource("TOOLING");
+        task.setStdId(std.getId());
+        task.setRemark(remark != null && !remark.isBlank() ? remark
+                : String.format("工装首件检验(触发类型:%s)", task.getTriggerType()));
+
+        return create(task);
+    }
+
     /** 推送待检通知给检验员/班组长(使用 NotificationService 标准接口)。 */
     private void notifyPending(FiaTask task) {
         String content = String.format("首件检验待检:校验单 %s,工单 %s,产线 %s,工序 %s,SLA %s",
                 task.getCode(), task.getWoNo(), task.getLineName(), task.getProcName(),
                 task.getSlaDueAt() != null ? task.getSlaDueAt().toString() : "-");
-        notificationService.notifyRoles(List.of("inspector", "supervisor"),
-                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks", null);
+        notificationService.notify("fia", "fia_task_created",
+                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks");
     }
 
     /** 将前端传入的标识(可能是主键 UUID,也可能是校验单号 code)解析为真实主键;解析失败返回 null */
@@ -475,7 +950,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private static final Set<String> APPROVAL_DISPOSITIONS = Set.of(FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY, FactoryDisposition.EXEMPTION);
 
     /**
-     * 审批通过后的放行:归档 + 首件CTQ数据写入SPC基准(已获批准,无论判定是否合格)。
+     * 审批通过后的放行:归档 + 首件CTQ数据写入SPC基准(仅判定合格时同步)。
      * 仅当任务处于FiaTaskStatus.IN_APPROVAL才执行,幂等安全。
      */
     @Override
@@ -499,22 +974,28 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         // 审批结果通知
         try {
             String judgeText = task.getOverallJudge() != null ? task.getOverallJudge() : "已判定";
-            notificationService.notifyRoles(List.of("inspector", "supervisor", "qmanager"),
+            notificationService.notify("fia", "fia_task_released",
                     "首件检验审批通过-已放行",
                     String.format("校验单 %s(工单 %s) 审批通过,判定:%s,已自动放行归档。",
                             task.getCode(), task.getWoNo(), judgeText),
-                    "fia_task", task.getCode(), "/fia/tasks", null);
+                    "fia_task", task.getCode(), "/fia/tasks");
         } catch (Exception e) {
             log.warn("[FIA] 审批放行通知失败: {}", e.getMessage());
         }
-        // 审批放行:已获批准,无论判定是否合格均将CTQ数据写入SPC基准
+        // 审批放行:FIA->SPC 参数生成(一):任务完成即派生 SPC 参数并绑定产品(幂等),保证可进采集
         try {
-            syncToSpc(task);
+            spcParamService.ensureFromFiaTask(task.getId());
         } catch (Exception e) {
-            log.warn("FIA->SPC 联动失败(审批放行), taskId={}: {}", task.getId(), e.getMessage(), e);
+            log.warn("FIA->SPC 参数生成失败(审批放行), taskId={}: {}", task.getId(), e.getMessage(), e);
         }
-        // 审批放行亦触发 FIA->来料追溯 联动(合格免审直录物料表)
+        // 审批放行:仅合格时将CTQ数据写入SPC基准
         if (InspResult.PASS.equals(task.getOverallJudge())) {
+            try {
+                syncToSpc(task);
+            } catch (Exception e) {
+                log.warn("FIA->SPC 联动失败(审批放行), taskId={}: {}", task.getId(), e.getMessage(), e);
+            }
+            // 审批放行亦触发 FIA->来料追溯 联动(合格免审直录物料表)
             try {
                 syncToTrace(task, 10);
             } catch (Exception e) {
@@ -523,7 +1004,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         // SR-FIA-025:放行审批通过 -> 工单解锁(紧急放行/让步接收/豁免 留痕 + 追溯标签)
         try {
-            FiaApproval ap = fiaApprovalService.list().stream()
+            FiaApproval ap = fiaApprovalService.list(null, null, null).stream()
                     .filter(a -> task.getId().equals(a.getTaskId()) && "已通过".equals(a.getStatus()))
                     .findFirst().orElse(null);
             String approverId = ap != null ? ap.getApproverId() : null;
@@ -726,16 +1207,23 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             log.warn("FIA拦截生产: code={}, woNo={}, judge={}", task.getCode(), task.getWoNo(), task.getOverallJudge());
             // 不合格告警通知
             try {
-                notificationService.notifyRoles(List.of("qmanager", "supervisor"),
+                notificationService.notify("fia", "fia_task_rejected",
                         "首件检验不合格告警",
                         String.format("校验单 %s(工单 %s,产线 %s) 判定不合格(%s),请及时处理。",
                                 task.getCode(), task.getWoNo(), task.getLineName(), task.getOverallJudge()),
-                        "fia_task", task.getCode(), "/fia/tasks", null);
+                        "fia_task", task.getCode(), "/fia/tasks");
             } catch (Exception e) {
                 log.warn("[FIA] 不合格告警通知失败: {}", e.getMessage());
             }
         }
-        // FIA->SPC 联动:仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
+        // FIA->SPC 联动(一):任务完成即由首件检验项派生 SPC 参数并绑定产品(幂等),
+        // 保证签字通过后即可进入 SPC 数据采集;无论合格与否均生成,异常只 log 不阻断主流程。
+        try {
+            spcParamService.ensureFromFiaTask(task.getId());
+        } catch (Exception e) {
+            log.warn("FIA->SPC 参数生成失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+        }
+        // FIA->SPC 联动(二):仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
         if (InspResult.PASS.equals(task.getOverallJudge())) {
             try {
                 syncToSpc(task);
@@ -774,6 +1262,32 @@ public class FiaTaskServiceImpl implements FiaTaskService {
                 } catch (Exception ex) {
                     log.warn("[FIA→NCM] 联动失败 taskId={}: {}", task.getId(), ex.getMessage());
                 }
+                // FIA→TLM 联动:工装首件不合格时回写工装锁定
+                if ("TOOLING".equals(task.getSource()) && task.getToolId() != null) {
+                    try {
+                        TlmTooling tooling = tlmToolingMapper.selectById(task.getToolId());
+                        if (tooling != null && !Boolean.TRUE.equals(tooling.getLocked())) {
+                            tooling.setLocked(true);
+                            tlmToolingMapper.updateById(tooling);
+                            log(task, logSeq + 5, "工装锁定-首件不合格", "系统");
+                            log.info("[FIA→TLM] 工装 {} 首件不合格,已锁定", tooling.getToolNo());
+                        }
+                        // 推送工装预警通知
+                        try {
+                            notificationService.notify("tlm", "tool_first_article_fail",
+                                    "工装首件不合格预警",
+                                    String.format("工装 %s(编号 %s) 首件检验不合格(%s),已自动锁定,请及时处理。",
+                                            tooling != null ? tooling.getToolName() : "",
+                                            tooling != null ? tooling.getToolNo() : "",
+                                            task.getOverallJudge()),
+                                    "tlm_tooling", task.getToolId(), "/tlm/tooling/" + task.getToolId());
+                        } catch (Exception ne) {
+                            log.warn("[FIA→TLM] 工装预警通知失败: {}", ne.getMessage());
+                        }
+                    } catch (Exception ex) {
+                        log.warn("[FIA→TLM] 工装锁定回写失败 toolId={}: {}", task.getToolId(), ex.getMessage());
+                    }
+                }
             }
         } catch (Exception e) {
             log.warn("[FIA] 工单锁定/解锁联动失败 taskId={}: {}", task.getId(), e.getMessage());
@@ -781,8 +1295,9 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     /**
-     * FIA->SPC 联动:FIA 任务合格时,将 CTQ 检验项的数值型测量值同步到
-     * procName 匹配的激活 SPC 参数,触发 SPC 子组录入 + WECO 判异。
+     * FIA->SPC 联动:FIA 任务合格时,将 CTQ 检验项的数值型测量值同步到 SPC 参数,
+     * 触发 SPC 子组录入 + WECO 判异。
+     * 优先通过 SpcParam.fiaStdItemId 精确匹配;无关联时回退到 procName 匹配(向后兼容)。
      * 异常由调用方 try-catch,不阻断 FIA 主流程。
      */
     private void syncToSpc(FiaTask task) {
@@ -794,12 +1309,103 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (ctqItems.isEmpty()) {
             return;
         }
-        // 查 FIA 标准(by task.stdId)获取 procName(SPC param 无 material 字段,按 procName 匹配)
+        // 优先:按 fiaStdItemId 精确匹配(每个 CTQ 项单独匹配对应的 SPC 参数)
+        boolean fkMatched = false;
+        for (FiaInspItem ctqItem : ctqItems) {
+            if (ctqItem.getStdItemId() == null || ctqItem.getStdItemId().isBlank()) {
+                continue;
+            }
+            List<SpcParam> fkParams = spcParamMapper.selectList(
+                    new LambdaQueryWrapper<SpcParam>()
+                            .eq(SpcParam::getFiaStdItemId, ctqItem.getStdItemId())
+                            .eq(SpcParam::getIsActive, true));
+            if (fkParams.isEmpty()) {
+                continue;
+            }
+            // 解析该 CTQ 项的测量值
+            BigDecimal value = null;
+            try {
+                value = ctqItem.getMeasuredValue() == null ? null
+                        : new BigDecimal(ctqItem.getMeasuredValue().trim());
+            } catch (Exception ignored) {
+            }
+            if (value == null) {
+                continue;
+            }
+            for (SpcParam param : fkParams) {
+                try {
+                    SpcSubgroup sg = new SpcSubgroup();
+                    sg.setOrgId(task.getOrgId());
+                    sg.setParamId(param.getId());
+                    sg.setSubgroupTime(LocalDateTime.now());
+                    sg.setWoNo(task.getWoNo());
+                    sg.setBatchNo(task.getBatchNo());
+                    sg.setDataSource(task.getSource() != null ? task.getSource().toLowerCase() : "fia");
+                    sg.setTaskId(task.getId());
+                    sg.setProductCode(task.getPartNo());
+                    spcSubgroupService.createInNewTx(sg, List.of(value));
+                    fkMatched = true;
+                } catch (Exception e) {
+                    log.warn("FIA->SPC FK联动:SPC参数 {} 创建子组失败: {}", param.getId(), e.getMessage(), e);
+                }
+            }
+        }
+        if (fkMatched) {
+            return; // FK 精确匹配成功,不再走后续匹配
+        }
+        // 获取检验标准,后续标准线匹配和 procName 兜底都需要
         FiaInspStd std = fiaInspStdMapper.selectById(task.getStdId());
         if (std == null || std.getProcName() == null || std.getProcName().isBlank()) {
             return;
         }
-        // 查激活的 SPC 参数(by procName)
+        // 优先级2:通过标准线(material + procName)精准匹配 SPC 参数
+        if (std.getMaterial() != null && !std.getMaterial().isBlank()) {
+            List<SpcSpecStandard> specStandards = spcSpecStandardMapper.selectList(
+                    new LambdaQueryWrapper<SpcSpecStandard>()
+                            .eq(SpcSpecStandard::getMaterial, std.getMaterial())
+                            .eq(SpcSpecStandard::getProcName, std.getProcName())
+                            .eq(SpcSpecStandard::getOrgId, task.getOrgId()));
+            if (!specStandards.isEmpty()) {
+                List<String> specStandardIds = specStandards.stream()
+                        .map(SpcSpecStandard::getId).toList();
+                List<SpcParam> stdLineParams = spcParamMapper.selectList(
+                        new LambdaQueryWrapper<SpcParam>()
+                                .in(SpcParam::getSpecStandardId, specStandardIds)
+                                .eq(SpcParam::getIsActive, true));
+                if (!stdLineParams.isEmpty()) {
+                    List<BigDecimal> values = ctqItems.stream()
+                            .map(i -> {
+                                try {
+                                    return i.getMeasuredValue() == null ? null : new BigDecimal(i.getMeasuredValue().trim());
+                                } catch (Exception e) {
+                                    return null;
+                                }
+                            })
+                            .filter(Objects::nonNull)
+                            .toList();
+                    if (!values.isEmpty()) {
+                        for (SpcParam param : stdLineParams) {
+                            try {
+                                SpcSubgroup sg = new SpcSubgroup();
+                                sg.setOrgId(task.getOrgId());
+                                sg.setParamId(param.getId());
+                                sg.setSubgroupTime(LocalDateTime.now());
+                                sg.setWoNo(task.getWoNo());
+                                sg.setBatchNo(task.getBatchNo());
+                                sg.setDataSource(task.getSource() != null ? task.getSource().toLowerCase() : "fia");
+                                sg.setTaskId(task.getId());
+                                sg.setProductCode(task.getPartNo());
+                                spcSubgroupService.createInNewTx(sg, values);
+                            } catch (Exception e) {
+                                log.warn("FIA->SPC 标准线联动:SPC参数 {} 创建子组失败: {}", param.getId(), e.getMessage(), e);
+                            }
+                        }
+                    }
+                    return; // 标准线匹配成功,不再走 procName 兜底
+                }
+            }
+        }
+        // 优先级3兜底:按 procName 匹配(向后兼容未关联标准线/检验标准的 SPC 参数)
         List<SpcParam> params = spcParamMapper.selectList(
                 new LambdaQueryWrapper<SpcParam>()
                         .eq(SpcParam::getProcName, std.getProcName())
@@ -807,7 +1413,6 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (params.isEmpty()) {
             return;
         }
-        // CTQ 项的数值型测量值(非数值/null 跳过)
         List<BigDecimal> values = ctqItems.stream()
                 .map(i -> {
                     try {
@@ -821,23 +1426,46 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         if (values.isEmpty()) {
             return;
         }
-        // 对每个匹配的 SPC 参数创建子组(spcSubgroupService.create 会算 xbar/rangeR + WECO)
         for (SpcParam param : params) {
             try {
                 SpcSubgroup sg = new SpcSubgroup();
                 sg.setOrgId(task.getOrgId());
                 sg.setParamId(param.getId());
                 sg.setSubgroupTime(LocalDateTime.now());
-                sg.setShift("FIA联动");
                 sg.setWoNo(task.getWoNo());
                 sg.setBatchNo(task.getBatchNo());
-                sg.setDataSource("fia");
+                sg.setDataSource(task.getSource() != null ? task.getSource().toLowerCase() : "fia");
+                sg.setStage("FIRST");
+                sg.setTaskId(task.getId());
+                sg.setProductCode(task.getPartNo());
                 spcSubgroupService.createInNewTx(sg, values);
             } catch (Exception e) {
-                // 单个参数失败不影响其他参数,整体异常由上层 try-catch 兜底
                 log.warn("FIA->SPC 联动:SPC 参数 {} 创建子组失败: {}", param.getId(), e.getMessage(), e);
             }
         }
+    }
+
+    /**
+     * 按 setup(工单 + 物料 + 工序)查询最新一条首件任务,供量产监控前置校验使用。
+     * 至少提供一个有效条件(woNo/partNo/procName),否则返回 null。
+     */
+    @Override
+    public FiaTask findLatestBySetup(String orgId, String woNo, String partNo, String procName) {
+        boolean hasAny = (woNo != null && !woNo.isBlank())
+                || (partNo != null && !partNo.isBlank())
+                || (procName != null && !procName.isBlank());
+        if (!hasAny) {
+            return null;
+        }
+        LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
+        if (orgId != null && !orgId.isBlank() && !"all".equals(orgId)) {
+            w.eq(FiaTask::getOrgId, orgId);
+        }
+        if (woNo != null && !woNo.isBlank()) w.eq(FiaTask::getWoNo, woNo);
+        if (partNo != null && !partNo.isBlank()) w.eq(FiaTask::getPartNo, partNo);
+        if (procName != null && !procName.isBlank()) w.eq(FiaTask::getProcName, procName);
+        w.orderByDesc(FiaTask::getCreatedAt).last("LIMIT 1");
+        return fiaTaskMapper.selectOne(w);
     }
 
     /**
@@ -898,18 +1526,47 @@ public class FiaTaskServiceImpl implements FiaTaskService {
      * 数值型:stdValue±tolerance(支持 ±X、单值 X 视作±X、L~U / L-U 区间)。
      * 枚举型:实测命中 passValues → 合格;命中其它 enumValues → 不合格;否则不可匹配(人工兜底)。
      */
+    private static BigDecimal parseMeasured(String measuredValue) {
+        try {
+            return new BigDecimal(measuredValue.trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String computeItemJudge(FiaInspStdItem rule, String measuredValue) {
         if (rule == null || measuredValue == null || measuredValue.isBlank()) {
             return null;
         }
         String vt = rule.getValueType();
         if ("numeric".equals(vt) || "数值".equals(vt)) {
+            // 标准值兼容:纯数字(中心值) / ≥X / ≤X / =X(单侧界限,无显式公差时以该界限为上下限)
+            String sv = rule.getStdValue() != null ? rule.getStdValue().trim() : "";
             BigDecimal center = null;
-            if (rule.getStdValue() != null && NUM_RE.matcher(rule.getStdValue().trim()).matches()) {
-                center = new BigDecimal(rule.getStdValue().trim());
+            BigDecimal oneSidedLower = null;
+            BigDecimal oneSidedUpper = null;
+            if (NUM_RE.matcher(sv).matches()) {
+                center = new BigDecimal(sv);
+            } else if (sv.startsWith("≥") || sv.startsWith(">=")) {
+                oneSidedLower = new BigDecimal(sv.startsWith("≥") ? sv.substring(1) : sv.substring(2).trim());
+            } else if (sv.startsWith("≤") || sv.startsWith("<=")) {
+                oneSidedUpper = new BigDecimal(sv.startsWith("≤") ? sv.substring(1) : sv.substring(2).trim());
+            } else if (sv.startsWith("=")) {
+                center = new BigDecimal(sv.substring(1).trim());
             }
             String tol = rule.getTolerance();
             if (tol == null || tol.isBlank()) {
+                // 无显式公差:若标准值本身是单侧界限(≥X/≤X),则以此为准做单边界定
+                if (oneSidedLower != null) {
+                    BigDecimal mv = parseMeasured(measuredValue);
+                    if (mv == null) return null;
+                    return mv.compareTo(oneSidedLower) >= 0 ? InspResult.PASS : InspResult.FAIL;
+                }
+                if (oneSidedUpper != null) {
+                    BigDecimal mv = parseMeasured(measuredValue);
+                    if (mv == null) return null;
+                    return mv.compareTo(oneSidedUpper) <= 0 ? InspResult.PASS : InspResult.FAIL;
+                }
                 return null;
             }
             String t = tol.trim();
@@ -1189,6 +1846,17 @@ public class FiaTaskServiceImpl implements FiaTaskService {
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    /** 判断字符串是否为合法 UUID(org_id 列为 uuid 类型,非法值直接查会 500) */
+    private static boolean isValidUuid(String s) {
+        if (s == null || s.isBlank()) return false;
+        try {
+            UUID.fromString(s);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     private static String sha256(String content) {

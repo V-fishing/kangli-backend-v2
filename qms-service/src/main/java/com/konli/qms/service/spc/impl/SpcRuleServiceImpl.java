@@ -1,6 +1,9 @@
 package com.konli.qms.service.spc.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.domain.spc.entity.SpcRule;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
@@ -10,6 +13,7 @@ import com.konli.qms.service.spc.SpcRuleService;
 import com.konli.qms.service.spc.dto.SpcRuleTriggerVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +28,18 @@ public class SpcRuleServiceImpl implements SpcRuleService {
     @Override
     public List<SpcRule> list() {
         return spcRuleMapper.selectList(null);
+    }
+
+    @Override
+    public PageResult<SpcRule> listPage(String keyword, int page, int size) {
+        LambdaQueryWrapper<SpcRule> w = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(SpcRule::getRuleCode, keyword)
+                    .or().like(SpcRule::getRuleName, keyword));
+        }
+        w.orderByAsc(SpcRule::getRuleCode);
+        IPage<SpcRule> ip = spcRuleMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
     }
 
     @Override

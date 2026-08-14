@@ -1,6 +1,9 @@
 package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
@@ -68,6 +71,25 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
     }
 
     @Override
+    public PageResult<QmsFmeaRisk> listPage(String status, String keyword, int page, int size) {
+        LambdaQueryWrapper<QmsFmeaRisk> w = new LambdaQueryWrapper<>();
+        if (!CompanyContext.isAdmin()) {
+            w.eq(QmsFmeaRisk::getOrgId, currentOrgId());
+        }
+        if (StringUtils.hasText(status)) {
+            w.eq(QmsFmeaRisk::getStatus, status);
+        }
+        if (StringUtils.hasText(keyword)) {
+            w.and(k -> k.like(QmsFmeaRisk::getProcess, keyword)
+                    .or().like(QmsFmeaRisk::getProduct, keyword)
+                    .or().like(QmsFmeaRisk::getFailureMode, keyword));
+        }
+        w.orderByDesc(QmsFmeaRisk::getRpn).orderByDesc(QmsFmeaRisk::getCreatedAt);
+        IPage<QmsFmeaRisk> ip = qmsFmeaRiskMapper.selectPage(new Page<>(page, size), w);
+        return new PageResult<>(ip.getRecords(), ip.getTotal(), (int) ip.getCurrent(), (int) ip.getSize());
+    }
+
+    @Override
     @Transactional
     public QmsFmeaRisk create(QmsFmeaRisk risk) {
         risk.setOrgId(currentOrgId());
@@ -85,7 +107,36 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         recordTrack(risk.getId(), null, risk.getStatus(),
                 "创建风险项" + (risk.getHighRiskFlag() ? "(高风险)" : ""),
                 "类型=" + risk.getFmeaType() + "; 工序=" + risk.getProcess());
+        // 新建即指派责任人 -> 通知具体责任人
+        if (StringUtils.hasText(risk.getOwnerUserId())) {
+            notifyOwner(risk, "FMEA风险项已指派给您");
+        }
         return risk;
+    }
+
+    @Override
+    @Transactional
+    public void createAuto(String srcType, String srcId, String orgId, String product, String process, String remark, String severity) {
+        QmsFmeaRisk risk = new QmsFmeaRisk();
+        risk.setOrgId(orgId);
+        risk.setFmeaType("PFMEA");
+        risk.setProduct(product);
+        risk.setProcess(process);
+        risk.setFailureMode(remark);
+        risk.setSeverityS(severityValue(severity));
+        // 来源标记写入 failureMode 前缀,便于追溯
+        if (srcType != null) {
+            risk.setFailureMode("[" + srcType + ":" + srcId + "] " + (remark == null ? "" : remark));
+        }
+        create(risk);
+    }
+
+    /** 严重度中文 -> 数值(严重=8, 一般=5, 轻微=3, 默认 5)。 */
+    private short severityValue(String severity) {
+        if ("严重".equals(severity)) return 8;
+        if ("轻微".equals(severity)) return 3;
+        if ("一般".equals(severity)) return 5;
+        return 5;
     }
 
     @Override
@@ -99,6 +150,23 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         }
         if (StringUtils.hasText(risk.getOwner())) {
             existing.setOwner(risk.getOwner());
+            measureChanged = true;
+        }
+        if (risk.getOwnerDept() != null) {
+            existing.setOwnerDept(risk.getOwnerDept());
+            measureChanged = true;
+        }
+        if (risk.getOwnerDeptCode() != null) {
+            existing.setOwnerDeptCode(risk.getOwnerDeptCode());
+            measureChanged = true;
+        }
+        // 责任人(具体用户)变更 -> 通知新责任人
+        boolean ownerUserChanged = false;
+        if (StringUtils.hasText(risk.getOwnerUserId())) {
+            if (!risk.getOwnerUserId().equals(existing.getOwnerUserId())) {
+                ownerUserChanged = true;
+            }
+            existing.setOwnerUserId(risk.getOwnerUserId());
             measureChanged = true;
         }
         if (risk.getTargetDate() != null) {
@@ -136,6 +204,10 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         if (measureChanged) {
             recordTrack(existing.getId(), null, existing.getStatus(),
                     "更新纠正措施/责任人/目标日期", "措施=" + existing.getAction());
+        }
+        // 责任人变更 -> 通知新责任人
+        if (ownerUserChanged) {
+            notifyOwner(existing, "FMEA风险项责任人已变更为给您");
         }
         return existing;
     }
@@ -298,10 +370,31 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
     }
 
     private void notifyOverdue(QmsFmeaRisk r, long days) {
-        String roleCode = days >= 14 ? "qmanager" : "sqe";
-        notificationService.notifyRoles(List.of(roleCode),
+        String ev = days >= 14 ? "sqm_fmea_overdue_escalate" : "sqm_fmea_overdue";
+        notificationService.notify("sqm", ev,
                 "FMEA措施超期提醒",
                 "FMEA风险项 " + r.getRiskNo() + " 措施超期" + days + "天,请尽快处理。",
-                "fmea_overdue", r.getId(), "/sqm/fmea", null);
+                "fmea_overdue", r.getId(), "/sqm/fmea");
+    }
+
+    /** 指派/变更责任人时,向具体责任人发送站内信(ownerUserId 非空才通知)。 */
+    private void notifyOwner(QmsFmeaRisk r, String actionWord) {
+        if (!StringUtils.hasText(r.getOwnerUserId())) return;
+        String userName = resolveUserName(r.getOwnerUserId());
+        notificationService.notifyUser(r.getOwnerUserId(),
+                "FMEA风险项责任指派",
+                "FMEA风险项 " + r.getRiskNo() + "（" + (r.getProcess() != null ? r.getProcess() : "—") +
+                        "）" + actionWord + (userName != null ? "：" + userName : "") + "，请及时处理。",
+                "sqm_fmea", r.getId(), "/sqm/fmea");
+    }
+
+    /** 按 user_id 反查真实姓名(失败返回 null,不阻断)。 */
+    private String resolveUserName(String userId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT real_name FROM ops.sys_user WHERE id::text = ? LIMIT 1", String.class, userId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
