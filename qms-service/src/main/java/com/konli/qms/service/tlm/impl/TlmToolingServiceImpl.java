@@ -83,6 +83,19 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         if (t.getBindCount() == null) t.setBindCount(0);
         if (t.getLocked() == null) t.setLocked(false);
         toolingMapper.insert(t);
+        // 工装投用(新建首次置 IN_USE)强制触发首件验证: 仅当维护产品编码+工序时自动建 TOOLING 任务
+        if ("IN_USE".equals(t.getStatus()) && t.getProductCode() != null && !t.getProductCode().isBlank()
+                && t.getProcName() != null && !t.getProcName().isBlank()) {
+            try {
+                fiaTaskService.createFromTooling(
+                        t.getOrgId(), t.getId(), null, t.getProductCode(), t.getProcName(),
+                        t.getToolName(), null, "工装投用后", null, t.getSupplierId(),
+                        String.format("工装 %s(%s) 投用后自动触发首件检验", t.getToolName(), t.getToolNo()));
+            } catch (Exception ex) {
+                // 投用主流程不阻断: 标准缺失等异常仅告警,留给台账"待首件"强提醒人工补建
+                log.warn("[TLM→FIA] 工装 {} 投用首件自动触发失败(可人工补建): {}", t.getToolNo(), ex.getMessage());
+            }
+        }
         return t;
     }
 
@@ -253,6 +266,8 @@ public class TlmToolingServiceImpl implements TlmToolingService {
                 t.getToolName(),
                 null, // lineName 兜底
                 "工装维修后",
+                null, // batchNo 自动触发场景兜底生成
+                t.getSupplierId(),
                 String.format("工装 %s(%s) 维修完成后自动触发首件检验", t.getToolName(), t.getToolNo())
         );
         log.info("[TLM→FIA] 工装 {} 维修完成,已触发首件检验任务", t.getToolNo());

@@ -708,12 +708,13 @@ public class FiaTaskServiceImpl implements FiaTaskService {
      * 工装触发首件检验任务(source=TOOLING)。
      * 通过 tooling.productCode(即 partNo) + procName 调用 matchStd 定位 FIA 标准，
      * woNo 为空时自动生成，复用 create 全流程(工单锁定+标准匹配+待检通知+SPC联动)。
+     * batchNo 为空时兜底生成(自动触发场景无人工批次)，前端人工创建时强制必填。
      */
     @Override
     @Transactional
     public FiaTask createFromTooling(String orgId, String toolId, String woNo, String partNo,
                                      String procName, String productName, String lineName,
-                                     String triggerType, String remark) {
+                                     String triggerType, String batchNo, String supplierId, String remark) {
         // 前置校验: 必须有产品编码和工序名称才能匹配标准
         if (partNo == null || partNo.isBlank()) {
             throw new BusinessException(400, "工装缺少产品编码(product_code)，无法匹配 FIA 检验标准");
@@ -728,6 +729,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
                     String.format("未找到检验标准(产品编码=%s, 工序=%s)，请先在 FIA 标准库中创建对应标准", partNo, procName));
         }
 
+        // 批次号: 人工创建必填(前端校验)，自动触发场景兜底生成，确保与生产批次绑定可追溯
+        String finalBatchNo = (batchNo != null && !batchNo.isBlank()) ? batchNo
+                : String.format("TOOLING-%s-%d", toolId == null ? "NA" : toolId.substring(0, Math.min(8, toolId.length())), System.currentTimeMillis());
+
         FiaTask task = new FiaTask();
         task.setOrgId(orgId);
         task.setToolId(toolId);
@@ -739,10 +744,26 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         task.setTriggerType(triggerType != null && !triggerType.isBlank() ? triggerType : "工装维修后");
         task.setSource("TOOLING");
         task.setStdId(std.getId());
+        task.setBatchNo(finalBatchNo);
+        if (supplierId != null && !supplierId.isBlank()) task.setSupplierId(supplierId);
         task.setRemark(remark != null && !remark.isBlank() ? remark
                 : String.format("工装首件检验(触发类型:%s)", task.getTriggerType()));
 
         return create(task);
+    }
+
+    /**
+     * 该工装是否存在「待处理」的工装首件任务(source=TOOLING 且未完成)。
+     * 用于工装台账「待首件」强提醒判定。
+     */
+    @Override
+    public boolean hasPendingToolingFirst(String toolId) {
+        if (toolId == null || toolId.isBlank()) return false;
+        long cnt = fiaTaskMapper.selectCount(new LambdaQueryWrapper<FiaTask>()
+                .eq(FiaTask::getToolId, toolId)
+                .eq(FiaTask::getSource, "TOOLING")
+                .notIn(FiaTask::getStatus, "已完成", "已作废"));
+        return cnt > 0;
     }
 
     /** 推送待检通知给检验员/班组长(使用 NotificationService 标准接口)。 */

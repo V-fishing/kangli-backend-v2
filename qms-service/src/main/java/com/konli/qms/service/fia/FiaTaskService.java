@@ -128,5 +128,8 @@ public interface FiaTaskService {
      */
     FiaTask createFromTooling(String orgId, String toolId, String woNo, String partNo,
                               String procName, String productName, String lineName,
-                              String triggerType, String remark);
+                              String triggerType, String batchNo, String supplierId, String remark);
+
+    /** 该工装是否存在待处理的工装首件任务(用于台账「待首件」强提醒)。 */
+    boolean hasPendingToolingFirst(String toolId);
 }

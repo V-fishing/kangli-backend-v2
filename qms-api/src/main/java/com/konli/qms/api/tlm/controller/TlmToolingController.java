@@ -69,6 +69,14 @@ public class TlmToolingController {
         return R.ok(versionService.listByTool(id));
     }
 
+    /** 工装是否存在待处理的工装首件任务(用于台账「待首件」强提醒)。 */
+    @GetMapping("/tooling/{id}/pending-first")
+    @PreAuthorize("hasAuthority('tlm.tooling.list')")
+    public R<Map<String, Object>> pendingFirst(@PathVariable String id) {
+        boolean pending = fiaTaskService.hasPendingToolingFirst(id);
+        return R.ok(Map.of("pending", pending));
+    }
+
     @PostMapping("/tooling/{id}/version")
     @PreAuthorize("hasAuthority('tlm.tooling.edit')")
     public R<TlmToolVersion> addVersion(@PathVariable String id, @RequestBody TlmToolVersion version) {
@@ -88,6 +96,8 @@ public class TlmToolingController {
                     tooling.getToolName(),
                     null,
                     "工装变更后",
+                    null, // batchNo 自动触发场景兜底生成
+                    tooling.getSupplierId(),
                     String.format("工装 %s(%s) 版本变更(V%s)后自动触发首件检验",
                             tooling.getToolName(), tooling.getToolNo(), saved.getVersionNo())
             );

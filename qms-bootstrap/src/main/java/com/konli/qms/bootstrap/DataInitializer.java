@@ -320,6 +320,7 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.repair", "工装送修"));
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.lock", "工装锁定"));
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.bind", "工装绑定"));
+        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.first", "创建首件"));
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.tooling.export", "台账导出"));
         // 维保按钮 5
         assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.plan.create", "保养计划新建"));

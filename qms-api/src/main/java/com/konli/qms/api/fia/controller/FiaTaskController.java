@@ -2,6 +2,7 @@ package com.konli.qms.api.fia.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.api.fia.dto.CreateFiaTaskRequest;
+import com.konli.qms.api.fia.dto.CreateFromToolingRequest;
 import com.konli.qms.api.fia.dto.InspItemResultRequest;
 import com.konli.qms.api.fia.dto.SignRequest;
 import com.konli.qms.service.fia.dto.ProductSearchResult;
@@ -19,6 +20,8 @@ import com.konli.qms.domain.fia.entity.FiaTask;
 import com.konli.qms.domain.fia.mapper.FiaInspPlanMapper;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
+import com.konli.qms.domain.tlm.entity.TlmTooling;
+import com.konli.qms.domain.tlm.mapper.TlmToolingMapper;
 import com.konli.qms.service.fia.AqlSamplingUtil;
 import com.konli.qms.service.fia.FiaDashboardService;
 import com.konli.qms.service.fia.FiaTaskService;
@@ -52,6 +55,7 @@ public class FiaTaskController {
     private final FiaDashboardService fiaDashboardService;
     private final FiaInspPlanMapper fiaInspPlanMapper;
     private final SqmIncomingLotMapper sqmIncomingLotMapper;
+    private final TlmToolingMapper tlmToolingMapper;
 
     /** FIA 看板:今日任务/完成数、合格率、超时数、状态分布、近7天趋势。 */
     @GetMapping("/dashboard")
@@ -189,6 +193,35 @@ public class FiaTaskController {
         task.setRemark(req.getRemark());
         task.setCategory(req.getCategory());
         return R.ok(fiaTaskService.create(task));
+    }
+
+    /**
+     * 工装首件检验任务创建(人工入口)。
+     * 由前端「新建检验任务 / 工装首件」分支或工装台账「创建首件」按钮调用。
+     * 按 toolId 取工装档案的 product_code + proc_name 自动匹配 FIA 标准，批次号必填(与生产批次绑定)。
+     */
+    @PostMapping("/from-tooling")
+    @PreAuthorize("hasAuthority('fia.task.create')")
+    public R<FiaTask> createFromTooling(@Valid @RequestBody CreateFromToolingRequest req) {
+        TlmTooling tooling = tlmToolingMapper.selectById(req.getToolId());
+        if (tooling == null) {
+            throw new com.konli.qms.common.exception.BusinessException(400, "工装不存在");
+        }
+        FiaTask task = fiaTaskService.createFromTooling(
+                req.getOrgId(),
+                tooling.getId(),
+                null, // woNo 自动生成
+                tooling.getProductCode(),
+                tooling.getProcName(),
+                tooling.getToolName(),
+                null, // lineName 兜底
+                req.getTriggerType(),
+                req.getBatchNo(),
+                tooling.getSupplierId(),
+                req.getRemark() != null && !req.getRemark().isBlank()
+                        ? req.getRemark()
+                        : String.format("工装 %s(%s) 人工发起首件检验", tooling.getToolName(), tooling.getToolNo()));
+        return R.ok(task);
     }
 
     @PostMapping("/{id}/items")
