@@ -4,6 +4,8 @@ import com.konli.qms.common.api.R;
 import com.konli.qms.domain.tlm.entity.TlmMaintPlan;
 import com.konli.qms.domain.tlm.entity.TlmMaintRecord;
 import com.konli.qms.domain.tlm.entity.TlmTooling;
+import com.konli.qms.domain.tlm.entity.TlmScrap;
+import com.konli.qms.domain.tlm.entity.TlmRepair;
 import com.konli.qms.domain.tlm.entity.TlmToolProduct;
 import com.konli.qms.domain.tlm.entity.TlmToolVersion;
 import com.konli.qms.domain.tlm.mapper.TlmToolProductMapper;
@@ -198,6 +200,22 @@ public class TlmToolingController {
         return R.ok();
     }
 
+    /** 维修工单填写措施: PENDING -> REPAIRING。 */
+    @PostMapping("/tooling/{id}/repair-fill")
+    @PreAuthorize("hasAuthority('tlm.tooling.repair')")
+    public R<Void> repairFill(@PathVariable String id, @RequestParam(required = false) String measure) {
+        toolingService.repairFill(id, measure);
+        return R.ok();
+    }
+
+    /** 维修完成(措施已填): REPAIRING -> DONE。 */
+    @PostMapping("/tooling/{id}/repair-done")
+    @PreAuthorize("hasAuthority('tlm.tooling.repair')")
+    public R<Void> repairDone(@PathVariable String id) {
+        toolingService.repairDone(id);
+        return R.ok();
+    }
+
     @PostMapping("/tooling/{id}/lock")
     @PreAuthorize("hasAuthority('tlm.tooling.lock')")
     public R<Void> lock(@PathVariable String id, @RequestParam boolean locked) {
@@ -231,6 +249,44 @@ public class TlmToolingController {
     public R<Void> rejectScrap(@PathVariable String scrapId) {
         toolingService.onScrapRejected(scrapId);
         return R.ok();
+    }
+
+    // ===== 维修审批中心回调 =====
+    @PostMapping("/repair/{repairId}/approve")
+    @PreAuthorize("hasAuthority('tlm.repair.approve')")
+    public R<Void> approveRepair(@PathVariable String repairId) {
+        toolingService.onRepairApproved(repairId);
+        return R.ok();
+    }
+
+    @PostMapping("/repair/{repairId}/reject")
+    @PreAuthorize("hasAuthority('tlm.repair.approve')")
+    public R<Void> rejectRepair(@PathVariable String repairId) {
+        toolingService.onRepairRejected(repairId);
+        return R.ok();
+    }
+
+    // ===== 报废单查询 =====
+    @GetMapping("/scrap/page")
+    @PreAuthorize("hasAuthority('tlm.tooling.scrap')")
+    public R<com.konli.qms.common.api.PageResult<TlmScrap>> scrapPage(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String scrapNo,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(toolingService.scrapPage(keyword, scrapNo, status, page, size));
+    }
+
+    // ===== 维修工单查询 =====
+    @GetMapping("/repair/page")
+    @PreAuthorize("hasAuthority('tlm.repair.list')")
+    public R<com.konli.qms.common.api.PageResult<TlmRepair>> repairPage(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return R.ok(toolingService.repairPage(keyword, status, page, size));
     }
 
     // ===== 保养 =====

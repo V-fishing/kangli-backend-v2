@@ -34,4 +34,11 @@ public class TlmScrap extends BaseEntity {
 
     @TableField("approval_id")
     private String approvalId;
+
+    /** 非持久化: 列表展示用,由 scrapPage 回填关联工装信息。 */
+    @TableField(exist = false)
+    private String toolNo;
+
+    @TableField(exist = false)
+    private String toolName;
 }

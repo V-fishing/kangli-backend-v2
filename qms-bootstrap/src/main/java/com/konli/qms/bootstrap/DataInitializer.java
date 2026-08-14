@@ -305,10 +305,12 @@ public class DataInitializer implements CommandLineRunner {
      *  与 V170 Flyway 脚本互补: Flyway 负责多环境基线, 本方法保证启动即幂等补权(包括新增角色场景)。 */
     private void seedTlmPerms() {
         String tlmMenu = ensureMenu("tlm", "工装管理", "/tlm", "tlm/index", 10);
-        String toolingMenu = ensureMenu("tlm.tooling.list", "工装台账", "tooling", "tlm/Tooling", 1);
-        String maintMenu = ensureMenu("tlm.maint.list", "工装维保", "maint", "tlm/Maint", 2);
-        String abnormalMenu = ensureMenu("tlm.abnormal.list", "工装异常", "abnormals", "tlm/Abnormal", 3);
+        String toolingMenu = ensureChildMenu(tlmMenu, "tlm.tooling.list", "工装台账", "tooling", "tlm/Tooling", 1);
+        String maintMenu = ensureChildMenu(tlmMenu, "tlm.maint.list", "工装维保", "maint", "tlm/Maint", 2);
+        String abnormalMenu = ensureChildMenu(tlmMenu, "tlm.abnormal.list", "工装异常", "abnormals", "tlm/Abnormal", 3);
+        String scrapMenu = ensureChildMenu(tlmMenu, "tlm.scrap.list", "报废管理", "scraps", "tlm/Scraps", 4);
         assignRoleMenuByCode("sysadmin", tlmMenu);
+        assignRoleMenuByCode("sysadmin", scrapMenu);
         assignRoleMenuByCode("sysadmin", toolingMenu);
         assignRoleMenuByCode("sysadmin", maintMenu);
         assignRoleMenuByCode("sysadmin", abnormalMenu);
@@ -328,9 +330,7 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.plan.delete", "保养计划删除"));
         assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.record.create", "保养记录登记"));
         assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.record.delete", "保养记录删除"));
-        // 维修/报废按钮 3
-        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.repair.create", "维修工单新建"));
-        assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.repair.complete", "维修完成"));
+        // 报废按钮 1
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.scrap.approve", "报废审批"));
     }
 

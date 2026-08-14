@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
+import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.tlm.entity.TlmRepair;
 import com.konli.qms.domain.tlm.entity.TlmScrap;
@@ -16,6 +17,8 @@ import com.konli.qms.domain.tlm.mapper.TlmToolingMapper;
 import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.fia.FiaTaskService;
 import com.konli.qms.service.tlm.TlmToolingService;
+import com.konli.qms.service.sqm.SqmAuditApprovalCfgService;
+import com.konli.qms.service.sqm.dto.AuditorDef;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,9 +38,16 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     private final TlmRepairMapper repairMapper;
     private final TlmScrapMapper scrapMapper;
     private final TlmToolWoBindMapper bindMapper;
+    private static final String MZ_ORG = "019f701f-0411-71ed-9eac-ab9440335832";
+
     private final NotificationService notificationService;
     private final JdbcTemplate jdbcTemplate;
     private final FiaTaskService fiaTaskService;
+    private final SqmAuditApprovalCfgService approvalCfgService;
+
+    /** 工装报废审批在「系统管理 › 审核配置」登记的 auditType,须与前端 AuditApprovalConfig.vue 的 TLM_AUDIT_TYPE 一致。 */
+    private static final String TLM_SCRAP_AUDIT_TYPE = "工装报废审核";
+    private static final String TLM_REPAIR_AUDIT_TYPE = "工装维修审核";
 
     private String curOrg() {
         try {
@@ -117,8 +127,10 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void repair(String id, String faultDesc, String approverId) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
-        t.setStatus("REPAIRING");
-        toolingMapper.updateById(t);
+        // 配置即权威:未显式指定审批人时,从「系统管理 › 审核配置」的「工装维修审核」节点读取默认审批人
+        if (approverId == null || approverId.isBlank()) {
+            approverId = resolveRepairApprovers();
+        }
         TlmRepair r = new TlmRepair();
         r.setOrgId(t.getOrgId());
         r.setToolId(id);
@@ -128,10 +140,85 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         r.setStatus("PENDING");
         r.setCreatedBy(curUser());
         repairMapper.insert(r);
+        // 工装保持原状态, 待审批中心通过后(repair-approved)才置 REPAIRING
         if (approverId != null && !approverId.isBlank()) {
-            notificationService.notifyUser(approverId, "工装送修待处理",
-                    "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 已送修,请处理维修工单",
+            notificationService.notifyUser(approverId, "工装送修待审批",
+                    "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 发起送修,请审批",
                     "tlm_repair", r.getId(), "/tlm/tooling/" + id);
+        } else {
+            // 无审批人配置: 直接置维修中(退化流程, 不阻断主流程)
+            t.setStatus("REPAIRING");
+            toolingMapper.updateById(t);
+            log.warn("[TLM] 工装 {} 发起送修但未配置审批人(审核配置中无「工装维修审核」节点),流程待人工介入", t.getToolNo());
+        }
+    }
+
+    /**
+     * 从审核配置读取「工装维修审核」节点的默认审批人(userIds 逗号串)。
+     * 与 resolveScrapApprovers 复用同一 SqmAuditApprovalCfgService.resolve 范式。
+     */
+    private String resolveRepairApprovers() {
+        try {
+            var auditors = approvalCfgService.resolve(TLM_REPAIR_AUDIT_TYPE);
+            if (auditors == null || auditors.isEmpty()) return null;
+            StringBuilder sb = new StringBuilder();
+            for (AuditorDef a : auditors) {
+                if (a.getUserIds() != null && !a.getUserIds().isEmpty()) {
+                    for (String uid : a.getUserIds()) {
+                        if (uid != null && !uid.isBlank()) {
+                            if (sb.length() > 0) sb.append(",");
+                            sb.append(uid.trim());
+                        }
+                    }
+                } else if (a.getUserId() != null && !a.getUserId().isBlank()) {
+                    if (sb.length() > 0) sb.append(",");
+                    sb.append(a.getUserId().trim());
+                }
+            }
+            return sb.length() > 0 ? sb.toString() : null;
+        } catch (Exception e) {
+            log.warn("[TLM] 读取工装维修审批配置失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    @Transactional
+    public void onRepairApproved(String repairId) {
+        TlmRepair r = repairMapper.selectById(repairId);
+        if (r == null) return;
+        assertRepairApprover(r);
+        r.setStatus("REPAIRING");
+        repairMapper.updateById(r);
+        TlmTooling t = toolingMapper.selectById(r.getToolId());
+        if (t != null && !"REPAIRING".equals(t.getStatus())) {
+            t.setStatus("REPAIRING");
+            toolingMapper.updateById(t);
+        }
+    }
+
+    @Override
+    @Transactional
+    public void onRepairRejected(String repairId) {
+        TlmRepair r = repairMapper.selectById(repairId);
+        if (r == null) return;
+        assertRepairApprover(r);
+        r.setStatus("REJECTED");
+        repairMapper.updateById(r);
+    }
+
+    /**
+     * 维修审批回调身份校验:当前登录用户必须命中维修单指定审批人(OR 语义),否则抛 403。
+     */
+    private void assertRepairApprover(TlmRepair r) {
+        String approverId = r.getApproverId();
+        if (approverId == null || approverId.isBlank()) return;
+        String cur = curUser();
+        if (cur == null) throw new BusinessException(403, "当前登录用户非该维修单指定审批人");
+        boolean allowed = java.util.Arrays.stream(approverId.split(","))
+                .map(String::trim).anyMatch(id -> id.equals(cur));
+        if (!allowed) {
+            throw new BusinessException(403, "当前登录用户非该维修单指定审批人");
         }
     }
 
@@ -140,6 +227,10 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void scrap(String id, String scrapMethod, String reason, String approverId) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
+        // 配置即权威:未显式指定审批人时,从「系统管理 › 审核配置」的「工装报废审核」节点读取默认审批人
+        if (approverId == null || approverId.isBlank()) {
+            approverId = resolveScrapApprovers();
+        }
         TlmScrap s = new TlmScrap();
         s.setOrgId(t.getOrgId());
         s.setToolId(id);
@@ -154,6 +245,37 @@ public class TlmToolingServiceImpl implements TlmToolingService {
             notificationService.notifyUser(approverId, "工装报废待审批",
                     "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 发起报废,请审批",
                     "tlm_scrap", s.getId(), "/tlm/tooling/" + id);
+        } else {
+            log.warn("[TLM] 工装 {} 发起报废但未配置审批人(审核配置中无「工装报废审核」节点),流程待人工介入", t.getToolNo());
+        }
+    }
+
+    /**
+     * 从审核配置读取「工装报废审核」节点的默认审批人(userIds 逗号串)。
+     * 复用 SqmAuditApprovalCfgService.resolve 范式(与 SQM 会签一致);无配置返回 null(不阻断主流程)。
+     */
+    private String resolveScrapApprovers() {
+        try {
+            var auditors = approvalCfgService.resolve(TLM_SCRAP_AUDIT_TYPE);
+            if (auditors == null || auditors.isEmpty()) return null;
+            StringBuilder sb = new StringBuilder();
+            for (AuditorDef a : auditors) {
+                if (a.getUserIds() != null && !a.getUserIds().isEmpty()) {
+                    for (String uid : a.getUserIds()) {
+                        if (uid != null && !uid.isBlank()) {
+                            if (sb.length() > 0) sb.append(",");
+                            sb.append(uid.trim());
+                        }
+                    }
+                } else if (a.getUserId() != null && !a.getUserId().isBlank()) {
+                    if (sb.length() > 0) sb.append(",");
+                    sb.append(a.getUserId().trim());
+                }
+            }
+            return sb.length() > 0 ? sb.toString() : null;
+        } catch (Exception e) {
+            log.warn("[TLM] 读取工装报废审批配置失败: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -162,12 +284,33 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void onScrapApproved(String scrapId) {
         TlmScrap s = scrapMapper.selectById(scrapId);
         if (s == null) return;
+        assertScrapApprover(s);
         s.setStatus("APPROVED");
         scrapMapper.updateById(s);
         TlmTooling t = toolingMapper.selectById(s.getToolId());
         if (t != null) {
             t.setStatus("SCRAPPED");
             toolingMapper.updateById(t);
+        }
+        // 报废审批通过即归档(留存全生命周期): 写 tlm_scrap_archive, 供归档中心查询
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO ops.tlm_scrap_archive (id, org_id, archive_no, scrap_id, tool_id, scrap_no, tool_no, tool_name, scrap_method, reason, retention_until, report_hash, pdf_ref, status, created_by) "
+                + "VALUES (ops.gen_uuid_v7(), ?::uuid, ?, ?, ?::uuid, ?, ?, ?, ?, ?, (now() + interval '10 year')::date, ?, 'placeholder://tlm-scrap', '已归档', ?) "
+                + "ON CONFLICT (scrap_id) DO NOTHING",
+                (t != null && t.getOrgId() != null) ? t.getOrgId() : (s.getOrgId() != null ? s.getOrgId() : MZ_ORG),
+                "TLM-SCA-" + System.currentTimeMillis(),
+                scrapId,
+                s.getToolId(),
+                s.getScrapNo(),
+                t != null ? t.getToolNo() : null,
+                t != null ? t.getToolName() : null,
+                s.getScrapMethod(),
+                s.getReason(),
+                ("sha256:" + scrapId),
+                curUser());
+        } catch (Exception e) {
+            log.warn("工装报废归档写入失败: {}", e.getMessage());
         }
     }
 
@@ -176,8 +319,25 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void onScrapRejected(String scrapId) {
         TlmScrap s = scrapMapper.selectById(scrapId);
         if (s == null) return;
+        assertScrapApprover(s);
         s.setStatus("REJECTED");
         scrapMapper.updateById(s);
+    }
+
+    /**
+     * 报废审批回调身份校验:当前登录用户必须命中报废单指定审批人(OR 语义,approver_id 为逗号串),
+     * 否则抛 403 防止越权签字。与 SQM 会签 approve 校验范式一致;approver_id 为空(未配置)时退化为不校验。
+     */
+    private void assertScrapApprover(TlmScrap s) {
+        String approverId = s.getApproverId();
+        if (approverId == null || approverId.isBlank()) return;
+        String cur = curUser();
+        if (cur == null) throw new BusinessException(403, "当前登录用户非该报废单指定审批人");
+        boolean allowed = java.util.Arrays.stream(approverId.split(","))
+                .map(String::trim).anyMatch(id -> id.equals(cur));
+        if (!allowed) {
+            throw new BusinessException(403, "当前登录用户非该报废单指定审批人");
+        }
     }
 
     @Override
@@ -194,6 +354,14 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void bind(String id, String woNo) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
+        // 工装首件质量门禁(quality gate): 投用/维修/变更后若仍存在未完成的工装首件任务,
+        // 且工装档案完整(产品编码+工序均维护,标准可匹配、首件任务本应已生成),则禁止派工,
+        // 强制先完成首件检验。档案不完整(标准无法匹配、首件任务本就未生成)属数据问题,豁免门禁。
+        boolean archComplete = t.getProductCode() != null && !t.getProductCode().isBlank()
+                && t.getProcName() != null && !t.getProcName().isBlank();
+        if (archComplete && fiaTaskService.hasPendingToolingFirst(id)) {
+            throw new BusinessException("工装存在未完成的首件检验任务，请先完成工装首件检验后再派工");
+        }
         TlmToolWoBind b = new TlmToolWoBind();
         b.setOrgId(t.getOrgId());
         b.setToolId(id);
@@ -206,14 +374,13 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         boolean overLife = t.getDesignLife() != null && (cnt + 1) >= t.getDesignLife();
         if (overLife) {
             t.setLocked(true);
-            String oid = (t.getOrgId() == null) ? "019f701f-0411-71ed-9eac-ab9440335832" : t.getOrgId();
             try {
-                jdbcTemplate.update(
-                        "INSERT INTO ops.notification_log (org_id, biz_type, biz_id, channel, receiver, content, level, send_status, sent_at) VALUES (?::uuid, 'TLM_LIFE_OVER', ?, '站内', '工装管理员', ?, '提醒', '已发送', now())",
-                        java.util.UUID.fromString(oid), t.getId(),
-                        "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 已达寿命上限,已自动锁定");
+                // 统一走通知配置(module=tlm, event_code=tlm_life_over)解析接收人/渠道(强约束 C2)
+                notificationService.notify("tlm", "tlm_life_over", "工装寿命超限预警",
+                        "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 已达寿命上限,已自动锁定",
+                        "tlm_life_over", t.getId(), "/tlm/tooling/" + t.getId());
             } catch (Exception e) {
-                log.warn("工装寿命预警写入失败: {}", e.getMessage());
+                log.warn("工装寿命预警通知失败: {}", e.getMessage());
             }
         }
         toolingMapper.updateById(t);
@@ -236,6 +403,10 @@ public class TlmToolingServiceImpl implements TlmToolingService {
                 w.isNotNull(TlmTooling::getCalibDueDate)
                         .lt(TlmTooling::getCalibDueDate, LocalDate.now());
                 break;
+            case "maint":
+                w.isNotNull(TlmTooling::getNextMaintDate)
+                        .lt(TlmTooling::getNextMaintDate, LocalDate.now());
+                break;
             default:
                 w.eq(TlmTooling::getLocked, true);
         }
@@ -244,11 +415,46 @@ public class TlmToolingServiceImpl implements TlmToolingService {
 
     @Override
     @Transactional
+    public void repairFill(String id, String measure) {
+        TlmRepair r = repairMapper.selectOne(new LambdaQueryWrapper<TlmRepair>()
+                .eq(TlmRepair::getToolId, id).orderByDesc(TlmRepair::getCreatedAt).last("LIMIT 1"));
+        if (r == null) throw new RuntimeException("未找到该工装的维修工单");
+        // 已结束(已完成/已验证/已驳回)不可再填措施;待处理与维修中均允许回填/补充措施
+        if ("DONE".equals(r.getStatus()) || "VERIFIED".equals(r.getStatus()) || "REJECTED".equals(r.getStatus())) {
+            throw new BusinessException("维修工单已结束，无法填写措施");
+        }
+        r.setMeasure(measure);
+        r.setStatus("REPAIRING");
+        repairMapper.updateById(r);
+    }
+
+    @Override
+    @Transactional
+    public void repairDone(String id) {
+        TlmRepair r = repairMapper.selectOne(new LambdaQueryWrapper<TlmRepair>()
+                .eq(TlmRepair::getToolId, id).orderByDesc(TlmRepair::getCreatedAt).last("LIMIT 1"));
+        if (r == null) throw new RuntimeException("未找到该工装的维修工单");
+        if (!"REPAIRING".equals(r.getStatus())) {
+            throw new BusinessException("维修工单当前不是维修中状态，无法标记完成");
+        }
+        r.setStatus("DONE");
+        repairMapper.updateById(r);
+        // 工装仍保持 REPAIRING, 等待首件验证通过后才恢复在用
+    }
+
+    @Override
+    @Transactional
     public void onRepairCompleted(String id) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
-        if (!"REPAIRING".equals(t.getStatus())) {
-            throw new RuntimeException("工装当前不是维修中状态，无法执行维修完成");
+        if (!"REPAIRING".equals(t.getStatus()) && !"DONE".equals(t.getStatus())) {
+            throw new RuntimeException("工装当前不是维修中/已完成维修状态，无法执行验证通过");
+        }
+        TlmRepair r = repairMapper.selectOne(new LambdaQueryWrapper<TlmRepair>()
+                .eq(TlmRepair::getToolId, id).orderByDesc(TlmRepair::getCreatedAt).last("LIMIT 1"));
+        if (r != null && !"VERIFIED".equals(r.getStatus())) {
+            r.setStatus("VERIFIED");
+            repairMapper.updateById(r);
         }
         // 状态恢复为在用
         t.setStatus("IN_USE");
@@ -271,5 +477,71 @@ public class TlmToolingServiceImpl implements TlmToolingService {
                 String.format("工装 %s(%s) 维修完成后自动触发首件检验", t.getToolName(), t.getToolNo())
         );
         log.info("[TLM→FIA] 工装 {} 维修完成,已触发首件检验任务", t.getToolNo());
+    }
+
+    /**
+     * 报废单分页查询。支持按工装编号/名称关键词、报废单号、状态筛选。
+     * 仅返回当前组织数据（curOrg 为空时按 DataScope 全局可见）。
+     */
+    public PageResult<TlmScrap> scrapPage(String keyword, String scrapNo, String status,
+                                          int page, int size) {
+        LambdaQueryWrapper<TlmScrap> w = new LambdaQueryWrapper<>();
+        String org = curOrg();
+        if (org != null) w.eq(TlmScrap::getOrgId, org);
+        if (scrapNo != null && !scrapNo.isBlank()) w.like(TlmScrap::getScrapNo, scrapNo);
+        if (status != null && !status.isBlank()) w.eq(TlmScrap::getStatus, status);
+        w.orderByDesc(TlmScrap::getCreatedAt);
+        IPage<TlmScrap> p = scrapMapper.selectPage(new Page<>(page, size), w);
+        // 回填工装编号/名称,便于报废单列表直接展示(避免前端逐行查工装)
+        for (TlmScrap s : p.getRecords()) {
+            if (s.getToolId() != null) {
+                TlmTooling t = toolingMapper.selectById(s.getToolId());
+                if (t != null) {
+                    s.setToolNo(t.getToolNo());
+                    s.setToolName(t.getToolName());
+                }
+            }
+        }
+        return new PageResult<TlmScrap>(p.getRecords(), p.getTotal(), page, size);
+    }
+
+    /**
+     * 维修工单分页查询。支持按工装编号/名称关键词、状态筛选。
+     * 仅返回当前组织数据（curOrg 为空时按 DataScope 全局可见）；回填工装编号/名称。
+     */
+    @Override
+    public PageResult<TlmRepair> repairPage(String keyword, String status, int page, int size) {
+        LambdaQueryWrapper<TlmRepair> w = new LambdaQueryWrapper<>();
+        String org = curOrg();
+        if (org != null) w.eq(TlmRepair::getOrgId, org);
+        if (status != null && !status.isBlank()) w.eq(TlmRepair::getStatus, status);
+        w.orderByDesc(TlmRepair::getCreatedAt);
+        IPage<TlmRepair> p = repairMapper.selectPage(new Page<>(page, size), w);
+        // 关键词(工装编号/名称)在内存侧过滤: 先回填工装信息再匹配, 避免对 repair 表做 JOIN
+        if (keyword != null && !keyword.isBlank()) {
+            List<TlmRepair> matched = new java.util.ArrayList<>();
+            for (TlmRepair r : p.getRecords()) {
+                TlmTooling t = r.getToolId() != null ? toolingMapper.selectById(r.getToolId()) : null;
+                if (t != null) {
+                    r.setToolNo(t.getToolNo());
+                    r.setToolName(t.getToolName());
+                    if (t.getToolNo().contains(keyword) || (t.getToolName() != null && t.getToolName().contains(keyword))) {
+                        matched.add(r);
+                    }
+                }
+            }
+            long total0 = p.getTotal();
+            return new PageResult<TlmRepair>(matched, total0, page, size);
+        }
+        for (TlmRepair r : p.getRecords()) {
+            if (r.getToolId() != null) {
+                TlmTooling t = toolingMapper.selectById(r.getToolId());
+                if (t != null) {
+                    r.setToolNo(t.getToolNo());
+                    r.setToolName(t.getToolName());
+                }
+            }
+        }
+        return new PageResult<TlmRepair>(p.getRecords(), p.getTotal(), page, size);
     }
 }

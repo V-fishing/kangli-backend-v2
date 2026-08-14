@@ -20,7 +20,9 @@ import com.konli.qms.domain.sqm.mapper.SqmAuditPlanMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeApprovalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
 import com.konli.qms.domain.tlm.entity.TlmScrap;
+import com.konli.qms.domain.tlm.entity.TlmRepair;
 import com.konli.qms.domain.tlm.mapper.TlmScrapMapper;
+import com.konli.qms.domain.tlm.mapper.TlmRepairMapper;
 import com.konli.qms.domain.uop.entity.SysRole;
 import com.konli.qms.service.approval.ApprovalCenterService;
 import com.konli.qms.service.uop.UserService;
@@ -59,6 +61,7 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
     private final SqmAuditApprovalMapper auditApprovalMapper;
     private final SqmAuditPlanMapper auditPlanMapper;
     private final TlmScrapMapper tlmScrapMapper;
+    private final TlmRepairMapper tlmRepairMapper;
     private final UserService userService;
 
     @Override
@@ -203,6 +206,24 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
             d.setApplicant(s.getCreatedBy());
             d.setAppliedAt(s.getCreatedAt());
             d.setUrl("/tlm/tooling/" + s.getToolId());
+            list.add(d);
+        }
+
+        // 6) TLM 工装维修审批(指定审批人 approver_id == 当前用户 且 status=PENDING)
+        List<TlmRepair> repairs = tlmRepairMapper.selectList(new LambdaQueryWrapper<TlmRepair>()
+                .eq(hasOrg, TlmRepair::getOrgId, orgId)
+                .eq(TlmRepair::getApproverId, userId)
+                .eq(TlmRepair::getStatus, "PENDING"));
+        for (TlmRepair r : repairs) {
+            PendingApprovalDTO d = new PendingApprovalDTO();
+            d.setId(r.getId());
+            d.setModule("TLM");
+            d.setBizType("工装维修审批");
+            d.setBizNo(r.getRepairNo());
+            d.setTitle("工装维修审批 · " + (r.getRepairNo() == null ? "" : r.getRepairNo()));
+            d.setApplicant(r.getCreatedBy());
+            d.setAppliedAt(r.getCreatedAt());
+            d.setUrl("/tlm/tooling/" + r.getToolId());
             list.add(d);
         }
 

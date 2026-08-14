@@ -34,4 +34,10 @@ public class TlmRepair extends BaseEntity {
 
     @TableField("verify_task_id")
     private String verifyTaskId;
+
+    @TableField(exist = false)
+    private String toolNo;
+
+    @TableField(exist = false)
+    private String toolName;
 }

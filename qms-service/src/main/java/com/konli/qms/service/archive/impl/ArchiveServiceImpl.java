@@ -134,6 +134,30 @@ public class ArchiveServiceImpl implements ArchiveService {
             unionParts.add(sql.toString());
         }
 
+        // TLM 工装报废归档子查询:archiveNo=archive_no, refId=scrap_id, refNo=scrap_no
+        if (t.isEmpty() || "tlm".equals(t)) {
+            StringBuilder sql = new StringBuilder();
+            sql.append("SELECT 'tlm' AS archive_type, ")
+               .append("a.archive_no AS archive_no, ")
+               .append("a.scrap_id AS ref_id, ")
+               .append("a.scrap_no AS ref_no, ")
+               .append("a.archive_date AS archive_date, ")
+               .append("a.retention_until AS retention_until, ")
+               .append("a.report_hash AS report_hash ")
+               .append("FROM ops.tlm_scrap_archive a ")
+               .append("WHERE a.status != '已作废'");
+            if (kw != null) {
+                sql.append(" AND (a.archive_no LIKE ? OR a.scrap_no LIKE ? OR a.tool_no LIKE ?)");
+                args.add("%" + kw + "%");
+                args.add("%" + kw + "%");
+                args.add("%" + kw + "%");
+            }
+            if (!orgClause.isEmpty()) {
+                sql.append(" AND a.org_id = ").append(orgIdLiteral());
+            }
+            unionParts.add(sql.toString());
+        }
+
         if (unionParts.isEmpty()) {
             return new ArrayList<>();
         }
@@ -299,6 +323,16 @@ public class ArchiveServiceImpl implements ArchiveService {
             if (rows.isEmpty()) return null;
             return mapDetailPatrol(rows.get(0));
         }
+        if ("tlm".equals(t)) {
+            String archOrg = orgQualified();
+            String sql = "SELECT a.archive_no, a.scrap_id, a.scrap_no, a.tool_no, a.tool_name, a.scrap_method, a.reason, "
+                    + "a.archive_date, a.report_hash, a.retention_until, a.status "
+                    + "FROM ops.tlm_scrap_archive a "
+                    + "WHERE a.scrap_id = ? AND a.status != '已作废' ORDER BY a.archive_date DESC LIMIT 1" + archOrg;
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, refId);
+            if (rows.isEmpty()) return null;
+            return mapDetailTlm(rows.get(0));
+        }
         // 默认 fia
         String sql = "SELECT r.report_no, r.task_id, r.wo_no, r.archive_date, r.status, r.pdf_ref, r.report_hash, r.retention_until, "
                 + "t.code AS task_code, t.line_name, t.proc_name, t.product_name, t.supplier_id, t.overall_judge, t.disposition, t.status AS task_status "
@@ -369,6 +403,25 @@ public class ArchiveServiceImpl implements ArchiveService {
         m.put("pdfRef", row.get("pdf_ref"));
         Object pdfRef = row.get("pdf_ref");
         m.put("hasPdf", pdfRef != null && !String.valueOf(pdfRef).startsWith("placeholder://"));
+        return m;
+    }
+
+    private Map<String, Object> mapDetailTlm(Map<String, Object> row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("archiveType", "tlm");
+        m.put("archiveNo", row.get("archive_no"));
+        m.put("refId", row.get("scrap_id"));
+        m.put("refNo", row.get("scrap_no"));
+        m.put("toolNo", row.get("tool_no"));
+        m.put("toolName", row.get("tool_name"));
+        m.put("scrapMethod", row.get("scrap_method"));
+        m.put("reason", row.get("reason"));
+        m.put("archiveDate", toDateStr(row.get("archive_date")));
+        m.put("status", row.get("status"));
+        m.put("reportHash", row.get("report_hash"));
+        m.put("retentionUntil", toDateStr(row.get("retention_until")));
+        m.put("pdfRef", null);
+        m.put("hasPdf", false);
         return m;
     }
 
