@@ -50,7 +50,7 @@ public class SpcParamServiceImpl implements SpcParamService {
     private final SpcParamProductMapper spcParamProductMapper;
 
     @Override
-    public List<SpcParam> list(String productName, String procName) {
+    public List<SpcParam> list(String productName, String procName, String paramSource) {
         List<SpcParam> params = spcParamMapper.selectList(null);
         // 填充 fiaStdItemName(展示用)
         List<String> itemIds = params.stream().map(SpcParam::getFiaStdItemId).filter(StringUtils::hasText).distinct().collect(Collectors.toList());
@@ -114,6 +114,10 @@ public class SpcParamServiceImpl implements SpcParamService {
                 return pn.contains(kw);
             }).collect(Collectors.toList());
         }
+        // 按来源过滤:选中来源时仅返回对应 paramSource 的参数(与产品/工序维度取交集)
+        if (StringUtils.hasText(paramSource)) {
+            params = params.stream().filter(p -> paramSource.equals(p.getParamSource())).collect(Collectors.toList());
+        }
         return params;
     }
 
@@ -130,7 +134,7 @@ public class SpcParamServiceImpl implements SpcParamService {
                         .eq(FiaInspStdItem::getIsDeleted, false));
         if (items.isEmpty()) return List.of();
         // 已有 SPC 参数(fiaStdItemId 精确匹配)按 检验项id 建索引
-        List<SpcParam> all = list(null, null);
+        List<SpcParam> all = list(null, null, null);
         Map<String, SpcParam> existByItem = all.stream()
                 .filter(p -> p.getIsActive() && p.getFiaStdItemId() != null)
                 .collect(Collectors.toMap(SpcParam::getFiaStdItemId, p -> p, (a, b) -> a));
@@ -163,8 +167,8 @@ public class SpcParamServiceImpl implements SpcParamService {
     }
 
     @Override
-    public PageResult<SpcParam> listPage(String productName, String procName, String keyword, int page, int size) {
-        List<SpcParam> all = list(productName, procName);
+    public PageResult<SpcParam> listPage(String productName, String procName, String paramSource, String keyword, int page, int size) {
+        List<SpcParam> all = list(productName, procName, paramSource);
         if (StringUtils.hasText(keyword)) {
             String kw = keyword.trim().toLowerCase();
             all = all.stream().filter(p ->
@@ -394,7 +398,9 @@ public class SpcParamServiceImpl implements SpcParamService {
             param.setSigmaK(new BigDecimal("3"));
             param.setCollectFreq("每日");
             param.setIsActive(true);
-            param.setParamSource("FIA_FIRST");   // 首件任务生成,归属首件 SPC 视图
+            // 来源标记:工装首件任务(source=TOOLING)派生参数归 TOOLING,其余(产线/来料首件)归 FIA_FIRST;
+            // 均归属"首件 SPC"视图,前端按来源筛选可区分工装 SPC。
+            param.setParamSource("TOOLING".equalsIgnoreCase(task.getSource()) ? "TOOLING" : "FIA_FIRST");
 
             // 优先使用标准项的结构化规格;若标准项无结构化规格,回退解析标准值/公差文本
             fillSpecFromStdItem(param);

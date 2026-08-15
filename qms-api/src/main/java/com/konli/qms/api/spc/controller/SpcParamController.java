@@ -29,18 +29,20 @@ public class SpcParamController {
     @GetMapping
     @PreAuthorize("hasAuthority('spc.param.list')")
     public R<List<SpcParam>> list(@RequestParam(required = false) String productName,
-                                  @RequestParam(required = false) String procName) {
-        return R.ok(spcParamService.list(productName, procName));
+                                  @RequestParam(required = false) String procName,
+                                  @RequestParam(required = false) String paramSource) {
+        return R.ok(spcParamService.list(productName, procName, paramSource));
     }
 
     @GetMapping("/page")
     @PreAuthorize("hasAuthority('spc.param.list')")
     public R<PageResult<SpcParam>> page(@RequestParam(required = false) String productName,
                                         @RequestParam(required = false) String procName,
+                                        @RequestParam(required = false) String paramSource,
                                         @RequestParam(required = false) String keyword,
                                         @RequestParam(defaultValue = "1") int page,
                                         @RequestParam(defaultValue = "20") int size) {
-        return R.ok(spcParamService.listPage(productName, procName, keyword, page, size));
+        return R.ok(spcParamService.listPage(productName, procName, paramSource, keyword, page, size));
     }
 
     @PostMapping("/from-fia-task")

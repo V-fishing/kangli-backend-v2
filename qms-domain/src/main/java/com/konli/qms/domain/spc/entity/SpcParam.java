@@ -74,7 +74,7 @@ public class SpcParam extends BaseEntity {
     @TableField("is_active")
     private Boolean isActive;
 
-    /** 参数来源: SAMPLE(抽样任务流程派生/复制) / FIA_FIRST(首件标准库/首件任务生成) / MANUAL(手动新建)。用于首件 SPC 与产品抽样 SPC 视图隔离。 */
+    /** 参数来源: SAMPLE(抽样任务流程派生/复制) / FIA_FIRST(产线/来料首件任务生成) / TOOLING(工装首件任务生成) / MANUAL(手动新建)。FIA_FIRST 与 TOOLING 均归属首件 SPC 视图,前端按来源筛选区分工装 SPC。 */
     @TableField("param_source")
     private String paramSource;
 
