@@ -211,6 +211,7 @@ public class SpcParamServiceImpl implements SpcParamService {
             param.setSpecText("");
         }
         deriveChartable(param);
+        deriveDataType(param);
         spcParamMapper.insert(param);
         upsertProducts(param);
         return param;
@@ -228,6 +229,7 @@ public class SpcParamServiceImpl implements SpcParamService {
             param.setSpecText("");
         }
         deriveChartable(param);
+        deriveDataType(param);
         spcParamMapper.updateById(param);
         // 用户清空关联选择时,前端传 null,但 MyBatis-Plus 默认跳过 null 字段,需显式置 NULL
         if (clearSpecStd && param.getSpecStandardId() == null) {
@@ -333,6 +335,38 @@ public class SpcParamServiceImpl implements SpcParamService {
         param.setChartable(chartable);
     }
 
+    /** 计数型图码集合(P/NP/C/U)。 */
+    private static final java.util.Set<String> COUNT_CHARTS = java.util.Set.of("P", "NP", "C", "U");
+    /** 计量型图码集合(Xbar/R/S/I/MR)。 */
+    private static final java.util.Set<String> MEASURE_CHARTS = java.util.Set.of("Xbar", "R", "S", "I", "MR");
+
+    /** 由 chartCandidates 推断 dataType,并校验计量/计数为不同类型,不可混选。 */
+    private void deriveDataType(SpcParam param) {
+        String raw = param.getChartCandidates();
+        if (!StringUtils.hasText(raw)) {
+            // 兜底用 chartType;仍为空则默认计量型
+            raw = param.getChartType();
+        }
+        if (!StringUtils.hasText(raw)) {
+            param.setDataType("VARIABLE");
+            return;
+        }
+        java.util.List<String> charts = java.util.Arrays.stream(raw.split(","))
+                .map(String::trim).filter(StringUtils::hasText).collect(java.util.stream.Collectors.toList());
+        boolean hasMeasure = charts.stream().anyMatch(MEASURE_CHARTS::contains);
+        boolean hasCount = charts.stream().anyMatch(COUNT_CHARTS::contains);
+        if (hasMeasure && hasCount) {
+            throw new BusinessException("控制图类型不可同时选择计量型(Xbar/R/S/I/MR)与计数型(P/NP/C/U),请只保留同一数据类型");
+        }
+        param.setDataType(hasCount ? "ATTRIBUTE" : "VARIABLE");
+        // 同步 chartType(主图)为集合首个有效图,保证向后兼容
+        if (charts.isEmpty()) {
+            param.setChartType("Xbar");
+        } else if (!charts.contains(param.getChartType())) {
+            param.setChartType(charts.get(0));
+        }
+    }
+
     @Override
     public List<SpcParam> ensureFromFiaTask(String taskId) {
         FiaTask task = fiaTaskMapper.selectById(taskId);
@@ -394,6 +428,7 @@ public class SpcParamServiceImpl implements SpcParamService {
             List<String> recommended = FiaChartTypeResolver.normalizeToBasic(recommendedRaw);
             param.setChartType(FiaChartTypeResolver.primaryChartType(recommended));
             param.setChartCandidates(FiaChartTypeResolver.join(recommended));
+            deriveDataType(param);
             param.setSigmaMethod("within");
             param.setSigmaK(new BigDecimal("3"));
             param.setCollectFreq("每日");
@@ -401,6 +436,9 @@ public class SpcParamServiceImpl implements SpcParamService {
             // 来源标记:工装首件任务(source=TOOLING)派生参数归 TOOLING,其余(产线/来料首件)归 FIA_FIRST;
             // 均归属"首件 SPC"视图,前端按来源筛选可区分工装 SPC。
             param.setParamSource("TOOLING".equalsIgnoreCase(task.getSource()) ? "TOOLING" : "FIA_FIRST");
+            // 首件派生时带入来源 FIA 任务的单号/批号,供采集页自动填充(工装首件同样带入)
+            param.setSrcWoNo(task.getWoNo());
+            param.setSrcBatchNo(task.getBatchNo());
 
             // 优先使用标准项的结构化规格;若标准项无结构化规格,回退解析标准值/公差文本
             fillSpecFromStdItem(param);

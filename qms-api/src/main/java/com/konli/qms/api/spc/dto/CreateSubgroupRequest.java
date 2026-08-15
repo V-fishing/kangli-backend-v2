@@ -38,5 +38,14 @@ public class CreateSubgroupRequest {
 
     private String productCode;    // 产品料号(从 FIA 任务带入)
 
-    private List<BigDecimal> values;   // 子组测量值(n 个)
+    private List<BigDecimal> values;   // 子组测量值(n 个, 计量型 Xbar/R/S/I/MR 必填)
+
+    /** 计数型 P/NP 图:子组不合格数(非计数型为 null) */
+    private Integer nonconforming;
+
+    /** 计数型 P/NP 图:子组检验总数(样本量 n, 非计数型为 null) */
+    private Integer inspectN;
+
+    /** 计数型 C/U 图:子组缺陷数(非计数型为 null) */
+    private Integer defectCount;
 }

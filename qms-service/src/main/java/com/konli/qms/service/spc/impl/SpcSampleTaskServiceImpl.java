@@ -87,7 +87,7 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
         if (fiaStdItemIds != null) {
             for (String itemId : fiaStdItemIds) {
                 if (itemId == null || itemId.isBlank()) continue;
-                String derivedId = resolveParamFromStdItem(itemId, orgId, procName);
+                String derivedId = resolveParamFromStdItem(itemId, orgId, procName, woNo);
                 if (derivedId != null) ids.add(derivedId);
             }
         }
@@ -104,7 +104,7 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
                     throw new BusinessException(400, "未找到 SPC 参数[" + pid + "],无法创建抽样任务");
                 }
                 // 该参数是否已绑定当前产品料号;未绑定则复制出一条"产品专属"参数,保证抽样列表按料号独立成行
-                String effectiveParamId = resolveParamForProduct(param, partNo, productName, category, orgId);
+                String effectiveParamId = resolveParamForProduct(param, partNo, productName, category, orgId, woNo);
                 SpcSampleTask task = buildTask(orgId, woNo, partNo, procName, productName,
                         targetCount, effectiveParamId, triggerType, category, supplierId, supplierName, isUrgent, remark, operatorId);
                 spcSampleTaskMapper.insert(task);
@@ -312,7 +312,7 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
      * 专属参数并绑定当前产品,使新料号在「产品抽样 SPC」视图中独立成行、可独立录入子组。
      */
     private String resolveParamForProduct(SpcParam template, String partNo, String productName,
-                                          String category, String orgId) {
+                                          String category, String orgId, String woNo) {
         if (partNo == null || partNo.isBlank()) {
             return template.getId(); // 无料号则直接复用
         }
@@ -351,6 +351,8 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
         np.setSupplierId(template.getSupplierId());
         np.setIsActive(true);
         np.setParamSource("SAMPLE");   // 抽样任务产品专属参数,归属产品抽样 SPC 视图
+        // 带入抽样工单号,供控制图页按工单聚拢抽样参数(与首件参数 srcWoNo 口径一致)
+        if (StringUtils.hasText(woNo)) np.setSrcWoNo(woNo);
         spcParamMapper.insert(np);
         // 绑定产品
         SpcParamProduct pp = new SpcParamProduct();
@@ -385,7 +387,7 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
      * 否则按检验项(名称/单位/规格限/可制图判定)与所属标准(procName)新建一条标准参数。
      * 返回对应 spc_param 的 id(供 createBatch 循环建任务)。
      */
-    private String resolveParamFromStdItem(String fiaStdItemId, String orgId, String procNameFallback) {
+    private String resolveParamFromStdItem(String fiaStdItemId, String orgId, String procNameFallback, String woNo) {
         // 已存在锚定该检验项的参数则直接复用
         SpcParam exist = spcParamMapper.selectOne(
                 new LambdaQueryWrapper<SpcParam>()
@@ -454,6 +456,8 @@ public class SpcSampleTaskServiceImpl implements SpcSampleTaskService {
         np.setFiaStdItemId(item.getId());
         np.setIsActive(true);
         np.setParamSource("SAMPLE");   // 抽样任务流程派生,归属产品抽样 SPC 视图
+        // 带入抽样工单号,供控制图页按工单聚拢抽样参数(与首件参数 srcWoNo 口径一致)
+        if (StringUtils.hasText(woNo)) np.setSrcWoNo(woNo);
         // 控制图类型按标准项推荐集合带入: 取主图写 chartType、全集写 chartCandidates,
         // 与首件任务 fromFiaTask 对齐; 统一为基础图码体系, 兼容历史组合码。
         List<String> recommendedRaw = StringUtils.hasText(item.getChartTypes())

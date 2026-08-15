@@ -1,6 +1,7 @@
 package com.konli.qms.api.spc.controller;
 
 import com.konli.qms.api.spc.dto.CreateSubgroupRequest;
+import com.konli.qms.service.spc.dto.CountCapabilityVo;
 import com.konli.qms.common.api.R;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -59,6 +61,16 @@ public class SpcSubgroupController {
         sg.setSampleTaskId(req.getSampleTaskId());
         sg.setProductCode(req.getProductCode());
         sg.setStage(req.getStage());
+        // 计数型子组字段(P/NP/C/U):非计量型子组经此录入不合格数/样本量/缺陷数
+        sg.setNonconforming(req.getNonconforming());
+        sg.setInspectN(req.getInspectN());
+        sg.setDefectCount(req.getDefectCount());
         return R.ok(spcSubgroupService.create(sg, req.getValues()));
+    }
+
+    @GetMapping("/count-capability")
+    @PreAuthorize("hasAuthority('spc.subgroup.list')")
+    public R<CountCapabilityVo> countCapability(@RequestParam String paramId) {
+        return R.ok(spcSubgroupService.getCountCapability(paramId));
     }
 }

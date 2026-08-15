@@ -67,9 +67,12 @@ public class SpcParam extends BaseEntity {
     @TableField("sigma_k")
     private BigDecimal sigmaK;
 
-    /** CPK 自动滚动更新周期:批次 / 日 / 周,null 表示不自动更新。 */
     @TableField("cpk_period")
     private String cpkPeriod;
+
+    /** 数据形态: VARIABLE(计量型,对应 Xbar/R/S/I/MR) / ATTRIBUTE(计数型,对应 P/NP/C/U)。由 chartCandidates 推断,用于约束图类型不可混选。 */
+    @TableField("data_type")
+    private String dataType;
 
     @TableField("is_active")
     private Boolean isActive;
@@ -89,6 +92,14 @@ public class SpcParam extends BaseEntity {
     /** 来源 FIA 任务检验项ID(可空);由 FIA 任务一键生成 SPC 参数时写入,用于去重。 */
     @TableField("src_item_id")
     private String srcItemId;
+
+    /** 来源 FIA 任务单号(可空);首件派生时带入,用于采集页自动填充工单号。 */
+    @TableField("src_wo_no")
+    private String srcWoNo;
+
+    /** 来源 FIA 任务批号(可空);首件派生时带入,用于采集页自动填充批次号。 */
+    @TableField("src_batch_no")
+    private String srcBatchNo;
 
     /** 关联的 SPC 标准线(可空);选择标准线后 specLower/specUpper/targetValue/unit 从标准线自动填充。 */
     @TableField("spec_standard_id")

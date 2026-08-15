@@ -30,6 +30,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import com.konli.qms.service.spc.dto.ControlChartMark;
 import com.konli.qms.service.spc.dto.ControlChartVo;
+import com.konli.qms.service.spc.dto.CountCapabilityVo;
 import com.konli.qms.service.spc.dto.CountSeries;
 import com.konli.qms.service.spc.dto.SpcHistogramVo;
 import com.konli.qms.service.spc.dto.SpcSubgroupVo;
@@ -309,8 +310,7 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
     }
 
     @Override
-    public SpcHistogramVo getHistogram(String paramId, String stage, String sampleTaskId) {
-        SpcHistogramVo vo = new SpcHistogramVo();
+    public SpcHistogramVo getHistogram(String paramId, String stage, String sampleTaskId) {        SpcHistogramVo vo = new SpcHistogramVo();
         vo.setBins(List.of());
         vo.setFreq(List.of());
         if (paramId == null || paramId.isBlank()) {
@@ -391,49 +391,99 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         return create(subgroup, values);
     }
 
+    @Override
+    public CountCapabilityVo getCountCapability(String paramId) {
+        CountCapabilityVo vo = new CountCapabilityVo();
+        vo.setCountType(false);
+        vo.setSampleCount(0);
+        if (paramId == null || paramId.isBlank()) {
+            return vo;
+        }
+        SpcParam param = spcParamMapper.selectById(paramId);
+        if (param == null) {
+            return vo;
+        }
+        // 判定是否为计数型:优先 dataType,否则解析 chartCandidates
+        boolean count = false;
+        String chartKind = null;
+        if ("ATTRIBUTE".equals(param.getDataType())) {
+            count = true;
+            // 从 chartCandidates 推导主计数图类型(P/NP/C/U),供前端卡片按类型渲染
+            if (StringUtils.hasText(param.getChartCandidates())) {
+                List<String> cs = java.util.Arrays.stream(param.getChartCandidates().split(","))
+                        .map(String::trim).filter(StringUtils::hasText).collect(java.util.stream.Collectors.toList());
+                chartKind = cs.stream().filter(c -> List.of("P", "NP", "C", "U").contains(c)).findFirst().orElse(null);
+            }
+        } else if (!"VARIABLE".equals(param.getDataType()) && StringUtils.hasText(param.getChartCandidates())) {
+            List<String> cs = java.util.Arrays.stream(param.getChartCandidates().split(","))
+                    .map(String::trim).filter(StringUtils::hasText).collect(java.util.stream.Collectors.toList());
+            count = cs.stream().anyMatch(c -> List.of("P", "NP", "C", "U").contains(c));
+            if (count) chartKind = cs.stream().filter(c -> List.of("P", "NP", "C", "U").contains(c)).findFirst().orElse(null);
+        }
+        if (!count) {
+            return vo;
+        }
+        vo.setCountType(true);
+        vo.setChartKind(chartKind);
+
+        // 聚合所有计数子组(非计数子组 nonconforming/defectCount 均为 null,自动忽略)
+        List<SpcSubgroup> subs = spcSubgroupMapper.selectList(
+                new LambdaQueryWrapper<SpcSubgroup>().eq(SpcSubgroup::getParamId, paramId));
+        if (subs.isEmpty()) {
+            return vo;
+        }
+        boolean isCU = "C".equals(chartKind) || "U".equals(chartKind);
+        BigDecimal sumNon = BigDecimal.ZERO, sumN = BigDecimal.ZERO, sumDef = BigDecimal.ZERO;
+        int countSub = 0;
+        for (SpcSubgroup s : subs) {
+            if (s.getNonconforming() != null || s.getDefectCount() != null) {
+                countSub++;
+                if (s.getNonconforming() != null) sumNon = sumNon.add(BigDecimal.valueOf(s.getNonconforming()));
+                if (s.getDefectCount() != null) sumDef = sumDef.add(BigDecimal.valueOf(s.getDefectCount()));
+                if (s.getInspectN() != null) sumN = sumN.add(BigDecimal.valueOf(s.getInspectN()));
+            }
+        }
+        vo.setSampleCount(countSub);
+        if (countSub == 0 || sumN.signum() == 0) {
+            return vo;
+        }
+        if (isCU) {
+            BigDecimal uBar = sumDef.divide(sumN, 6, RoundingMode.HALF_UP);
+            vo.setUBar(uBar);
+            vo.setDpu(uBar);
+        } else {
+            BigDecimal pBar = sumNon.divide(sumN, 6, RoundingMode.HALF_UP);
+            BigDecimal ppm = pBar.multiply(BigDecimal.valueOf(1_000_000)).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal yieldRate = BigDecimal.ONE.subtract(pBar).setScale(6, RoundingMode.HALF_UP);
+            vo.setPBar(pBar);
+            vo.setPpm(ppm);
+            vo.setYieldRate(yieldRate);
+        }
+        return vo;
+    }
+
     @Transactional
     public SpcSubgroup create(SpcSubgroup subgroup, List<BigDecimal> values) {
         SpcParam param = spcParamMapper.selectById(subgroup.getParamId());
         if (param == null) {
             throw new BusinessException(400, "SPC 参数不存在");
         }
+        BigDecimal xbar = null; // 计量型子组均值;计数型子组保持 null
         // 兜底 orgId：集团管理员(dataScope=all)无归属 org 时，使用参数所属组织，
         // 避免 org_id 非空外键约束导致插入 500（前端集团总览视图 orgId 为空）。
         if (subgroup.getOrgId() == null || subgroup.getOrgId().isBlank()) {
             subgroup.setOrgId(param.getOrgId());
         }
-        if (values == null || values.isEmpty()) {
-            throw new BusinessException(400, "测量值不能为空");
+        // 计数型子组(P/NP/C/U):values 为空但提供了 nonconforming/defectCount;
+        // 计量型子组:values 必填。两者互斥, 否则 400。
+        boolean countType = subgroup.getNonconforming() != null || subgroup.getDefectCount() != null;
+        if ((values == null || values.isEmpty()) && !countType) {
+            throw new BusinessException(400, "测量值不能为空(计量型)或未提供计数型字段(不合格数/缺陷数)");
         }
 
         subgroup.setSubgroupNo((int) (System.currentTimeMillis() % Integer.MAX_VALUE));
         if (subgroup.getSubgroupTime() == null) {
             subgroup.setSubgroupTime(LocalDateTime.now());
-        }
-        subgroup.setN(values.size());
-
-        // 计算 xbar / rangeR
-        BigDecimal sum = BigDecimal.ZERO;
-        BigDecimal max = values.get(0);
-        BigDecimal min = values.get(0);
-        for (BigDecimal v : values) {
-            sum = sum.add(v);
-            if (v.compareTo(max) > 0) max = v;
-            if (v.compareTo(min) < 0) min = v;
-        }
-        BigDecimal xbar = sum.divide(BigDecimal.valueOf(values.size()), 4, RoundingMode.HALF_UP);
-        BigDecimal rangeR = max.subtract(min);
-        subgroup.setXbar(xbar);
-        subgroup.setRangeR(rangeR);
-        // 子组标准差(计量型,支持 Xbar-S 图的 S 图):总体标准差 std = sqrt(Σ(xi-xbar)²/n)
-        if (values.size() > 1) {
-            BigDecimal sqSum = BigDecimal.ZERO;
-            for (BigDecimal v : values) {
-                BigDecimal d = v.subtract(xbar);
-                sqSum = sqSum.add(d.multiply(d));
-            }
-            BigDecimal variance = sqSum.divide(BigDecimal.valueOf(values.size()), 6, RoundingMode.HALF_UP);
-            subgroup.setStdDev(BigDecimal.valueOf(Math.sqrt(variance.doubleValue())));
         }
         if (subgroup.getDataSource() == null || subgroup.getDataSource().isBlank()) {
             subgroup.setDataSource("manual");
@@ -446,20 +496,54 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
         subgroup.setCreatedAt(LocalDateTime.now());
         subgroup.setCreatedBy(currentOperator());
 
-        // WECO 判异(插入前检查,避免分区表 update)
-        String[] triggered = checkWecRules(xbar, subgroup.getParamId(), param);
-        if (triggered != null) {
-            subgroup.setJudge("异常");
-            subgroup.setIsOutlier(true);
-            subgroup.setOutlierRule(triggered[0]);
-        } else {
+        String[] triggered = null;
+        if (countType) {
+            // 计数型:仅登记 nonconforming/inspectN/defectCount, 不计算 xbar/rangeR、不落 measurement、不做 WECO 计量判异
+            subgroup.setN(subgroup.getInspectN() != null ? subgroup.getInspectN() : 1);
             subgroup.setJudge("正常");
             subgroup.setIsOutlier(false);
+        } else {
+            // 计量型:计算 xbar / rangeR / stdDev
+            subgroup.setN(values.size());
+            BigDecimal sum = BigDecimal.ZERO;
+            BigDecimal max = values.get(0);
+            BigDecimal min = values.get(0);
+            for (BigDecimal v : values) {
+                sum = sum.add(v);
+                if (v.compareTo(max) > 0) max = v;
+                if (v.compareTo(min) < 0) min = v;
+            }
+            xbar = sum.divide(BigDecimal.valueOf(values.size()), 4, RoundingMode.HALF_UP);
+            BigDecimal rangeR = max.subtract(min);
+            subgroup.setXbar(xbar);
+            subgroup.setRangeR(rangeR);
+            // 子组标准差(计量型,支持 Xbar-S 图的 S 图):总体标准差 std = sqrt(Σ(xi-xbar)²/n)
+            if (values.size() > 1) {
+                BigDecimal sqSum = BigDecimal.ZERO;
+                for (BigDecimal v : values) {
+                    BigDecimal d = v.subtract(xbar);
+                    sqSum = sqSum.add(d.multiply(d));
+                }
+                BigDecimal variance = sqSum.divide(BigDecimal.valueOf(values.size()), 6, RoundingMode.HALF_UP);
+                subgroup.setStdDev(BigDecimal.valueOf(Math.sqrt(variance.doubleValue())));
+            }
+
+            // WECO 判异(插入前检查,避免分区表 update)
+            triggered = checkWecRules(xbar, subgroup.getParamId(), param);
+            if (triggered != null) {
+                subgroup.setJudge("异常");
+                subgroup.setIsOutlier(true);
+                subgroup.setOutlierRule(triggered[0]);
+            } else {
+                subgroup.setJudge("正常");
+                subgroup.setIsOutlier(false);
+            }
         }
 
         spcSubgroupMapper.insert(subgroup);
 
-        // 创建测量值
+        // 创建测量值(仅计量型子组落原始测量值,计数型无 values)
+        if (values != null && !values.isEmpty()) {
         for (int i = 0; i < values.size(); i++) {
             SpcMeasurement m = new SpcMeasurement();
             m.setOrgId(subgroup.getOrgId());
@@ -468,6 +552,7 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             m.setSeq(i + 1);
             m.setValue(values.get(i));
             spcMeasurementMapper.insert(m);
+        }
         }
 
         // 命中规则 -> 生成告警(SR-SPC-018:30分钟内同参数已报过则抑制,仅控制图标记)
@@ -515,6 +600,8 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                 // 回环联动:SPC 量产监控(ROUTINE)报警级异常 -> 停线整改后重新开工,自动触发新一轮首件检验
                 if ("ROUTINE".equals(subgroup.getStage()) && "报警".equals(triggered[1])) {
                     try {
+                        final BigDecimal xbarSnap = xbar;
+                        final String[] trigSnap = triggered;
                         TransactionTemplate tt = new TransactionTemplate(transactionManager);
                         tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
                         tt.execute(status -> {
@@ -525,7 +612,7 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                                     param.getProcName(),
                                     subgroup.getProductCode(),
                                     null,
-                                    "SPC 报警级异常(规则 " + triggered[0] + ",实测 " + xbar + ")触发停线整改后自动重开首件");
+                                    "SPC 报警级异常(规则 " + trigSnap[0] + ",实测 " + xbarSnap + ")触发停线整改后自动重开首件");
                             return null;
                         });
                         log.info("[SPC回环] 量产监控报警级异常已触发首件重开: 参数={}, woNo={}, partNo={}",
