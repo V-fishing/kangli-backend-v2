@@ -8,6 +8,7 @@ import com.konli.qms.domain.tlm.entity.TlmScrap;
 import com.konli.qms.domain.tlm.entity.TlmRepair;
 import com.konli.qms.domain.tlm.entity.TlmToolProduct;
 import com.konli.qms.domain.tlm.entity.TlmToolVersion;
+import com.konli.qms.domain.tlm.entity.TlmToolWoBind;
 import com.konli.qms.domain.tlm.mapper.TlmToolProductMapper;
 import com.konli.qms.service.tlm.TlmMaintService;
 import com.konli.qms.service.tlm.TlmProductService;
@@ -175,7 +176,7 @@ public class TlmToolingController {
     }
 
     @PostMapping("/tooling/{id}/repair")
-    @PreAuthorize("hasAuthority('tlm.tooling.repair')")
+    @PreAuthorize("hasAnyAuthority('tlm.tooling.repair','tlm.metro.repair')")
     public R<Void> repair(@PathVariable String id,
                           @RequestParam(required = false) String faultDesc,
                           @RequestParam(required = false) String approverId) {
@@ -184,7 +185,7 @@ public class TlmToolingController {
     }
 
     @PostMapping("/tooling/{id}/scrap")
-    @PreAuthorize("hasAuthority('tlm.tooling.scrap')")
+    @PreAuthorize("hasAnyAuthority('tlm.tooling.scrap','tlm.metro.scrap')")
     public R<Void> scrap(@PathVariable String id,
                          @RequestParam(required = false) String scrapMethod,
                          @RequestParam(required = false) String reason,
@@ -217,7 +218,7 @@ public class TlmToolingController {
     }
 
     @PostMapping("/tooling/{id}/lock")
-    @PreAuthorize("hasAuthority('tlm.tooling.lock')")
+    @PreAuthorize("hasAnyAuthority('tlm.tooling.lock','tlm.metro.lock')")
     public R<Void> lock(@PathVariable String id, @RequestParam boolean locked) {
         toolingService.lock(id, locked);
         return R.ok();
@@ -287,6 +288,20 @@ public class TlmToolingController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return R.ok(toolingService.repairPage(keyword, status, page, size));
+    }
+
+    // ===== 计量看板(GAUGE 总数/合格/限用/超期) =====
+    @GetMapping("/tooling/metro/dashboard")
+    @PreAuthorize("hasAuthority('tlm.metro.list')")
+    public R<java.util.Map<String, Object>> metroDashboard() {
+        return R.ok(toolingService.metroDashboard());
+    }
+
+    // ===== 工装-工单绑定记录(含 GAUGE 校准快照, 计量追溯反查) =====
+    @GetMapping("/tooling/{id}/binds")
+    @PreAuthorize("hasAuthority('tlm.metro.list')")
+    public R<java.util.List<TlmToolWoBind>> bindRecords(@PathVariable String id) {
+        return R.ok(toolingService.bindRecords(id));
     }
 
     // ===== 保养 =====

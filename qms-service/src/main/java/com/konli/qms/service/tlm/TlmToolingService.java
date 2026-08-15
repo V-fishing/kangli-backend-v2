@@ -63,4 +63,10 @@ public interface TlmToolingService {
 
     /** 维修工单分页查询(支持 工装编号/名称关键词/状态 过滤)。 */
     PageResult<TlmRepair> repairPage(String keyword, String status, int page, int size);
+
+    /** 计量看板: GAUGE 器具的 总数/合格(在期内)/限用预警(临期30天)/超期 统计。 */
+    java.util.Map<String, Object> metroDashboard();
+
+    /** 工装-工单绑定记录(含 GAUGE 校准状态快照), 供计量追溯反查。 */
+    java.util.List<com.konli.qms.domain.tlm.entity.TlmToolWoBind> bindRecords(String toolId);
 }

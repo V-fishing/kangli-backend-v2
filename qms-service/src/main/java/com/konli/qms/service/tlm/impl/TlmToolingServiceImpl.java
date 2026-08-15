@@ -227,6 +227,11 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     public void scrap(String id, String scrapMethod, String reason, String approverId) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
+        // 计量器具(GAUGE)报废前校验(需求3-3): 维修后强制重校准方可解锁, 锁定待校准状态的器具禁止报废,
+        // 避免不合格计量器具未经校准复核即退出生命周期, 造成追溯断点。
+        if ("GAUGE".equals(t.getToolCategory()) && Boolean.TRUE.equals(t.getLocked())) {
+            throw new BusinessException("计量器具 " + t.getToolNo() + " 处于锁定待校准状态，请先完成校准录入并解锁后再发起报废");
+        }
         // 配置即权威:未显式指定审批人时,从「系统管理 › 审核配置」的「工装报废审核」节点读取默认审批人
         if (approverId == null || approverId.isBlank()) {
             approverId = resolveScrapApprovers();
@@ -295,8 +300,9 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         // 报废审批通过即归档(留存全生命周期): 写 tlm_scrap_archive, 供归档中心查询
         try {
             jdbcTemplate.update(
-                "INSERT INTO ops.tlm_scrap_archive (id, org_id, archive_no, scrap_id, tool_id, scrap_no, tool_no, tool_name, scrap_method, reason, retention_until, report_hash, pdf_ref, status, created_by) "
-                + "VALUES (ops.gen_uuid_v7(), ?::uuid, ?, ?, ?::uuid, ?, ?, ?, ?, ?, (now() + interval '10 year')::date, ?, 'placeholder://tlm-scrap', '已归档', ?) "
+                "INSERT INTO ops.tlm_scrap_archive (id, org_id, archive_no, scrap_id, tool_id, scrap_no, tool_no, tool_name, scrap_method, reason, "
+                + "last_calib_date, calib_due_date, tool_category, retention_until, report_hash, pdf_ref, status, created_by) "
+                + "VALUES (ops.gen_uuid_v7(), ?::uuid, ?, ?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, (now() + interval '10 year')::date, ?, 'placeholder://tlm-scrap', '已归档', ?) "
                 + "ON CONFLICT (scrap_id) DO NOTHING",
                 (t != null && t.getOrgId() != null) ? t.getOrgId() : (s.getOrgId() != null ? s.getOrgId() : MZ_ORG),
                 "TLM-SCA-" + System.currentTimeMillis(),
@@ -307,6 +313,9 @@ public class TlmToolingServiceImpl implements TlmToolingService {
                 t != null ? t.getToolName() : null,
                 s.getScrapMethod(),
                 s.getReason(),
+                t != null ? t.getCalibDate() : null,
+                t != null ? t.getCalibDueDate() : null,
+                t != null ? t.getToolCategory() : null,
                 ("sha256:" + scrapId),
                 curUser());
         } catch (Exception e) {
@@ -362,12 +371,26 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         if (archComplete && fiaTaskService.hasPendingToolingFirst(id)) {
             throw new BusinessException("工装存在未完成的首件检验任务，请先完成工装首件检验后再派工");
         }
+        // 计量器具(GAUGE)校准状态门禁(强约束, 需求2-1): 超期/失效/未校准的器具禁止绑定工序,
+        // 防止不合格计量器具被使用。calib_due_date 为空视为未校准, 一并拦截。
+        if ("GAUGE".equals(t.getToolCategory())) {
+            if (t.getCalibDueDate() == null || t.getCalibDueDate().isBefore(LocalDate.now())) {
+                throw new BusinessException("计量器具 " + t.getToolNo() + " 校准已超期或未校准，无法绑定工单，请先完成校准");
+            }
+        }
         TlmToolWoBind b = new TlmToolWoBind();
         b.setOrgId(t.getOrgId());
         b.setToolId(id);
         b.setWoNo(woNo);
         b.setBoundAt(LocalDateTime.now());
         b.setCreatedBy(curUser());
+        // 计量器具(GAUGE)绑定即记录校准状态快照, 供产品批次/检验记录反查该件产品当时使用的计量器具
+        // 是否在合格有效期内(强约束, 需求2-2 计量数据绑定追溯)。
+        if ("GAUGE".equals(t.getToolCategory())) {
+            b.setCalibNo(t.getToolNo());
+            b.setCalibDate(t.getCalibDate());
+            b.setCalibDueDate(t.getCalibDueDate());
+        }
         bindMapper.insert(b);
         int cnt = t.getBindCount() == null ? 0 : t.getBindCount();
         t.setBindCount(cnt + 1);
@@ -458,6 +481,20 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         }
         // 状态恢复为在用
         t.setStatus("IN_USE");
+        // 计量器具(GAUGE)维修后强制重校准(需求3-2): 锁定器具, 待校准录入合格后方可解锁(recordResult 置 locked=false)。
+        // 校准日期/到期由校准录入回写, 此处不预填, 避免在未校准状态下显示"合格"。
+        if ("GAUGE".equals(t.getToolCategory())) {
+            t.setLocked(Boolean.TRUE);
+            log.info("[TLM] 计量器具 {} 维修完成,已锁定待重校准", t.getToolNo());
+            // 计量器具维修完成待校准提醒(强约束 C2): 经 notify_config(tlm, tlm_repair_done) 推送计量管理员。
+            try {
+                notificationService.notify("tlm", "tlm_repair_done", "计量器具维修完成待校准",
+                        "计量器具 " + t.getToolName() + "(" + t.getToolNo() + ") 维修已完成，请安排重新校准并录入后方可解锁使用",
+                        "tlm_repair_done", t.getId(), "/tlm/metro");
+            } catch (Exception e) {
+                log.warn("计量器具维修完成待校准通知失败: {}", e.getMessage());
+            }
+        }
         toolingMapper.updateById(t);
 
         // 触发 FIA 首件检验任务(工装维修后)
@@ -543,5 +580,45 @@ public class TlmToolingServiceImpl implements TlmToolingService {
             }
         }
         return new PageResult<TlmRepair>(p.getRecords(), p.getTotal(), page, size);
+    }
+
+    /**
+     * 计量看板: 统计 GAUGE 器具总数、合格(在期内)、限用预警(到期前30天)、超期。
+     * 由后端直接计算, 替代前端按当前页派生(前端派生仅覆盖已加载页, 不准确)。
+     */
+    @Override
+    public java.util.Map<String, Object> metroDashboard() {
+        LocalDate today = LocalDate.now();
+        LocalDate limitLine = today.plusDays(30);
+        List<TlmTooling> gauges = toolingMapper.selectList(
+                new LambdaQueryWrapper<TlmTooling>().eq(TlmTooling::getToolCategory, "GAUGE"));
+        int total = gauges.size();
+        int qualified = 0, limited = 0, overdue = 0;
+        for (TlmTooling t : gauges) {
+            LocalDate due = t.getCalibDueDate();
+            if (due == null) {
+                overdue++;            // 未校准视为超期口径
+            } else if (due.isBefore(today)) {
+                overdue++;
+            } else if (!due.isAfter(limitLine)) {
+                limited++;            // 30 天内到期 → 限用预警
+            } else {
+                qualified++;
+            }
+        }
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("total", total);
+        m.put("qualified", qualified);
+        m.put("limited", limited);
+        m.put("overdue", overdue);
+        return m;
+    }
+
+    /** 工装-工单绑定记录(含 GAUGE 校准状态快照), 供计量追溯反查。 */
+    @Override
+    public java.util.List<com.konli.qms.domain.tlm.entity.TlmToolWoBind> bindRecords(String toolId) {
+        return bindMapper.selectList(new LambdaQueryWrapper<com.konli.qms.domain.tlm.entity.TlmToolWoBind>()
+                .eq(com.konli.qms.domain.tlm.entity.TlmToolWoBind::getToolId, toolId)
+                .orderByDesc(com.konli.qms.domain.tlm.entity.TlmToolWoBind::getBoundAt));
     }
 }
