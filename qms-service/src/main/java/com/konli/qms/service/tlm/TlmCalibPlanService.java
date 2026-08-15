@@ -20,7 +20,7 @@ public interface TlmCalibPlanService {
 
     /** 校准结果录入: 计划单置 DONE, 回写器具校准日期/到期(按 plan_cycle 或传入 cycle 推算), 并解锁。 */
     void recordResult(String planId, LocalDate calibDate, LocalDate calibDueDate, Integer calibCycle,
-                      String upperLimit, String result, String remark);
+                      String upperLimit, String result, String remark, String certNo);
 
     /** 手动新建校准计划单(来源 MANUAL): 指定器具 + 计划周期 + 计划到期日。 */
     TlmCalibPlan createManual(String toolId, Integer planCycle, LocalDate planDueDate);

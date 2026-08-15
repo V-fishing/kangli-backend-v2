@@ -43,7 +43,10 @@ public class TlmCalibPlan extends BaseEntity {
 
     // ===== 校准结果明细(录入后回填, 长期留存计量履历) =====
     @TableField("calib_no")
-    private String calibNo;          // 校准证书/记录编号
+    private String calibNo;          // 校准记录流水号(系统生成: 器具号-C时间戳)
+
+    @TableField("cert_no")
+    private String certNo;           // 校准证书/报告编号(用户录入, 审计追溯)
 
     @TableField("calib_date")
     private LocalDate calibDate;     // 实际校准日期

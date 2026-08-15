@@ -19,6 +19,8 @@ import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingAbnormalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmAuditPlanMapper;
 import com.konli.qms.domain.sqm.mapper.QmsFmeaRiskMapper;
+import com.konli.qms.domain.cs.entity.CsWorkOrder;
+import com.konli.qms.domain.cs.mapper.CsWorkOrderMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -43,6 +45,7 @@ public class MyTaskServiceImpl implements MyTaskService {
     private final SqmIncomingAbnormalMapper sqmIncomingAbnormalMapper;
     private final SqmAuditPlanMapper sqmAuditPlanMapper;
     private final QmsFmeaRiskMapper qmsFmeaRiskMapper;
+    private final CsWorkOrderMapper csWorkOrderMapper;
 
     @Override
     public List<MyTaskDTO> myTasks(Integer limit, Boolean includeClosed) {
@@ -57,6 +60,7 @@ public class MyTaskServiceImpl implements MyTaskService {
         all.addAll(sqmAbnormalTasks(userId, closed));
         all.addAll(sqmAuditTasks(userId, closed));
         all.addAll(sqmFmeaTasks(userId, closed));
+        all.addAll(csWorkOrderTasks(userId, closed));
         // 按状态优先级 + 单号排序,保证看板展示稳定
         all.sort(Comparator.comparing(MyTaskDTO::getModule).thenComparing(
                 t -> t.getBizNo() == null ? "" : t.getBizNo()));
@@ -266,6 +270,31 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setAssignee(r.getOwner());
             d.setDueAt(r.getTargetDate() != null ? r.getTargetDate().atStartOfDay() : null);
             d.setUrl("/sqm/fmea");
+            res.add(d);
+        }
+        return res;
+    }
+
+    private List<MyTaskDTO> csWorkOrderTasks(String userId, boolean includeClosed) {
+        if (userId == null) return List.of();
+        LambdaQueryWrapper<CsWorkOrder> w = new LambdaQueryWrapper<>();
+        w.eq(CsWorkOrder::getOwnerId, userId);
+        if (!includeClosed) {
+            w.ne(CsWorkOrder::getStatus, "CLOSED");
+        }
+        w.orderByDesc(CsWorkOrder::getCreatedAt);
+        List<CsWorkOrder> list = csWorkOrderMapper.selectList(w);
+        List<MyTaskDTO> res = new ArrayList<>();
+        for (CsWorkOrder o : list) {
+            MyTaskDTO d = new MyTaskDTO();
+            d.setModule("CS");
+            d.setTaskType("售后工单");
+            d.setBizNo(o.getOrderNo());
+            d.setTitle(o.getCustomerName());
+            d.setStatus(o.getStatus());
+            d.setAssignee(o.getOwnerName());
+            d.setDueAt(o.getExpectTime());
+            d.setUrl("/cs/work-orders");
             res.add(d);
         }
         return res;

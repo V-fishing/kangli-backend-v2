@@ -58,6 +58,16 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         }
     }
 
+    /** ROOT/未切换组织时,兜底取 sys_org 中第一个有效组织,确保 tlm_tooling.org_id 外键成立。 */
+    private String defaultOrgId() {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT id FROM ops.sys_org WHERE is_deleted = false ORDER BY created_at LIMIT 1", String.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String curUser() {
         try {
             return CompanyContext.get().userId();
@@ -92,6 +102,10 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         if (t.getStatus() == null) t.setStatus("IN_USE");
         if (t.getBindCount() == null) t.setBindCount(0);
         if (t.getLocked() == null) t.setLocked(false);
+        if (t.getOrgId() == null) {
+            String o = curOrg();
+            t.setOrgId(o != null ? o : defaultOrgId());
+        }
         toolingMapper.insert(t);
         // 工装投用(新建首次置 IN_USE)强制触发首件验证: 仅当维护产品编码+工序时自动建 TOOLING 任务
         if ("IN_USE".equals(t.getStatus()) && t.getProductCode() != null && !t.getProductCode().isBlank()

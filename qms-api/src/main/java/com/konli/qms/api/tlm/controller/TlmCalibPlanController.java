@@ -45,7 +45,8 @@ public class TlmCalibPlanController {
         String upperLimit = body.get("upperLimit") != null ? body.get("upperLimit").toString() : null;
         String result = body.get("result") != null ? body.get("result").toString() : "合格";
         String remark = body.get("remark") != null ? body.get("remark").toString() : null;
-        calibPlanService.recordResult(planId, calibDate, calibDueDate, calibCycle, upperLimit, result, remark);
+        String certNo = body.get("certNo") != null ? body.get("certNo").toString() : null;
+        calibPlanService.recordResult(planId, calibDate, calibDueDate, calibCycle, upperLimit, result, remark, certNo);
         return R.ok();
     }
 
@@ -55,5 +56,13 @@ public class TlmCalibPlanController {
                                         @RequestParam(required = false) Integer planCycle,
                                         @RequestParam String planDueDate) {
         return R.ok(calibPlanService.createManual(toolId, planCycle, LocalDate.parse(planDueDate)));
+    }
+
+    /** 手动触发校准计划自动生成(默认提前 30 天), 便于演示/即时生成, 等价于每日 8:00 定时扫描。 */
+    @PostMapping("/calib-plans/auto-generate")
+    @PreAuthorize("hasAuthority('tlm.metro.calib')")
+    public R<Void> autoGenerate(@RequestParam(defaultValue = "30") int leadDays) {
+        calibPlanService.autoGenerate(leadDays);
+        return R.ok();
     }
 }

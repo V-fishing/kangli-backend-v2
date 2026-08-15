@@ -88,7 +88,7 @@ public class TlmCalibPlanServiceImpl implements TlmCalibPlanService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void recordResult(String planId, LocalDate calibDate, LocalDate calibDueDate,
-                             Integer calibCycle, String upperLimit, String result, String remark) {
+                             Integer calibCycle, String upperLimit, String result, String remark, String certNo) {
         TlmCalibPlan plan = calibPlanMapper.selectById(planId);
         if (plan == null) {
             throw new com.konli.qms.common.exception.BusinessException("校准计划单不存在");
@@ -102,6 +102,7 @@ public class TlmCalibPlanServiceImpl implements TlmCalibPlanService {
         plan.setUpperLimit(upperLimit);
         plan.setResult(result);
         plan.setRemark(remark);
+        plan.setCertNo(certNo);
         calibPlanMapper.updateById(plan);
 
         // 回写器具校准日期/到期: 已传 calibDueDate 优先, 否则按 calibDate + 周期推算
