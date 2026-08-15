@@ -113,7 +113,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final TlmToolingMapper tlmToolingMapper;
 
     @Override
-        public List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName) {
+        public List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType) {
         LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
         if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
             w.eq(FiaTask::getOrgId, orgId);
@@ -132,13 +132,16 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         if (procName != null && !procName.trim().isEmpty()) {
             w.like(FiaTask::getProcName, procName.trim());
+        }
+        if (triggerType != null && !triggerType.trim().isEmpty()) {
+            w.eq(FiaTask::getTriggerType, triggerType.trim());
         }
         w.orderByDesc(FiaTask::getCreatedAt);
         return fiaTaskMapper.selectList(w);
     }
 
     @Override
-    public PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, int page, int size) {
+    public PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType, int page, int size) {
         LambdaQueryWrapper<FiaTask> w = new LambdaQueryWrapper<FiaTask>();
         if (orgId != null && !orgId.isEmpty() && !"all".equals(orgId)) {
             w.eq(FiaTask::getOrgId, orgId);
@@ -157,6 +160,9 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         if (procName != null && !procName.trim().isEmpty()) {
             w.like(FiaTask::getProcName, procName.trim());
+        }
+        if (triggerType != null && !triggerType.trim().isEmpty()) {
+            w.eq(FiaTask::getTriggerType, triggerType.trim());
         }
         w.orderByDesc(FiaTask::getCreatedAt);
         IPage<FiaTask> ip = fiaTaskMapper.selectPage(new Page<>(page, size), w);
@@ -170,7 +176,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     @Override
     public List<ProductTreeNode> listProductTree(String orgId) {
         // 复用 list():其内部已按 orgId / dataScope / 组织切换 正确处理权限,避免自建查询被拦截器二次改写
-        List<FiaTask> rows = this.list(orgId, null, null, null, null, null);
+        List<FiaTask> rows = this.list(orgId, null, null, null, null, null, null);
         Map<String, ProductTreeNode> byName = new LinkedHashMap<>();
         for (FiaTask t : rows) {
             String name = t.getProductName();

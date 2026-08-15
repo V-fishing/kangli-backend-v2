@@ -18,9 +18,9 @@ import java.util.Map;
 
 public interface FiaTaskService {
 
-    List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName);
+    List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType);
 
-    PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, int page, int size);
+    PageResult<FiaTask> listPage(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType, int page, int size);
 
     /** 产品+工序 二级树(去重汇总),供列表筛选构建树 */
     List<ProductTreeNode> listProductTree(String orgId);

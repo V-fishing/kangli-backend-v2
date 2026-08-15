@@ -106,10 +106,11 @@ public class FiaTaskController {
                                  @RequestParam(required = false) String woNo,
                                  @RequestParam(required = false) String productName,
                                  @RequestParam(required = false) String partNo,
-                                 @RequestParam(required = false) String procName) {
+                                 @RequestParam(required = false) String procName,
+                                 @RequestParam(required = false) String triggerType) {
         CompanyContext.CurrentUser u = CompanyContext.get();
         String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
-        return R.ok(fiaTaskService.list(orgId, status, woNo, productName, partNo, procName));
+        return R.ok(fiaTaskService.list(orgId, status, woNo, productName, partNo, procName, triggerType));
     }
 
     @GetMapping("/page")
@@ -119,11 +120,12 @@ public class FiaTaskController {
                                        @RequestParam(required = false) String productName,
                                        @RequestParam(required = false) String partNo,
                                        @RequestParam(required = false) String procName,
+                                       @RequestParam(required = false) String triggerType,
                                        @RequestParam(defaultValue = "1") int page,
                                        @RequestParam(defaultValue = "20") int size) {
         CompanyContext.CurrentUser u = CompanyContext.get();
         String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
-        return R.ok(fiaTaskService.listPage(orgId, status, woNo, productName, partNo, procName, page, size));
+        return R.ok(fiaTaskService.listPage(orgId, status, woNo, productName, partNo, procName, triggerType, page, size));
     }
 
     /** 产品→工序 二级树(去重汇总),供列表/筛选构建树 */
