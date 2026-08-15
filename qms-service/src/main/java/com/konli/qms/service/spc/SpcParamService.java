@@ -13,12 +13,13 @@ public interface SpcParamService {
      * @param productName 可选产品名过滤:选中时返回「绑定该产品的参数 + 未绑定任何产品的通用参数」;为空不按产品过滤。
      * @param procName    可选工序名过滤:选中时仅返回工序名/工艺名匹配的参数;为空不按工序过滤。
      * @param paramSource 可选来源过滤:FIA_FIRST/MANUAL/SAMPLE/TOOLING;为空不按来源过滤。
+     * @param srcWoNo     可选来源工单号过滤:选中时仅返回该工单下的参数(首件/抽样参数均带 srcWoNo 口径一致);为空不按工单过滤。
      * 各维度可独立使用,也可组合(取交集)。
      */
-    List<SpcParam> list(String productName, String procName, String paramSource);
+    List<SpcParam> list(String productName, String procName, String paramSource, String srcWoNo);
 
     /** 分页版本(内存过滤+分页,因 list 含复杂关联回填)。 */
-    PageResult<SpcParam> listPage(String productName, String procName, String paramSource, String keyword, int page, int size);
+    PageResult<SpcParam> listPage(String productName, String procName, String paramSource, String srcWoNo, String keyword, int page, int size);
 
     /**
      * 按 FIA 检验标准列出可联动的 SPC 参数(供创建首件任务时供用户勾选)。

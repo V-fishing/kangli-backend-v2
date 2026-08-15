@@ -498,10 +498,18 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
 
         String[] triggered = null;
         if (countType) {
-            // 计数型:仅登记 nonconforming/inspectN/defectCount, 不计算 xbar/rangeR、不落 measurement、不做 WECO 计量判异
+            // 计数型:仅登记 nonconforming/inspectN/defectCount, 不计算 xbar/rangeR、不落 measurement;
+            // 但同样做计数控制图(±3σ)判异, 超 UCL/LCL 时标记异常并建告警(SR-SPC-018)。
             subgroup.setN(subgroup.getInspectN() != null ? subgroup.getInspectN() : 1);
-            subgroup.setJudge("正常");
-            subgroup.setIsOutlier(false);
+            triggered = checkCountRules(subgroup, param);
+            if (triggered != null) {
+                subgroup.setJudge("异常");
+                subgroup.setIsOutlier(true);
+                subgroup.setOutlierRule(triggered[0]);
+            } else {
+                subgroup.setJudge("正常");
+                subgroup.setIsOutlier(false);
+            }
         } else {
             // 计量型:计算 xbar / rangeR / stdDev
             subgroup.setN(values.size());
@@ -583,7 +591,8 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                 alarm.setCode("AL-" + System.currentTimeMillis());
                 alarm.setParamId(subgroup.getParamId());
                 alarm.setParamName(param.getParamName());
-                alarm.setCurrentValue(xbar);
+                // 计量型落 xbar; 计数型 xbar 为 null, 改用当前计数点(不合格数/缺陷数)作为实测值
+                alarm.setCurrentValue(xbar != null ? xbar : countCurrentPoint(subgroup));
                 alarm.setTriggeredRule(triggered[0]);
                 alarm.setLevel(triggered[1]);
                 alarm.setAlarmTime(LocalDateTime.now());
@@ -868,6 +877,105 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             }
         }
         return winner;
+    }
+
+    /**
+     * 计数型(P/NP/C/U)判异检查: 依据参数 chartCandidates 第一个计数图类型,
+     * 聚合历史同类子组计算 CL ±3σ 控制限, 当前点超出 UCL/LCL 即判异(规则①, 报警级)。
+     * 返回 [ruleCode, level] 或 null。要求至少 2 个历史同类子组, 避免样本不足误报。
+     */
+    private String[] checkCountRules(SpcSubgroup subgroup, SpcParam param) {
+        if (param == null || !StringUtils.hasText(param.getChartCandidates())) {
+            return null;
+        }
+        List<String> types = FiaChartTypeResolver.parse(param.getChartCandidates());
+        // 取首个计数图类型作为判异基准(参数通常单一计数类)
+        String primary = types.stream().filter(t -> List.of("P", "NP", "C", "U").contains(t)).findFirst().orElse(null);
+        if (primary == null) {
+            return null;
+        }
+        boolean cu = primary.equals("C") || primary.equals("U");
+
+        // 聚合历史同类子组(不含当前, 尚未插入)
+        List<SpcSubgroup> hist = spcSubgroupMapper.selectList(
+                new LambdaQueryWrapper<SpcSubgroup>()
+                        .eq(SpcSubgroup::getParamId, subgroup.getParamId())
+                        .orderByDesc(SpcSubgroup::getSubgroupTime)
+                        .last("LIMIT 30"));
+        // 筛选同类计数子组
+        List<SpcSubgroup> same = hist.stream().filter(s ->
+                cu ? (s.getDefectCount() != null && s.getInspectN() != null && s.getInspectN() != 0)
+                   : (s.getNonconforming() != null)).toList();
+        if (same.size() < 2) {
+            // 历史同类样本不足, 不判异(避免首点误报)
+            return null;
+        }
+
+        // 计算 CL
+        BigDecimal cl;
+        if (cu) {
+            BigDecimal sumDef = BigDecimal.ZERO, sumN = BigDecimal.ZERO;
+            for (SpcSubgroup s : same) {
+                sumDef = sumDef.add(BigDecimal.valueOf(s.getDefectCount()));
+                sumN = sumN.add(BigDecimal.valueOf(s.getInspectN()));
+            }
+            if (sumN.signum() == 0) return null;
+            cl = sumDef.divide(sumN, 6, RoundingMode.HALF_UP);
+        } else {
+            BigDecimal sumNon = BigDecimal.ZERO;
+            for (SpcSubgroup s : same) sumNon = sumNon.add(BigDecimal.valueOf(s.getNonconforming()));
+            cl = sumNon.divide(BigDecimal.valueOf(same.size()), 6, RoundingMode.HALF_UP);
+        }
+
+        // 计算当前点 + 当前子组控制限
+        BigDecimal current;
+        BigDecimal ucl;
+        if (cu) {
+            if (subgroup.getDefectCount() == null || subgroup.getInspectN() == null
+                    || subgroup.getInspectN() == 0) {
+                return null;
+            }
+            BigDecimal n = BigDecimal.valueOf(subgroup.getInspectN());
+            current = BigDecimal.valueOf(subgroup.getDefectCount()).divide(n, 6, RoundingMode.HALF_UP);
+            BigDecimal sd = sqrt(cl.divide(n, 6, RoundingMode.HALF_UP));
+            ucl = cl.add(sd.multiply(THREE));
+            BigDecimal lcl = maxZero(cl.subtract(sd.multiply(THREE)));
+            if (current.compareTo(ucl) > 0 || current.compareTo(lcl) < 0) {
+                return new String[]{"①", "报警"};
+            }
+        } else {
+            if (subgroup.getNonconforming() == null) return null;
+            current = BigDecimal.valueOf(subgroup.getNonconforming());
+            if (primary.equals("P")) {
+                if (subgroup.getInspectN() == null || subgroup.getInspectN() == 0) return null;
+                BigDecimal n = BigDecimal.valueOf(subgroup.getInspectN());
+                BigDecimal p = current.divide(n, 6, RoundingMode.HALF_UP);
+                BigDecimal sd = sqrt(cl.multiply(BigDecimal.ONE.subtract(cl)).divide(n, 6, RoundingMode.HALF_UP));
+                ucl = cl.add(sd.multiply(THREE));
+                BigDecimal lcl = maxZero(cl.subtract(sd.multiply(THREE)));
+                if (p.compareTo(ucl) > 0 || p.compareTo(lcl) < 0) {
+                    return new String[]{"①", "报警"};
+                }
+            } else { // NP: 固定样本量, 控制限不随 n 变
+                BigDecimal npbar = cl;
+                BigDecimal sd = sqrt(npbar.multiply(BigDecimal.ONE.subtract(npbar.divide(BigDecimal.valueOf(same.size()), 6, RoundingMode.HALF_UP))));
+                ucl = npbar.add(sd.multiply(THREE));
+                BigDecimal lcl = maxZero(npbar.subtract(sd.multiply(THREE)));
+                if (current.compareTo(ucl) > 0 || current.compareTo(lcl) < 0) {
+                    return new String[]{"①", "报警"};
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 计数型子组当前点值(不合格数 / 缺陷数), 用于告警 currentValue。
+     */
+    private BigDecimal countCurrentPoint(SpcSubgroup subgroup) {
+        if (subgroup.getDefectCount() != null) return BigDecimal.valueOf(subgroup.getDefectCount());
+        if (subgroup.getNonconforming() != null) return BigDecimal.valueOf(subgroup.getNonconforming());
+        return null;
     }
 
     private BigDecimal avg(List<BigDecimal> list) {

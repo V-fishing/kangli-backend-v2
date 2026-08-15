@@ -50,7 +50,7 @@ public class SpcParamServiceImpl implements SpcParamService {
     private final SpcParamProductMapper spcParamProductMapper;
 
     @Override
-    public List<SpcParam> list(String productName, String procName, String paramSource) {
+    public List<SpcParam> list(String productName, String procName, String paramSource, String srcWoNo) {
         List<SpcParam> params = spcParamMapper.selectList(null);
         // 填充 fiaStdItemName(展示用)
         List<String> itemIds = params.stream().map(SpcParam::getFiaStdItemId).filter(StringUtils::hasText).distinct().collect(Collectors.toList());
@@ -118,6 +118,11 @@ public class SpcParamServiceImpl implements SpcParamService {
         if (StringUtils.hasText(paramSource)) {
             params = params.stream().filter(p -> paramSource.equals(p.getParamSource())).collect(Collectors.toList());
         }
+        // 按来源工单号过滤:选中工单时仅返回该工单下的参数(首件/抽样参数 srcWoNo 口径一致),
+        // 与产品/工序/来源维度取交集;用于采集页"按工单匹配该产品参数"的同源下拉。
+        if (StringUtils.hasText(srcWoNo)) {
+            params = params.stream().filter(p -> srcWoNo.equals(p.getSrcWoNo())).collect(Collectors.toList());
+        }
         return params;
     }
 
@@ -134,7 +139,7 @@ public class SpcParamServiceImpl implements SpcParamService {
                         .eq(FiaInspStdItem::getIsDeleted, false));
         if (items.isEmpty()) return List.of();
         // 已有 SPC 参数(fiaStdItemId 精确匹配)按 检验项id 建索引
-        List<SpcParam> all = list(null, null, null);
+        List<SpcParam> all = list(null, null, null, null);
         Map<String, SpcParam> existByItem = all.stream()
                 .filter(p -> p.getIsActive() && p.getFiaStdItemId() != null)
                 .collect(Collectors.toMap(SpcParam::getFiaStdItemId, p -> p, (a, b) -> a));
@@ -167,8 +172,8 @@ public class SpcParamServiceImpl implements SpcParamService {
     }
 
     @Override
-    public PageResult<SpcParam> listPage(String productName, String procName, String paramSource, String keyword, int page, int size) {
-        List<SpcParam> all = list(productName, procName, paramSource);
+    public PageResult<SpcParam> listPage(String productName, String procName, String paramSource, String srcWoNo, String keyword, int page, int size) {
+        List<SpcParam> all = list(productName, procName, paramSource, srcWoNo);
         if (StringUtils.hasText(keyword)) {
             String kw = keyword.trim().toLowerCase();
             all = all.stream().filter(p ->
