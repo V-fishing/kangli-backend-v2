@@ -255,8 +255,30 @@ public class CsWorkOrderServiceImpl implements CsWorkOrderService {
         stat.put("closed", closed);
         stat.put("urgentPending", urgentPending);
         stat.put("total", pending + assigned + done + closed);
+
+        // 月度趋势(最近 12 个月新建/完成工单量, 需求 2.4.1.3 服务记录趋势分析)
+        try {
+            List<Map<String, Object>> monthly = jdbcTemplate.queryForList(
+                "SELECT TO_CHAR(created_at, 'YYYY-MM') AS month, " +
+                "COUNT(*) AS created, " +
+                "COUNT(*) FILTER (WHERE status = 'CLOSED') AS closed " +
+                "FROM ops.cs_work_order WHERE is_deleted = false" + csOrgCond() +
+                " AND created_at >= NOW() - INTERVAL '12 months' " +
+                "GROUP BY TO_CHAR(created_at, 'YYYY-MM') ORDER BY month");
+            stat.put("monthly", monthly);
+        } catch (Exception e) {
+            log.warn("[CS] 工单趋势查询失败: {}", e.getMessage());
+            stat.put("monthly", java.util.Collections.emptyList());
+        }
         return stat;
     }
+
+    /** 组织过滤拼接(复用 dashboard 的 org 解析, 避免重复代码)。 */
+    private String csOrgCond() {
+        String org = curOrg();
+        return (org != null) ? " AND org_id = '" + org + "'" : "";
+    }
+
 
     @Override
     public Map<String, Object> satisfactionStats() {
@@ -294,6 +316,26 @@ public class CsWorkOrderServiceImpl implements CsWorkOrderService {
                 "AND close_at >= NOW() - INTERVAL '12 months' " +
                 "GROUP BY TO_CHAR(close_at, 'YYYY-MM') ORDER BY month");
             res.put("monthly", monthly);
+
+            // 客户反馈评分(需求 2.4.2.1 数据源补全): 聚合 cs_feedback.satisfaction 1~5
+            Map<String, Object> fbAgg = jdbcTemplate.queryForMap(
+                "SELECT COALESCE(ROUND(AVG(satisfaction)::numeric, 2), 0) AS avg_score, " +
+                "COUNT(*) AS rated FROM ops.cs_feedback " +
+                "WHERE is_deleted = false AND satisfaction IS NOT NULL" + orgCond);
+            res.put("fbAvgScore", fbAgg.get("avg_score"));
+            res.put("fbRated", ((Number) fbAgg.get("rated")).longValue());
+
+            // 低分诱因维度统计(需求 2.4.2.2): 按 cause 分组计数
+            List<Map<String, Object>> causeDist = jdbcTemplate.queryForList(
+                "SELECT cause AS cause, COUNT(*) AS cnt FROM ops.cs_feedback " +
+                "WHERE is_deleted = false AND cause IS NOT NULL" + orgCond +
+                " GROUP BY cause ORDER BY cnt DESC");
+            Map<String, Long> causeMap = new LinkedHashMap<>();
+            for (Map<String, Object> c : causeDist) {
+                String cause = c.get("cause") != null ? c.get("cause").toString() : "OTHER";
+                causeMap.put(cause, ((Number) c.get("cnt")).longValue());
+            }
+            res.put("causeDist", causeMap);
         } catch (Exception e) {
             log.warn("[CS] 满意度统计查询失败: {}", e.getMessage());
             res.put("avgScore", 0);

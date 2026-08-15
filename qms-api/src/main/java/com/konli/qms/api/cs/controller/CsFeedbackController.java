@@ -76,4 +76,12 @@ public class CsFeedbackController {
         service.markHandling(id, ownerName);
         return R.ok();
     }
+
+    /** 反馈联动质量改进: 绑定 NCM 8D/CAPA 纠正措施 ID(需求 2.4.2.5 闭环)。 */
+    @PostMapping("/{id}/link-ncm")
+    @PreAuthorize("hasAuthority('cs.feedback.link')")
+    public R<Void> linkNcm(@PathVariable String id, @RequestParam String ncmId) {
+        service.linkNcm(id, ncmId);
+        return R.ok();
+    }
 }

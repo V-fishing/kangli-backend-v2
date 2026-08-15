@@ -482,16 +482,41 @@ public class TlmToolingServiceImpl implements TlmToolingService {
     @Override
     @Transactional
     public void onRepairCompleted(String id) {
+        onRepairCompleted(id, true);
+    }
+
+    /**
+     * 维修完成验证(需求 2.5.3.3 深度闭环): verifyPass=true 验证通过恢复在用并触发首件;
+     * verifyPass=false 验证不通过 → 自动锁定工装(locked=true)并通知, 禁止派工使用。
+     */
+    @Override
+    @Transactional
+    public void onRepairCompleted(String id, boolean verifyPass) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
         if (!"REPAIRING".equals(t.getStatus()) && !"DONE".equals(t.getStatus())) {
-            throw new RuntimeException("工装当前不是维修中/已完成维修状态，无法执行验证通过");
+            throw new RuntimeException("工装当前不是维修中/已完成维修状态，无法执行验证");
         }
         TlmRepair r = repairMapper.selectOne(new LambdaQueryWrapper<TlmRepair>()
                 .eq(TlmRepair::getToolId, id).orderByDesc(TlmRepair::getCreatedAt).last("LIMIT 1"));
         if (r != null && !"VERIFIED".equals(r.getStatus())) {
             r.setStatus("VERIFIED");
             repairMapper.updateById(r);
+        }
+        if (!verifyPass) {
+            // 验证不通过: 自动锁定, 禁止派工
+            t.setLocked(Boolean.TRUE);
+            t.setStatus("REPAIRING");
+            toolingMapper.updateById(t);
+            try {
+                notificationService.notify("tlm", "tlm_repair_verify_fail", "工装验证不通过已锁定",
+                        "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 维修后验证不通过,已自动锁定禁止派工,请重新安排维修。",
+                        "tlm_tooling", t.getId(), "/tlm/tooling/" + id);
+            } catch (Exception e) {
+                log.warn("[TLM] 工装验证不通过锁定通知失败: {}", e.getMessage());
+            }
+            log.info("[TLM] 工装 {} 维修验证不通过,已自动锁定", t.getToolNo());
+            return;
         }
         // 状态恢复为在用
         t.setStatus("IN_USE");

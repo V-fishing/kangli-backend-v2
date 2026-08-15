@@ -209,11 +209,12 @@ public class TlmToolingController {
         return R.ok();
     }
 
-    /** 维修完成(措施已填): REPAIRING -> DONE。 */
+    /** 维修完成(措施已填): REPAIRING -> DONE。verifyPass=false 验证不通过自动锁定。 */
     @PostMapping("/tooling/{id}/repair-done")
     @PreAuthorize("hasAuthority('tlm.tooling.repair')")
-    public R<Void> repairDone(@PathVariable String id) {
-        toolingService.repairDone(id);
+    public R<Void> repairDone(@PathVariable String id,
+                              @RequestParam(defaultValue = "true") boolean verifyPass) {
+        toolingService.onRepairCompleted(id, verifyPass);
         return R.ok();
     }
 

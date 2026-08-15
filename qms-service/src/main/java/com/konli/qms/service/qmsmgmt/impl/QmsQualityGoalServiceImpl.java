@@ -7,10 +7,12 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.qmsmgmt.entity.QmsQualityGoal;
 import com.konli.qms.domain.qmsmgmt.mapper.QmsQualityGoalMapper;
+import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.qmsmgmt.QmsQualityGoalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +29,7 @@ public class QmsQualityGoalServiceImpl implements QmsQualityGoalService {
 
     private final QmsQualityGoalMapper mapper;
     private final JdbcTemplate jdbcTemplate;
+    private final NotificationService notificationService;
 
     private String curOrg() {
         try {
@@ -148,5 +151,40 @@ public class QmsQualityGoalServiceImpl implements QmsQualityGoalService {
         res.put("overallRate", total == 0 ? BigDecimal.ZERO : BigDecimal.valueOf(sumRate / total).setScale(2, RoundingMode.HALF_UP));
         res.put("byType", byType);
         return res;
+    }
+
+    /**
+     * SR-QSM: 每天 8:10 扫描质量目标达成率预警。
+     * 条件: 实际/目标 < 100% (未达标) 且 deadline 非空且 >= 今天(未过期目标)。
+     * 去重: 同一目标当天已发过 qms_goal_warn 则跳过。
+     * 接收人: 走 notify 配置(sqe 角色)。
+     */
+    @Scheduled(cron = "0 10 8 * * ?")
+    public void scanGoalWarn() {
+        try {
+            List<QmsQualityGoal> all = mapper.selectList(new LambdaQueryWrapper<QmsQualityGoal>());
+            List<QmsQualityGoal> unReached = all.stream()
+                    .filter(g -> g.getActualValue() != null && g.getTargetValue() != null
+                            && g.getActualValue().compareTo(g.getTargetValue()) < 0)
+                    .collect(java.util.stream.Collectors.toList());
+            if (unReached.isEmpty()) return;
+            String today = java.time.LocalDate.now().toString();
+            for (QmsQualityGoal g : unReached) {
+                if (g.getDeadline() != null && g.getDeadline().isBefore(java.time.LocalDateTime.now())) continue;
+                Integer cnt = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(1) FROM ops.sys_notification WHERE biz_id = ? AND title = '质量目标未达标预警' "
+                                + "AND to_char(created_at, 'YYYY-MM-DD') = ?",
+                        Integer.class, g.getId(), today);
+                if (cnt != null && cnt > 0) continue;
+                BigDecimal r = rate(g);
+                String detail = "质量目标「" + g.getGoalName() + "」(" + g.getGoalType() + ") 达成率 "
+                        + r + "%,未达目标值 " + g.getTargetValue() + ",请关注改进。";
+                notificationService.notify("qms-mgmt", "qms_goal_warn", "质量目标未达标预警", detail,
+                        "qms_quality_goal", g.getId(), "/qms-mgmt/goal");
+            }
+            log.info("[QMS-MGMT] 质量目标预警扫描完成, 命中 {} 条", unReached.size());
+        } catch (Exception e) {
+            log.warn("[QMS-MGMT] 质量目标预警扫描异常: {}", e.getMessage());
+        }
     }
 }

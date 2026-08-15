@@ -105,6 +105,8 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
         exist.setContent(fb.getContent());
         exist.setRelatedWoNo(fb.getRelatedWoNo());
         exist.setSatisfaction(fb.getSatisfaction());
+        exist.setCause(fb.getCause());
+        exist.setRelatedNcmId(fb.getRelatedNcmId());
         exist.setUpdatedBy(curUser());
         mapper.updateById(exist);
         return exist;
@@ -116,6 +118,9 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
         mapper.deleteById(id);
     }
 
+    /** 低分自动流转阈值: 满意度评分 <= 该值视为低分, 自动流转至质量负责人(sqe)。 */
+    private static final int LOW_SCORE_THRESHOLD = 2;
+
     @Override
     @Transactional
     public void handle(String id, String handleDetail, String ownerName) {
@@ -123,7 +128,20 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
         if (f == null) throw new com.konli.qms.common.exception.BusinessException("反馈不存在");
         f.setStatus("DONE");
         f.setHandleDetail(handleDetail);
-        f.setOwnerName(ownerName);
+        // 低满意度自动流转负责人(需求 2.4.2.3): 未手动指定负责人且评分 <= 阈值时, 流转至质量改进并通知 sqe
+        if ((ownerName == null || ownerName.isBlank())
+                && f.getSatisfaction() != null && f.getSatisfaction() <= LOW_SCORE_THRESHOLD) {
+            f.setOwnerName("质量改进(低分自动流转)");
+            try {
+                notificationService.notify("cs", "cs_fb_lowscore", "低分反馈自动流转",
+                        "客户 " + f.getCustomerName() + " 的反馈评分仅 " + f.getSatisfaction()
+                                + "★,已自动流转至质量负责人跟进处理。", "cs_feedback", f.getId(), "/cs/feedback");
+            } catch (Exception e) {
+                log.warn("[CS] 低分反馈流转通知发送失败: {}", e.getMessage());
+            }
+        } else {
+            f.setOwnerName(ownerName);
+        }
         f.setHandleAt(LocalDateTime.now());
         f.setUpdatedBy(curUser());
         mapper.updateById(f);
@@ -141,5 +159,22 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
         if (ownerName != null && !ownerName.isBlank()) f.setOwnerName(ownerName);
         f.setUpdatedBy(curUser());
         mapper.updateById(f);
+    }
+
+    @Override
+    @Transactional
+    public void linkNcm(String id, String ncmId) {
+        CsFeedback f = mapper.selectById(id);
+        if (f == null) throw new com.konli.qms.common.exception.BusinessException("反馈不存在");
+        f.setRelatedNcmId(ncmId);
+        f.setUpdatedBy(curUser());
+        mapper.updateById(f);
+        try {
+            notificationService.notify("cs", "cs_fb_ncm", "反馈联动质量改进",
+                    "客户 " + f.getCustomerName() + " 的反馈已联动纠正措施(" + ncmId + "),请跟进闭环。",
+                    "cs_feedback", f.getId(), "/cs/feedback");
+        } catch (Exception e) {
+            log.warn("[CS] 反馈联动通知发送失败: {}", e.getMessage());
+        }
     }
 }

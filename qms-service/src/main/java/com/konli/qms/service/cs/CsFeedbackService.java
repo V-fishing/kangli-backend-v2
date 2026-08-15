@@ -23,4 +23,7 @@ public interface CsFeedbackService {
 
     /** 标记反馈为处理中: OPEN -> HANDLING。 */
     void markHandling(String id, String ownerName);
+
+    /** 反馈联动质量改进: 绑定 NCM 8D/CAPA 纠正措施 ID(需求 2.4.2.5)。 */
+    void linkNcm(String id, String ncmId);
 }

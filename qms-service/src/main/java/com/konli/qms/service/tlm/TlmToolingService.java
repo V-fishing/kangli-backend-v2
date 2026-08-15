@@ -61,6 +61,9 @@ public interface TlmToolingService {
     /** 维修完成: 状态恢复 IN_USE + 触发 FIA 首件检验任务。 */
     void onRepairCompleted(String id);
 
+    /** 维修完成验证: verifyPass=false 时自动锁定工装(需求 2.5.3.3 深度闭环)。 */
+    void onRepairCompleted(String id, boolean verifyPass);
+
     /** 维修工单分页查询(支持 工装编号/名称关键词/状态 过滤)。 */
     PageResult<TlmRepair> repairPage(String keyword, String status, int page, int size);
 

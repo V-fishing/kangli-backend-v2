@@ -46,4 +46,24 @@ public class CsFeedback extends BaseEntity {
 
     @TableField("satisfaction")
     private Integer satisfaction;
+
+    /** 低分诱因维度(需求 2.4.2.2): RESPONSE_SLOW / REPAIR_INCOMPLETE / ATTITUDE / OTHER。 */
+    @TableField("cause")
+    private String cause;
+
+    /** 联动 NCM 8D/CAPA 纠正措施 ID(需求 2.4.2.5 质量改进闭环)。 */
+    @TableField("related_ncm_id")
+    private String relatedNcmId;
+
+    /** 触发 8D 报告 ID(需求 2.4.2.5 从反馈直接发起 8D)。 */
+    @TableField("related_8d_id")
+    private String related8dId;
+
+    /** 触发 CAPA ID(需求 2.4.2.5 从反馈直接发起 CAPA)。 */
+    @TableField("related_capa_id")
+    private String relatedCapaId;
+
+    /** 触发 CA 纠正措施 ID(需求 2.4.2.5 从反馈直接发起 CA)。 */
+    @TableField("related_ca_id")
+    private String relatedCaId;
 }
