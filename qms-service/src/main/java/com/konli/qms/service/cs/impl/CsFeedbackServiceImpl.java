@@ -4,10 +4,18 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
+import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.cs.entity.CsFeedback;
 import com.konli.qms.domain.cs.mapper.CsFeedbackMapper;
+import com.konli.qms.domain.ncm.entity.NcmCorrectiveAction;
+import com.konli.qms.domain.ncm.entity.Qms8dReport;
+import com.konli.qms.domain.ncm.entity.QmsCapa;
 import com.konli.qms.service.cs.CsFeedbackService;
+import com.konli.qms.service.cs.dto.TriggerNcmRequest;
+import com.konli.qms.service.ncm.Ncm8dService;
+import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.NcmCorrectiveActionService;
 import com.konli.qms.service.notify.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +23,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Service
@@ -25,6 +34,9 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
     private final CsFeedbackMapper mapper;
     private final JdbcTemplate jdbcTemplate;
     private final NotificationService notificationService;
+    private final Ncm8dService ncm8dService;
+    private final NcmCapaService ncmCapaService;
+    private final NcmCorrectiveActionService ncmCaService;
 
     private String curOrg() {
         try {
@@ -175,6 +187,105 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
                     "cs_feedback", f.getId(), "/cs/feedback");
         } catch (Exception e) {
             log.warn("[CS] 反馈联动通知发送失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 从客户反馈直接触发质量改进纠正措施(需求 2.4.2.5 闭环升级)。
+     * 替代原"手动填写 NCM ID"的弱联动: 实际创建 8D / CAPA / CA 记录, 并把新记录 ID 回填到
+     * 反馈对应关联字段(related_8d_id / related_capa_id / related_ca_id), 同时兼容写入 related_ncm_id,
+     * 实现"反馈 → 纠正措施"真正的双向追溯闭环。
+     */
+    @Override
+    @Transactional
+    public CsFeedback triggerNcm(String id, TriggerNcmRequest req) {
+        CsFeedback f = mapper.selectById(id);
+        if (f == null) throw new BusinessException("反馈不存在");
+        if (req == null || req.getType() == null || req.getType().isBlank()) {
+            throw new BusinessException("触发类型不能为空(8D/CAPA/CA)");
+        }
+        String issue = (req.getIssue() != null && !req.getIssue().isBlank()) ? req.getIssue() : f.getContent();
+        String ownerName = req.getOwnerName();
+        if (ownerName == null && req.getOwnerUserId() != null) {
+            ownerName = queryUserName(req.getOwnerUserId());
+        }
+        String type = req.getType().toUpperCase();
+        String link = "/cs/feedback";
+        switch (type) {
+            case "8D": {
+                Qms8dReport r = new Qms8dReport();
+                r.setId(java.util.UUID.randomUUID().toString());
+                r.setOrgId(f.getOrgId());
+                r.setSource("CS反馈");
+                r.setSourceRefId(f.getId());
+                r.setIssue(issue);
+                r.setSeverity("一般");
+                r.setFlowType("8D");
+                if (req.getOwnerUserId() != null) r.setOwnerUserId(req.getOwnerUserId());
+                if (ownerName != null) { r.setOwnerUserName(ownerName); r.setTeam(ownerName); }
+                Qms8dReport created = ncm8dService.create(r);
+                f.setRelated8dId(created.getId());
+                f.setRelatedNcmId(created.getId());
+                link = "/ncm/8d-reports/" + created.getId();
+                break;
+            }
+            case "CAPA": {
+                QmsCapa c = new QmsCapa();
+                c.setOrgId(f.getOrgId());
+                c.setSourceRefId(f.getId());
+                c.setSourceType("CS_FEEDBACK");
+                c.setIssue(issue);
+                if (req.getOwnerUserId() != null) { c.setOwnerUserId(req.getOwnerUserId()); c.setOwner(req.getOwnerUserId()); }
+                if (req.getDueDate() != null && !req.getDueDate().isBlank()) {
+                    try { c.setDueDate(LocalDate.parse(req.getDueDate())); } catch (Exception ignored) {}
+                }
+                QmsCapa created = ncmCapaService.create(c);
+                f.setRelatedCapaId(created.getId());
+                f.setRelatedNcmId(created.getId());
+                link = "/ncm/capas/" + created.getId();
+                break;
+            }
+            case "CA": {
+                NcmCorrectiveAction ca = new NcmCorrectiveAction();
+                ca.setOrgId(f.getOrgId());
+                ca.setSourceRefId(f.getId());
+                ca.setSourceType("CS_FEEDBACK");
+                ca.setIssue(issue);
+                if (req.getOwnerUserId() != null) { ca.setOwnerUserId(req.getOwnerUserId()); ca.setOwner(req.getOwnerUserId()); }
+                if (ownerName != null) ca.setOwnerName(ownerName);
+                if (req.getDueDate() != null && !req.getDueDate().isBlank()) {
+                    try { ca.setDueDate(LocalDate.parse(req.getDueDate())); } catch (Exception ignored) {}
+                }
+                NcmCorrectiveAction created = ncmCaService.create(ca);
+                f.setRelatedCaId(created.getId());
+                f.setRelatedNcmId(created.getId());
+                link = "/ncm/corrective-actions/" + created.getId();
+                break;
+            }
+            default:
+                throw new BusinessException("不支持的触发类型: " + type + "(应为 8D/CAPA/CA)");
+        }
+        f.setUpdatedBy(curUser());
+        mapper.updateById(f);
+        try {
+            String bizNo = type + " 纠正措施";
+            notificationService.notify("cs", "cs_fb_ncm", "反馈触发质量改进",
+                    "客户 " + f.getCustomerName() + " 的反馈已触发 " + type + " 纠正措施,请跟进闭环。",
+                    "cs_feedback", f.getId(), link);
+        } catch (Exception e) {
+            log.warn("[CS] 反馈触发质量改进通知发送失败: {}", e.getMessage());
+        }
+        return f;
+    }
+
+    /** 解析用户姓名(批量/单查封装, 兜底返回原 id)。 */
+    private String queryUserName(String userId) {
+        if (userId == null || userId.isBlank()) return null;
+        try {
+            return jdbcTemplate.queryForObject(
+                    "SELECT real_name FROM ops.sys_user WHERE id = ?", String.class, userId);
+        } catch (Exception e) {
+            return userId;
         }
     }
 }

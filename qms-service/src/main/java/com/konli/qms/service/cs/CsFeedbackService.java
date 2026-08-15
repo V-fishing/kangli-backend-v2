@@ -2,6 +2,7 @@ package com.konli.qms.service.cs;
 
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.cs.entity.CsFeedback;
+import com.konli.qms.service.cs.dto.TriggerNcmRequest;
 
 import java.util.Map;
 
@@ -26,4 +27,7 @@ public interface CsFeedbackService {
 
     /** 反馈联动质量改进: 绑定 NCM 8D/CAPA 纠正措施 ID(需求 2.4.2.5)。 */
     void linkNcm(String id, String ncmId);
+
+    /** 从反馈直接触发质量改进纠正措施, 实际创建 8D/CAPA/CA 并回填来源关联(需求 2.4.2.5 闭环升级)。 */
+    CsFeedback triggerNcm(String id, TriggerNcmRequest req);
 }

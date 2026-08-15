@@ -4,6 +4,7 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.cs.entity.CsFeedback;
 import com.konli.qms.service.cs.CsFeedbackService;
+import com.konli.qms.service.cs.dto.TriggerNcmRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -83,5 +84,12 @@ public class CsFeedbackController {
     public R<Void> linkNcm(@PathVariable String id, @RequestParam String ncmId) {
         service.linkNcm(id, ncmId);
         return R.ok();
+    }
+
+    /** 从客户反馈直接触发质量改进纠正措施, 实际创建 8D/CAPA/CA 并回填来源(需求 2.4.2.5 闭环升级)。 */
+    @PostMapping("/{id}/trigger-ncm")
+    @PreAuthorize("hasAuthority('cs.feedback.link')")
+    public R<CsFeedback> triggerNcm(@PathVariable String id, @RequestBody TriggerNcmRequest req) {
+        return R.ok(service.triggerNcm(id, req));
     }
 }

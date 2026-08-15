@@ -23,6 +23,14 @@ public class NcmCorrectiveAction extends BaseEntity {
     @TableField("defect_no")
     private String defectNo;
 
+    /** 来源单据 ID(如客户反馈 id),支撑跨模块追溯(需求 2.4.2.5)。 */
+    @TableField("source_ref_id")
+    private String sourceRefId;
+
+    /** 来源类型:CS_FEEDBACK / 来料异常 / 审核不符合项 / 不良记录 等。 */
+    @TableField("source_type")
+    private String sourceType;
+
     private String issue;
 
     private String owner;
