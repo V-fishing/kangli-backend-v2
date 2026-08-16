@@ -5,8 +5,10 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.notify.entity.NotifyChannel;
+import com.konli.qms.domain.notify.entity.NotifyMessage;
 import com.konli.qms.domain.notify.entity.SysNotification;
 import com.konli.qms.domain.notify.mapper.NotifyChannelMapper;
+import com.konli.qms.domain.notify.mapper.NotifyMessageMapper;
 import com.konli.qms.domain.notify.mapper.SysNotificationMapper;
 import com.konli.qms.service.uop.UserService;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ public class NotificationService {
     private final ExternalNotifyService externalNotifyService;
     private final DirectNotifyService directNotifyService;
     private final NotifyChannelMapper notifyChannelMapper;
+    private final NotifyMessageMapper notifyMessageMapper;
 
     /**
      * 统一通知入口: 按配置解析接收人(角色用户 ∪ 具体接收人)与外部渠道。
@@ -47,13 +50,23 @@ public class NotificationService {
      */
     public void notify(String module, String eventCode, String title, String content,
                         String bizType, String bizId, String link) {
+        notify(module, eventCode, title, content, bizType, bizId, null, link);
+    }
+
+    /**
+     * 统一通知入口(带可读单据号 bizNo): 按配置解析接收人(角色用户 ∪ 具体接收人)与外部渠道。
+     * 站内信发给每个接收人; webhook 渠道群发; direct 渠道(钉钉/企微/邮件/短信)按接收人逐人点对点发送。
+     * 配置禁用或查不到时静默不发,不影响主流程。
+     */
+    public void notify(String module, String eventCode, String title, String content,
+                        String bizType, String bizId, String bizNo, String link) {
         List<String> roles = notifyConfigService.resolveRoles(module, eventCode);
         List<String> receiverIds = notifyConfigService.resolveReceiverIds(module, eventCode);
         // 接收人 = 角色解析出的所有用户 ∪ 具体接收人(去重)
         Set<String> userIds = new LinkedHashSet<>(resolveUserIdsByRoles(roles));
         if (receiverIds != null) userIds.addAll(receiverIds.stream().filter(id -> id != null && !id.isBlank()).toList());
         for (String uid : userIds) {
-            insert(uid, title, content, bizType, bizId, link);
+            insert(uid, title, content, bizType, bizId, bizNo, link);
         }
         // 渠道: 按 channel_type 分流, webhook 群发 / direct 逐人点对点
         List<String> channels = notifyConfigService.resolveChannels(module, eventCode);
@@ -78,9 +91,26 @@ public class NotificationService {
                 senderName = cur.username();
             } catch (Exception ignored) { /* 定时任务等无当前用户场景 */ }
             for (String uid : userIds) {
+                // 把站内信主记录 id 透传给外发明细, 使通知中心同一条通知的站内+外发聚合展示
+                String notifId = lastInsertedId(uid, bizType, bizId, title);
                 directNotifyService.sendToUser(null, senderId, senderName, buildReceiver(uid),
-                        directCh, title, content, bizType, bizId, null);
+                        directCh, title, content, bizType, bizId, bizNo, notifId);
             }
+        }
+    }
+
+    /** 取最近写入该接收人的站内信主记录 id(供外发明细挂接)。 */
+    private String lastInsertedId(String userId, String bizType, String bizId, String title) {
+        try {
+            return notificationMapper.selectOne(new LambdaQueryWrapper<SysNotification>()
+                    .eq(SysNotification::getUserId, userId)
+                    .eq(bizType != null, SysNotification::getBizType, bizType)
+                    .eq(bizId != null, SysNotification::getBizId, bizId)
+                    .eq(SysNotification::getTitle, title)
+                    .orderByDesc(SysNotification::getCreateTime)
+                    .last("LIMIT 1")).getId();
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -101,9 +131,15 @@ public class NotificationService {
     /** 按角色码解析用户并推送(可排除某用户,避免通知发起者本人)。 */
     public void notifyRoles(List<String> roleCodes, String title, String content,
                             String bizType, String bizId, String link, String excludeUserId) {
+        notifyRoles(roleCodes, title, content, bizType, bizId, null, link, excludeUserId);
+    }
+
+    /** 按角色码解析用户并推送(带可读单据号 bizNo)。 */
+    public void notifyRoles(List<String> roleCodes, String title, String content,
+                            String bizType, String bizId, String bizNo, String link, String excludeUserId) {
         for (String uid : resolveUserIdsByRoles(roleCodes)) {
             if (uid != null && !uid.equals(excludeUserId)) {
-                insert(uid, title, content, bizType, bizId, link);
+                insert(uid, title, content, bizType, bizId, bizNo, link);
             }
         }
     }
@@ -111,8 +147,14 @@ public class NotificationService {
     /** 推送给指定用户。 */
     public void notifyUser(String userId, String title, String content,
                            String bizType, String bizId, String link) {
+        notifyUser(userId, title, content, bizType, bizId, null, link);
+    }
+
+    /** 推送给指定用户(带可读单据号 bizNo)。 */
+    public void notifyUser(String userId, String title, String content,
+                           String bizType, String bizId, String bizNo, String link) {
         if (userId == null) return;
-        insert(userId, title, content, bizType, bizId, link);
+        insert(userId, title, content, bizType, bizId, bizNo, link);
     }
 
     public List<SysNotification> listMine() {
@@ -182,7 +224,7 @@ public class NotificationService {
     }
 
     private void insert(String userId, String title, String content,
-                        String bizType, String bizId, String link) {
+                        String bizType, String bizId, String bizNo, String link) {
         SysNotification n = new SysNotification();
         n.setUserId(userId);
         n.setUserName(queryUserName(userId));
@@ -191,10 +233,47 @@ public class NotificationService {
         n.setContent(content);
         n.setBizType(bizType);
         n.setBizId(bizId);
+        n.setBizNo(bizNo);
         n.setLink(link);
+        n.setChannel("站内弹窗");
         n.setIsRead(false);
         n.setCreateTime(LocalDateTime.now());
         notificationMapper.insert(n);
+        // 站内信主记录落库后, 同步写一条「站内弹窗」投递明细到 ops.notify_message,
+        // 使通知中心(查 notify_message)能覆盖每一条站内信通知。
+        try {
+            // 发送人取当前登录用户(业务操作发起人); 无登录态(定时任务等)时降级为空, 不影响主流程
+            String senderId = null;
+            String senderName = null;
+            try {
+                var cur = userService.getCurrent();
+                senderId = cur.userId();
+                // 优先真实姓名, 取不到回落登录账号
+                senderName = queryUserName(cur.userId());
+                if (senderName == null) senderName = cur.username();
+            } catch (Exception ignored) { /* 无当前用户场景 */ }
+            NotifyMessage inbox = new NotifyMessage();
+            inbox.setOrgId(n.getOrgId());
+            inbox.setSenderId(senderId);
+            inbox.setSenderName(senderName);
+            inbox.setReceiverId(userId);
+            inbox.setReceiverName(n.getUserName());
+            inbox.setReceiverType("user");
+            inbox.setChannel("站内弹窗");
+            inbox.setChannelType("inbox");
+            inbox.setTitle(title);
+            inbox.setContent(content);
+            inbox.setBizType(bizType);
+            inbox.setBizId(bizId);
+            // 业务调用方传入的可读单据号; 未传则留空, 通知中心回退展示「—」而非 UUID
+            inbox.setBizNo(bizNo);
+            inbox.setStatus("成功");
+            inbox.setSendTime(LocalDateTime.now());
+            inbox.setNotificationId(n.getId());
+            notifyMessageMapper.insert(inbox);
+        } catch (Exception ignored) {
+            // 投递明细写失败不影响站内信主流程
+        }
         // 发布事件供 SSE 实时推送
         try {
             eventPublisher.publishEvent(new NotificationCreatedEvent(n));

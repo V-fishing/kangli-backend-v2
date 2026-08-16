@@ -64,6 +64,16 @@ public class DirectNotifyServiceImpl implements DirectNotifyService {
                                           DirectReceiver receiver, List<String> channels,
                                           String title, String content,
                                           String bizType, String bizId, String bizNo) {
+        return sendToUser(orgId, senderId, senderName, receiver, channels,
+                title, content, bizType, bizId, bizNo, null);
+    }
+
+    @Override
+    public List<NotifyMessage> sendToUser(String orgId, String senderId, String senderName,
+                                          DirectReceiver receiver, List<String> channels,
+                                          String title, String content,
+                                          String bizType, String bizId, String bizNo,
+                                          String notificationId) {
         if (receiver == null || channels == null || channels.isEmpty()) return List.of();
         List<NotifyMessage> records = new ArrayList<>();
         for (String channelName : channels) {
@@ -71,8 +81,30 @@ public class DirectNotifyServiceImpl implements DirectNotifyService {
                     .eq(NotifyChannel::getChannel, channelName));
             if (ch == null || !Boolean.TRUE.equals(ch.getIsEnabled())) continue;
             if (!"direct".equals(ch.getChannelType())) continue;
-            // 站内弹窗属于 NotificationService 站内信体系, 不走点对点外发(避免写入未知渠道类型失败记录)
-            if ("站内弹窗".equals(ch.getChannel())) continue;
+            // 站内弹窗: 属于 NotificationService 站内信体系, 不发外部 HTTP,
+            // 但仍写一条 status=成功的投递明细并挂到主记录, 使通知中心可追溯每一条通知。
+            if ("站内弹窗".equals(ch.getChannel())) {
+                NotifyMessage inbox = new NotifyMessage();
+                inbox.setOrgId(orgId);
+                inbox.setSenderId(senderId);
+                inbox.setSenderName(senderName);
+                inbox.setReceiverId(receiver.userId());
+                inbox.setReceiverName(receiver.realName());
+                inbox.setReceiverType("user");
+                inbox.setChannel("站内弹窗");
+                inbox.setChannelType("inbox");
+                inbox.setTitle(title);
+                inbox.setContent(content);
+                inbox.setBizType(bizType);
+                inbox.setBizId(bizId);
+                inbox.setBizNo(bizNo);
+                inbox.setStatus("成功");
+                inbox.setSendTime(LocalDateTime.now());
+                inbox.setNotificationId(notificationId);
+                notifyMessageMapper.insert(inbox);
+                records.add(inbox);
+                continue;
+            }
             NotifyMessage rec = new NotifyMessage();
             rec.setOrgId(orgId);
             rec.setSenderId(senderId);
@@ -89,6 +121,7 @@ public class DirectNotifyServiceImpl implements DirectNotifyService {
             rec.setBizNo(bizNo);
             rec.setStatus("发送中");
             rec.setSendTime(LocalDateTime.now());
+            rec.setNotificationId(notificationId);
             notifyMessageMapper.insert(rec);
             records.add(rec);
             final String recordId = rec.getId();

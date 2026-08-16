@@ -22,7 +22,12 @@ public class SysNotification {
     private String content;
     private String bizType;
     private String bizId;
+    /** 可读业务单据号(如 8D-1786002805953); 调用方未传时为空, 通知中心回退展示 bizId */
+    @TableField("biz_no")
+    private String bizNo;
     private String link;
+    /** 首选渠道(如 站内弹窗 / 钉钉应用消息); 通知中心聚合投递明细时作为主渠道展示 */
+    private String channel;
     private Boolean isRead;
 
     @TableField("created_at")

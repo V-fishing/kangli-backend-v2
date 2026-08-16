@@ -18,6 +18,12 @@ public interface NotifyMessageService {
     /** 分页查询发送记录(按状态/渠道/关键字筛选)。 */
     PageResult<NotifyMessage> list(String status, String channel, String keyword, int page, int size);
 
+    /**
+     * 通知中心统一视图: 以「通知」为粒度聚合(同一 notification_id 的多条投递明细归并为一行),
+     * 每行含全部渠道投递结果(deliveries)。按notification_id(或自身id)分组后分页。
+     */
+    PageResult<NotifyCenterRow> centerPage(String status, String channel, String keyword, int page, int size);
+
     /** 点对点(direct)类型渠道列表(凭据已脱敏, 供通知中心发送时选择)。 */
     List<NotifyChannel> listDirectChannels();
 }

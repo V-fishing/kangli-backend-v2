@@ -42,6 +42,10 @@ public class NotifyMessage extends BaseEntity {
     @TableField("channel_type")
     private String channelType;
 
+    /** 关联站内信主记录(ops.sys_notification.id); 站内弹窗/外发明细均挂到此主记录 */
+    @TableField("notification_id")
+    private String notificationId;
+
     private String title;
 
     private String content;

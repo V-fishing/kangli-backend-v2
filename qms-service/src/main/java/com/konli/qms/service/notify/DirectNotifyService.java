@@ -24,4 +24,16 @@ public interface DirectNotifyService {
                                    DirectReceiver receiver, List<String> channels,
                                    String title, String content,
                                    String bizType, String bizId, String bizNo);
+
+    /**
+     * 同上, 额外关联站内信主记录(notificationId)。站内弹窗渠道也会写一条 status=成功的
+     * 投递明细并挂到该主记录, 使通知中心覆盖每一条通知(站内信 + 外发)。
+     *
+     * @param notificationId 关联 ops.sys_notification.id(可为 null: 手动外发无主记录场景)
+     */
+    List<NotifyMessage> sendToUser(String orgId, String senderId, String senderName,
+                                   DirectReceiver receiver, List<String> channels,
+                                   String title, String content,
+                                   String bizType, String bizId, String bizNo,
+                                   String notificationId);
 }

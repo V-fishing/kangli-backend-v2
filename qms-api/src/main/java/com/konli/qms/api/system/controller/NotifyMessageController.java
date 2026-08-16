@@ -4,6 +4,7 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.notify.entity.NotifyChannel;
 import com.konli.qms.domain.notify.entity.NotifyMessage;
+import com.konli.qms.service.notify.NotifyCenterRow;
 import com.konli.qms.service.notify.NotifyMessageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -60,5 +61,16 @@ public class NotifyMessageController {
     @PreAuthorize("hasAuthority('system.notify.center')")
     public R<List<NotifyChannel>> channels() {
         return R.ok(notifyMessageService.listDirectChannels());
+    }
+
+    /** 通知中心统一视图(以通知为粒度, 聚合多渠道投递明细)。 */
+    @GetMapping("/center/page")
+    @PreAuthorize("hasAuthority('system.notify.center')")
+    public R<PageResult<NotifyCenterRow>> centerPage(@RequestParam(required = false) String status,
+                                                     @RequestParam(required = false) String channel,
+                                                     @RequestParam(required = false) String keyword,
+                                                     @RequestParam(defaultValue = "1") int page,
+                                                     @RequestParam(defaultValue = "20") int size) {
+        return R.ok(notifyMessageService.centerPage(status, channel, keyword, page, size));
     }
 }
