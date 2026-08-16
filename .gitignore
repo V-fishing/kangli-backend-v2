@@ -56,3 +56,18 @@ temp_test/
 # ---------- 前端构建产物(若前后端同仓时忽略) ----------
 # dist/
 # node_modules/
+
+# ---------- 环境变量 / 密钥 (切勿提交) ----------
+.env
+.env.*
+*.env
+application-local.yml
+application-*-local.yml
+*.local.yml
+
+# ---------- 本地脚本 / 临时工具 ----------
+_pw_tmp/
+temp_test/
+
+# ---------- 数据库迁移脚本必须保留(显式不忽略) ----------
+!db/migration/**/*.sql
