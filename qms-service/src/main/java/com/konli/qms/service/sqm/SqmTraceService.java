@@ -157,6 +157,14 @@ public interface SqmTraceService {
     java.util.List<TraceFullTreeVO> traceByBatchNo(String batchNo, String orgId, TraceDirection direction);
 
     /**
+     * 列出系统里真实存在过的生产工单号(MES 落地宽表 finished_goods_inspection.production_order_no
+     * 与 critical_material_binding.work_order_no 并集去重)。
+     * 供工装派工 / 不良登记等场景的"工单号"下拉,保证填写的是系统里真实存在过的生产工单。
+     * keyword 可选(包含匹配,防一次性渲染 2.8 万条 DOM 卡死);limit 默认 200 上限 500。
+     */
+    List<String> listProductionOrders(String orgId, String keyword, Integer limit);
+
+    /**
      * 按来料批次号(lotNo, 即 sqm_incoming_lot.lot_no, 对应源表 record_no)查 MES 追溯森林。
      * 先由 lotNo 在 sqm_incoming_lot 定位其 material_barcode 集合(一个批次号可能对应多条来料记录,
      * 故可能多棵根树),对每个条码调用 traceMesTree 并合并为森林。无对应条码时返回空森林。

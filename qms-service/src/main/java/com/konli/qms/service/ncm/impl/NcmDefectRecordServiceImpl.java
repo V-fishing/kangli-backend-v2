@@ -200,6 +200,13 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
         if (record.getSource() == null) {
             record.setSource("手动");
         }
+        // wo_no / process_code 列 NOT NULL: 工装/首件等非工单来源未提供工单号/工序时, 兜底置空串, 避免插入违反非空约束
+        if (record.getWoNo() == null) {
+            record.setWoNo("");
+        }
+        if (record.getProcessCode() == null) {
+            record.setProcessCode("");
+        }
         if (record.getOperatorId() == null) {
             record.setOperatorId(currentOperator());
         }

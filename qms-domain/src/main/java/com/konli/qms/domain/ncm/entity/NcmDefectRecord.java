@@ -48,6 +48,14 @@ public class NcmDefectRecord extends BaseEntity {
     @TableField("device_code")
     private String deviceCode;
 
+    /** 来源工装 ID(UUID),工装异常/维修发起不良时回填,用于反查工装。 */
+    @TableField("tool_id")
+    private String toolId;
+
+    /** 来源工装编号(冗余存储,便于不良列表直接展示)。 */
+    @TableField("tool_no")
+    private String toolNo;
+
     @TableField("batch_no")
     private String batchNo;
 

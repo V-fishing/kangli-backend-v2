@@ -1669,6 +1669,37 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     }
 
     @Override
+    public List<String> listProductionOrders(String orgId, String keyword, Integer limit) {
+        // 工装派工 / 不良登记等场景的"工单号"下拉数据源:
+        // 真实生产工单号来自 MES 落地宽表(analyze2026.finished_goods_inspection.production_order_no
+        // 与 analyze2026.critical_material_binding.work_order_no),二者并集去重。
+        // ops.sqm_trace_node 为废表(无数据),不可作为数据源。MES 宽表无 org_id,故不做组织隔离。
+        // keyword 可选(前缀/包含匹配,防前端一次性渲染 2.8 万条 DOM 卡死);limit 默认 200 上限保护。
+        int top = (limit == null || limit <= 0) ? 200 : Math.min(limit, 500);
+        StringBuilder sql = new StringBuilder("SELECT DISTINCT wo FROM (")
+                .append("SELECT production_order_no AS wo FROM analyze2026.finished_goods_inspection ")
+                .append("WHERE production_order_no IS NOT NULL AND production_order_no <> '' ");
+        List<Object> args = new java.util.ArrayList<>();
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append("AND production_order_no ILIKE ? ");
+            args.add("%" + keyword.trim() + "%");
+        }
+        sql.append("UNION SELECT work_order_no AS wo FROM analyze2026.critical_material_binding ")
+                .append("WHERE work_order_no IS NOT NULL AND work_order_no <> '' ");
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append("AND work_order_no ILIKE ? ");
+            args.add("%" + keyword.trim() + "%");
+        }
+        sql.append(") t ORDER BY wo ASC LIMIT ?");
+        args.add(top);
+        try {
+            return jdbcTemplate.queryForList(sql.toString(), String.class, args.toArray());
+        } catch (EmptyResultDataAccessException e) {
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    @Override
     public List<TraceFullTreeVO> traceByLotNo(String lotNo, String orgId, TraceDirection direction) {
         List<TraceFullTreeVO> forest = new ArrayList<>();
         if (lotNo == null || lotNo.isBlank()) return forest;

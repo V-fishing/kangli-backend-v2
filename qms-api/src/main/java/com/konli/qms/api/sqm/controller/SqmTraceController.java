@@ -14,6 +14,7 @@ import com.konli.qms.domain.sqm.vo.TraceFullTreeVO;
 import com.konli.qms.domain.sqm.vo.TraceNodeFullVO;
 import com.konli.qms.domain.sqm.vo.TraceNodeSearchVO;
 import com.konli.qms.service.sqm.SqmTraceService;
+import com.konli.qms.service.support.OrgIdResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,6 +36,7 @@ import java.util.Map;
 public class SqmTraceController {
 
     private final SqmTraceService sqmTraceService;
+    private final OrgIdResolver orgIdResolver;
 
     // ---- 追溯树 ----
 
@@ -298,5 +300,21 @@ public class SqmTraceController {
     public R<Map<String, Object>> getSourceDetail(@RequestParam String sourceType,
                                                   @RequestParam String key) {
         return R.ok(sqmTraceService.getSourceDetail(sourceType, key));
+    }
+
+    // ---- 生产工单号下拉(供工装派工 / 不良登记等工单号输入场景) ----
+
+    /**
+     * 生产工单号下拉数据源: 从 MES 落地宽表(finished_goods_inspection.production_order_no
+     * 与 critical_material_binding.work_order_no)并集去重取真实存在过的工单号。
+     * 工装派工/不良登记等场景的"工单号"字段由此下拉,避免手填游离工单号。
+     */
+    @GetMapping("/trace/production-orders")
+    @PreAuthorize("hasAuthority('sqm.trace.list')")
+    public R<List<String>> listProductionOrders(@RequestParam(required = false) String orgId,
+                                                @RequestParam(required = false) String keyword,
+                                                @RequestParam(required = false, defaultValue = "200") Integer limit) {
+        String resolved = orgIdResolver.resolveForQuery(orgId);
+        return R.ok(sqmTraceService.listProductionOrders(resolved, keyword, limit));
     }
 }
