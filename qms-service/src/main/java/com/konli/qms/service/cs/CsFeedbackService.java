@@ -4,6 +4,7 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.cs.entity.CsFeedback;
 import com.konli.qms.service.cs.dto.TriggerNcmRequest;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.Map;
 
 /** 客户反馈(投诉/建议/表扬/咨询)管理。cs.feedback.* */
@@ -30,4 +31,7 @@ public interface CsFeedbackService {
 
     /** 从反馈直接触发质量改进纠正措施, 实际创建 8D/CAPA/CA 并回填来源关联(需求 2.4.2.5 闭环升级)。 */
     CsFeedback triggerNcm(String id, TriggerNcmRequest req);
+
+    /** 导出客户反馈(顾客反馈分析来源)为 CSV(GBK, 带 BOM)。 */
+    void exportCsv(HttpServletResponse response, String keyword, String fbType, String status);
 }

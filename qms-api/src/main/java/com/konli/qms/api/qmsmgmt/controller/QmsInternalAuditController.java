@@ -21,6 +21,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletResponse;
+
 import java.util.Map;
 
 /** 内审数据管理(计划 + 不符合项)。qms-mgmt.audit.* */
@@ -78,6 +80,14 @@ public class QmsInternalAuditController {
     public R<Void> delete(@PathVariable String id) {
         service.delete(id);
         return R.ok();
+    }
+
+    @GetMapping("/export")
+    @PreAuthorize("hasAuthority('qms-mgmt.audit.list')")
+    public void exportCsv(HttpServletResponse response,
+                          @RequestParam(required = false) String keyword,
+                          @RequestParam(required = false) String status) {
+        service.exportCsv(response, keyword, status);
     }
 
     // ---- 不符合项 ----

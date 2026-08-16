@@ -24,6 +24,10 @@ public class TlmRepair extends BaseEntity {
     @TableField("fault_desc")
     private String faultDesc;
 
+    /** 故障类型(结构化, 供根因聚合): 磨损/变形/断裂/精度超差/电气故障/其他。 */
+    @TableField("fault_type")
+    private String faultType;
+
     @TableField("measure")
     private String measure;
 

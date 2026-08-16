@@ -138,7 +138,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
 
     @Override
     @Transactional
-    public void repair(String id, String faultDesc, String approverId) {
+    public void repair(String id, String faultDesc, String faultType, String approverId) {
         TlmTooling t = toolingMapper.selectById(id);
         if (t == null) throw new RuntimeException("工装不存在");
         // 配置即权威:未显式指定审批人时,从「系统管理 › 审核配置」的「工装维修审核」节点读取默认审批人
@@ -150,6 +150,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         r.setToolId(id);
         r.setRepairNo("TLM-RP-" + System.currentTimeMillis());
         r.setFaultDesc(faultDesc);
+        r.setFaultType(faultType != null && !faultType.isBlank() ? faultType : "其他");
         r.setApproverId(approverId);
         r.setStatus("PENDING");
         r.setCreatedBy(curUser());
@@ -659,5 +660,65 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         return bindMapper.selectList(new LambdaQueryWrapper<com.konli.qms.domain.tlm.entity.TlmToolWoBind>()
                 .eq(com.konli.qms.domain.tlm.entity.TlmToolWoBind::getToolId, toolId)
                 .orderByDesc(com.konli.qms.domain.tlm.entity.TlmToolWoBind::getBoundAt));
+    }
+
+    /**
+     * 工装维修根因分析聚合(需求 2.5.2.6): 基于 ops.tlm_repair 做三类聚合, 全部带组织隔离。
+     * ① faultTypeDist: 各故障类型维修单数 + 占比(柏拉图数据源);
+     * ② topTools: 维修频次最高的工装 TOP10(编号/名称/次数);
+     * ③ monthlyTrend: 近 12 个月每月维修单数(折线数据源)。
+     */
+    @Override
+    public java.util.Map<String, Object> repairAnalysis(String startDate, String endDate) {
+        String org = curOrg();
+        String orgCond = (org != null) ? " AND r.org_id = ?" : "";
+        java.util.List<Object> args = new java.util.ArrayList<>();
+        if (org != null) args.add(org);
+        String dateCond = "";
+        if (startDate != null && !startDate.isBlank()) {
+            dateCond += " AND r.created_at >= ?";
+            args.add(startDate + " 00:00:00");
+        }
+        if (endDate != null && !endDate.isBlank()) {
+            dateCond += " AND r.created_at <= ?";
+            args.add(endDate + " 23:59:59");
+        }
+
+        // ① 故障类型分布
+        String distSql = "SELECT COALESCE(r.fault_type, '其他') AS fault_type, COUNT(*) AS cnt "
+                + "FROM ops.tlm_repair r WHERE 1=1" + orgCond + dateCond
+                + " GROUP BY COALESCE(r.fault_type, '其他') ORDER BY cnt DESC";
+        java.util.List<java.util.Map<String, Object>> dist = jdbcTemplate.queryForList(distSql, args.toArray());
+        long distTotal = 0;
+        for (java.util.Map<String, Object> d : dist) {
+            Object c = d.get("cnt");
+            long cv = (c instanceof Number) ? ((Number) c).longValue() : 0L;
+            distTotal += cv;
+        }
+        for (java.util.Map<String, Object> d : dist) {
+            Object c = d.get("cnt");
+            long cv = (c instanceof Number) ? ((Number) c).longValue() : 0L;
+            d.put("ratio", distTotal > 0 ? Math.round(cv * 1000.0 / distTotal) / 10.0 : 0.0);
+        }
+
+        // ② TOP 高频工装(维修次数)
+        String topSql = "SELECT t.tool_no AS tool_no, t.tool_name AS tool_name, COUNT(*) AS cnt "
+                + "FROM ops.tlm_repair r LEFT JOIN ops.tlm_tooling t ON t.id = r.tool_id::uuid "
+                + "WHERE 1=1" + orgCond + dateCond
+                + " GROUP BY t.tool_no, t.tool_name ORDER BY cnt DESC LIMIT 10";
+        java.util.List<java.util.Map<String, Object>> topTools = jdbcTemplate.queryForList(topSql, args.toArray());
+
+        // ③ 月度趋势(近 12 个月)
+        String trendSql = "SELECT TO_CHAR(r.created_at, 'YYYY-MM') AS ym, COUNT(*) AS cnt "
+                + "FROM ops.tlm_repair r WHERE 1=1" + orgCond + dateCond
+                + " GROUP BY TO_CHAR(r.created_at, 'YYYY-MM') ORDER BY ym";
+        java.util.List<java.util.Map<String, Object>> trend = jdbcTemplate.queryForList(trendSql, args.toArray());
+
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("total", distTotal);
+        m.put("faultTypeDist", dist);
+        m.put("topTools", topTools);
+        m.put("monthlyTrend", trend);
+        return m;
     }
 }

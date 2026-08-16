@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -169,5 +170,61 @@ public class QmsAdverseEventServiceImpl implements QmsAdverseEventService {
         res.put("critical", critical);
         res.put("processRate", all.isEmpty() ? 0 : Math.round((handling + done) * 100.0 / all.size()));
         return res;
+    }
+
+    @Override
+    public void exportCsv(HttpServletResponse response, String keyword, String eventType, String status) {
+        String org = curOrg();
+        StringBuilder sql = new StringBuilder(
+                "SELECT event_no, event_type, occur_stage, severity, occur_at, report_at, root_cause, " +
+                "handle_timeliness, owner, status, remark FROM ops.qms_adverse_event WHERE is_deleted = false");
+        if (org != null) sql.append(" AND org_id = '").append(org.replace("'", "''")).append("'");
+        if (keyword != null && !keyword.isBlank()) sql.append(" AND (event_no ILIKE '%").append(keyword.replace("'", "''")).append("%' OR root_cause ILIKE '%").append(keyword.replace("'", "''")).append("%')");
+        if (eventType != null && !eventType.isBlank()) sql.append(" AND event_type = '").append(eventType.replace("'", "''")).append("'");
+        if (status != null && !status.isBlank()) sql.append(" AND status = '").append(status.replace("'", "''")).append("'");
+        sql.append(" ORDER BY created_at DESC");
+        writeCsv(response, "不良事件",
+                new String[]{"事件编号", "事件类型", "发生环节", "严重程度", "发生时间", "上报时间", "根本原因", "处理时效", "责任人", "状态", "备注"},
+                jdbcTemplate.queryForList(sql.toString()),
+                r -> new String[]{str(r.get("event_no")), str(r.get("event_type")), str(r.get("occur_stage")),
+                        str(r.get("severity")), str(r.get("occur_at")), str(r.get("report_at")), str(r.get("root_cause")),
+                        str(r.get("handle_timeliness")), str(r.get("owner")), str(r.get("status")), str(r.get("remark"))});
+    }
+
+    private void writeCsv(HttpServletResponse response, String fileName, String[] headers,
+                          java.util.List<Map<String, Object>> rows,
+                          java.util.function.Function<Map<String, Object>, String[]> rowFn) {
+        try {
+            response.setContentType("text/csv;charset=GBK");
+            response.setHeader("Content-Disposition",
+                    "attachment; filename=\"" + new String((fileName + ".csv").getBytes("GBK"), "ISO-8859-1") + "\"");
+            try (java.io.OutputStream os = response.getOutputStream()) {
+                os.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF});
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.join(",", headers)).append("\r\n");
+                for (Map<String, Object> r : rows) {
+                    String[] cells = rowFn.apply(r);
+                    for (int i = 0; i < cells.length; i++) {
+                        if (i > 0) sb.append(",");
+                        sb.append(escapeCsv(cells[i]));
+                    }
+                    sb.append("\r\n");
+                }
+                os.write(sb.toString().getBytes("UTF-8"));
+                os.flush();
+            }
+        } catch (java.io.IOException e) {
+            throw new com.konli.qms.common.exception.BusinessException("导出失败: " + e.getMessage());
+        }
+    }
+
+    private String str(Object o) { return o == null ? "" : String.valueOf(o); }
+
+    private String escapeCsv(String s) {
+        if (s == null) return "";
+        if (s.contains(",") || s.contains("\"") || s.contains("\r") || s.contains("\n")) {
+            return "\"" + s.replace("\"", "\"\"") + "\"";
+        }
+        return s;
     }
 }

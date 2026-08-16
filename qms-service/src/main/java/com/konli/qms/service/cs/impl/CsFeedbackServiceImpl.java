@@ -23,8 +23,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -287,5 +291,61 @@ public class CsFeedbackServiceImpl implements CsFeedbackService {
         } catch (Exception e) {
             return userId;
         }
+    }
+
+    @Override
+    public void exportCsv(HttpServletResponse response, String keyword, String fbType, String status) {
+        String org = curOrg();
+        StringBuilder sql = new StringBuilder(
+                "SELECT customer_name, customer_contact, fb_type, content, related_wo_no, status, " +
+                "handle_detail, owner_name, satisfaction, cause, created_at FROM ops.cs_feedback WHERE is_deleted = false");
+        if (org != null) sql.append(" AND org_id = '").append(org.replace("'", "''")).append("'");
+        if (keyword != null && !keyword.isBlank()) sql.append(" AND (customer_name ILIKE '%").append(keyword.replace("'", "''")).append("%' OR content ILIKE '%").append(keyword.replace("'", "''")).append("%')");
+        if (fbType != null && !fbType.isBlank()) sql.append(" AND fb_type = '").append(fbType.replace("'", "''")).append("'");
+        if (status != null && !status.isBlank()) sql.append(" AND status = '").append(status.replace("'", "''")).append("'");
+        sql.append(" ORDER BY created_at DESC");
+        writeCsv(response, "客户反馈",
+                new String[]{"客户名称", "联系方式", "反馈类型", "反馈内容", "关联工单", "状态", "处理详情", "责任人", "满意度", "低分诱因", "登记时间"},
+                jdbcTemplate.queryForList(sql.toString()),
+                r -> new String[]{str(r.get("customer_name")), str(r.get("customer_contact")), str(r.get("fb_type")),
+                        str(r.get("content")), str(r.get("related_wo_no")), str(r.get("status")), str(r.get("handle_detail")),
+                        str(r.get("owner_name")), str(r.get("satisfaction")), str(r.get("cause")), str(r.get("created_at"))});
+    }
+
+    private void writeCsv(HttpServletResponse response, String fileName, String[] headers,
+                          java.util.List<Map<String, Object>> rows,
+                          java.util.function.Function<Map<String, Object>, String[]> rowFn) {
+        try {
+            response.setContentType("text/csv;charset=GBK");
+            response.setHeader("Content-Disposition",
+                    "attachment; filename=\"" + new String((fileName + ".csv").getBytes("GBK"), "ISO-8859-1") + "\"");
+            try (java.io.OutputStream os = response.getOutputStream()) {
+                os.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF});
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.join(",", headers)).append("\r\n");
+                for (Map<String, Object> r : rows) {
+                    String[] cells = rowFn.apply(r);
+                    for (int i = 0; i < cells.length; i++) {
+                        if (i > 0) sb.append(",");
+                        sb.append(escapeCsv(cells[i]));
+                    }
+                    sb.append("\r\n");
+                }
+                os.write(sb.toString().getBytes("UTF-8"));
+                os.flush();
+            }
+        } catch (java.io.IOException e) {
+            throw new BusinessException("导出失败: " + e.getMessage());
+        }
+    }
+
+    private String str(Object o) { return o == null ? "" : String.valueOf(o); }
+
+    private String escapeCsv(String s) {
+        if (s == null) return "";
+        if (s.contains(",") || s.contains("\"") || s.contains("\r") || s.contains("\n")) {
+            return "\"" + s.replace("\"", "\"\"") + "\"";
+        }
+        return s;
     }
 }

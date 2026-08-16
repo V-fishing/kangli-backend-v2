@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletResponse;
+
 import java.util.Map;
 
 /** 不良事件管理。qms-mgmt.adverse.* */
@@ -81,5 +83,14 @@ public class QmsAdverseEventController {
     public R<Void> delete(@PathVariable String id) {
         service.delete(id);
         return R.ok();
+    }
+
+    @GetMapping("/export")
+    @PreAuthorize("hasAuthority('qms-mgmt.adverse.list')")
+    public void exportCsv(HttpServletResponse response,
+                          @RequestParam(required = false) String keyword,
+                          @RequestParam(required = false) String eventType,
+                          @RequestParam(required = false) String status) {
+        service.exportCsv(response, keyword, eventType, status);
     }
 }

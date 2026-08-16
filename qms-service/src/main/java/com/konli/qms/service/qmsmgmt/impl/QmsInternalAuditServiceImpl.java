@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -252,5 +253,63 @@ public class QmsInternalAuditServiceImpl implements QmsInternalAuditService {
         res.put("ncClosed", ncClosed);
         res.put("ncCloseRate", ncTotal == 0 ? 0 : Math.round(ncClosed * 100.0 / ncTotal));
         return res;
+    }
+
+    @Override
+    public void exportCsv(HttpServletResponse response, String keyword, String status) {
+        String org = curOrg();
+        StringBuilder sql = new StringBuilder(
+                "SELECT a.audit_no, a.audit_name, a.audit_scope, a.plan_date, a.auditor, a.status, a.remark, " +
+                "(SELECT COUNT(1) FROM ops.qms_audit_nc n WHERE n.audit_id = a.id AND n.is_deleted = false) AS nc_cnt, " +
+                "(SELECT COUNT(1) FROM ops.qms_audit_nc n WHERE n.audit_id = a.id AND n.is_deleted = false AND n.status = 'CLOSED') AS nc_closed " +
+                "FROM ops.qms_internal_audit a WHERE a.is_deleted = false");
+        if (org != null) sql.append(" AND a.org_id = '").append(org.replace("'", "''")).append("'");
+        if (keyword != null && !keyword.isBlank()) sql.append(" AND (a.audit_no ILIKE '%").append(keyword.replace("'", "''")).append("%' OR a.audit_name ILIKE '%").append(keyword.replace("'", "''")).append("%')");
+        if (status != null && !status.isBlank()) sql.append(" AND a.status = '").append(status.replace("'", "''")).append("'");
+        sql.append(" ORDER BY a.created_at DESC");
+        writeCsv(response, "内审计划",
+                new String[]{"审核编号", "审核名称", "审核范围", "计划日期", "审核员", "状态", "备注", "不符合项数", "已闭环不符合项"},
+                jdbcTemplate.queryForList(sql.toString()),
+                r -> new String[]{str(r.get("audit_no")), str(r.get("audit_name")), str(r.get("audit_scope")),
+                        str(r.get("plan_date")), str(r.get("auditor")), str(r.get("status")), str(r.get("remark")),
+                        str(r.get("nc_cnt")), str(r.get("nc_closed"))});
+    }
+
+    /** 写 GBK CSV(带 BOM) 到响应流。 */
+    private void writeCsv(HttpServletResponse response, String fileName, String[] headers,
+                          java.util.List<Map<String, Object>> rows,
+                          java.util.function.Function<Map<String, Object>, String[]> rowFn) {
+        try {
+            response.setContentType("text/csv;charset=GBK");
+            response.setHeader("Content-Disposition",
+                    "attachment; filename=\"" + new String((fileName + ".csv").getBytes("GBK"), "ISO-8859-1") + "\"");
+            try (java.io.OutputStream os = response.getOutputStream()) {
+                os.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}); // UTF-8 BOM 兼容 Excel
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.join(",", headers)).append("\r\n");
+                for (Map<String, Object> r : rows) {
+                    String[] cells = rowFn.apply(r);
+                    for (int i = 0; i < cells.length; i++) {
+                        if (i > 0) sb.append(",");
+                        sb.append(escapeCsv(cells[i]));
+                    }
+                    sb.append("\r\n");
+                }
+                os.write(sb.toString().getBytes("UTF-8"));
+                os.flush();
+            }
+        } catch (java.io.IOException e) {
+            throw new com.konli.qms.common.exception.BusinessException("导出失败: " + e.getMessage());
+        }
+    }
+
+    private String str(Object o) { return o == null ? "" : String.valueOf(o); }
+
+    private String escapeCsv(String s) {
+        if (s == null) return "";
+        if (s.contains(",") || s.contains("\"") || s.contains("\r") || s.contains("\n")) {
+            return "\"" + s.replace("\"", "\"\"") + "\"";
+        }
+        return s;
     }
 }

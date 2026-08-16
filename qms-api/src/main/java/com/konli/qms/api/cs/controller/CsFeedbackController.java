@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletResponse;
+
 @RestController
 @RequestMapping("/api/v1/cs/feedbacks")
 @RequiredArgsConstructor
@@ -91,5 +93,14 @@ public class CsFeedbackController {
     @PreAuthorize("hasAuthority('cs.feedback.link')")
     public R<CsFeedback> triggerNcm(@PathVariable String id, @RequestBody TriggerNcmRequest req) {
         return R.ok(service.triggerNcm(id, req));
+    }
+
+    @GetMapping("/export")
+    @PreAuthorize("hasAuthority('cs.feedback.list')")
+    public void exportCsv(HttpServletResponse response,
+                          @RequestParam(required = false) String keyword,
+                          @RequestParam(required = false) String fbType,
+                          @RequestParam(required = false) String status) {
+        service.exportCsv(response, keyword, fbType, status);
     }
 }

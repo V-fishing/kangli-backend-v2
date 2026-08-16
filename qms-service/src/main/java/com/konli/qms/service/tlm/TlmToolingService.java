@@ -22,8 +22,11 @@ public interface TlmToolingService {
 
     void delete(String id);
 
-    /** 送修: 置状态 REPAIRING, 生成维修工单(PENDING)。 */
-    void repair(String id, String faultDesc, String approverId);
+    /** 送修: 置状态 REPAIRING, 生成维修工单(PENDING)。faultType 为结构化故障类型(供根因聚合)。 */
+    void repair(String id, String faultDesc, String faultType, String approverId);
+
+    /** 工装维修根因分析聚合: 故障类型分布 / TOP 高频工装 / 月度趋势(组织隔离)。 */
+    java.util.Map<String, Object> repairAnalysis(String startDate, String endDate);
 
     /** 维修工单填写措施: PENDING -> REPAIRING, 写 measure。 */
     void repairFill(String id, String measure);

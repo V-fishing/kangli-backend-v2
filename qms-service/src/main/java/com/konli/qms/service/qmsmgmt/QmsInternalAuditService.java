@@ -4,6 +4,7 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.qmsmgmt.entity.QmsAuditNc;
 import com.konli.qms.domain.qmsmgmt.entity.QmsInternalAudit;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.Map;
 
 /** 内审数据管理(计划 + 不符合项)。qms-mgmt.audit.* */
@@ -32,4 +33,7 @@ public interface QmsInternalAuditService {
     void deleteNc(String id);
 
     Map<String, Object> stats();
+
+    /** 导出内审计划(含不符合项概览)为 CSV(GBK, 带 BOM)。 */
+    void exportCsv(HttpServletResponse response, String keyword, String status);
 }

@@ -179,8 +179,9 @@ public class TlmToolingController {
     @PreAuthorize("hasAnyAuthority('tlm.tooling.repair','tlm.metro.repair')")
     public R<Void> repair(@PathVariable String id,
                           @RequestParam(required = false) String faultDesc,
+                          @RequestParam(required = false) String faultType,
                           @RequestParam(required = false) String approverId) {
-        toolingService.repair(id, faultDesc, approverId);
+        toolingService.repair(id, faultDesc, faultType, approverId);
         return R.ok();
     }
 
@@ -289,6 +290,15 @@ public class TlmToolingController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         return R.ok(toolingService.repairPage(keyword, status, page, size));
+    }
+
+    // ===== 工装维修根因分析(故障类型分布/高频工装/月度趋势) =====
+    @GetMapping("/repair/analysis")
+    @PreAuthorize("hasAuthority('tlm.repair.list')")
+    public R<java.util.Map<String, Object>> repairAnalysis(
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate) {
+        return R.ok(toolingService.repairAnalysis(startDate, endDate));
     }
 
     // ===== 计量看板(GAUGE 总数/合格/限用/超期) =====
