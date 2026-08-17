@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
@@ -115,7 +116,7 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void createAuto(String srcType, String srcId, String orgId, String product, String process, String remark, String severity) {
         QmsFmeaRisk risk = new QmsFmeaRisk();
         risk.setOrgId(orgId);
@@ -374,7 +375,7 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         notificationService.notify("sqm", ev,
                 "FMEA措施超期提醒",
                 "FMEA风险项 " + r.getRiskNo() + " 措施超期" + days + "天,请尽快处理。",
-                "fmea_overdue", r.getId(), "/sqm/fmea");
+                "fmea_overdue", r.getId(), r.getRiskNo(), "/sqm/fmea", r.getOrgId());
     }
 
     /** 指派/变更责任人时,向具体责任人发送站内信(ownerUserId 非空才通知)。 */
@@ -385,7 +386,7 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
                 "FMEA风险项责任指派",
                 "FMEA风险项 " + r.getRiskNo() + "（" + (r.getProcess() != null ? r.getProcess() : "—") +
                         "）" + actionWord + (userName != null ? "：" + userName : "") + "，请及时处理。",
-                "sqm_fmea", r.getId(), "/sqm/fmea");
+                "sqm_fmea", r.getId(), r.getRiskNo(), "/sqm/fmea");
     }
 
     /** 按 user_id 反查真实姓名(失败返回 null,不阻断)。 */

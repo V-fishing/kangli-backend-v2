@@ -31,4 +31,7 @@ public @interface Auditable {
 
     /** 操作摘要,支持 SpEL,如 "'创建任务' + #req.woNo"。为空则不记。 */
     String detailExpr() default "";
+
+    /** SpEL 表达式取被操作记录的可读业务单号(如 "#result.data.d8No"),前端「业务ID」列优先展示。为空则不记 recordNo。 */
+    String recordNoExpr() default "";
 }

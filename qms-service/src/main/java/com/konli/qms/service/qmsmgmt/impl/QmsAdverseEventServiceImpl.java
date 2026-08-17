@@ -95,7 +95,7 @@ public class QmsAdverseEventServiceImpl implements QmsAdverseEventService {
         try {
             notificationService.notify("qms-mgmt", "qms_adverse_created", "不良事件登记",
                     "不良事件 " + event.getEventNo() + "(" + event.getEventType()
-                            + ") 已登记,请及时处理。", "qms_adverse_event", event.getId(), "/qms-mgmt/adverse");
+                            + ") 已登记,请及时处理。", "qms_adverse_event", event.getId(), event.getEventNo(), "/qms-mgmt/adverse");
         } catch (Exception e) {
             log.warn("[QMS-MGMT] 不良事件通知发送失败: {}", e.getMessage());
         }

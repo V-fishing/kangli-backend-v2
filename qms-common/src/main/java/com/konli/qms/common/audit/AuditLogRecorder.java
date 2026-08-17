@@ -29,27 +29,34 @@ public class AuditLogRecorder {
      * @param action     动作,如 CREATE/ADVANCE/APPROVE/REOPEN/ARCHIVE
      * @param method     触发方法签名(短串),可为 null
      * @param recordId   被操作记录 ID(UUID 或业务单号),可为 null
+     * @param recordNo   被操作记录的可读业务单号(如 8D-/DF-/CAPA-),可为 null
      * @param detail     人类可读摘要,可为 null
      * @param status     SUCCESS / FAIL
      * @param error      失败时的错误信息,可为 null
      * @param costMs     耗时(毫秒)
      */
     public void record(String module, String action, String method,
-                       String recordId, String detail, String status, String error, long costMs) {
+                       String recordId, String recordNo, String detail, String status, String error, long costMs) {
         String operatorName = currentOperatorName();
         String operatorId = currentOperatorId();
         try {
             jdbc.update(
                 "INSERT INTO ops.sys_audit_log (module, action, method, operator_id, operator_name, "
-                + "record_id, detail, status, error, cost_ms, created_at) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                + "record_id, record_no, detail, status, error, cost_ms, created_at) "
+                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 module, action, method, operatorId, operatorName,
-                recordId, detail, status, error, costMs, LocalDateTime.now());
+                recordId, recordNo, detail, status, error, costMs, LocalDateTime.now());
         } catch (Exception ex) {
             log.warn("[AUDIT] 落库失败(不阻断业务): {}", ex.getMessage());
         }
         log.info("[AUDIT] {} | {} | {} | {} | {} | {}ms | {}",
                 module, action, status, operatorId, operatorName, costMs, method);
+    }
+
+    /** 向后兼容:无 recordNo 的重载。 */
+    public void record(String module, String action, String method,
+                       String recordId, String detail, String status, String error, long costMs) {
+        record(module, action, method, recordId, null, detail, status, error, costMs);
     }
 
     private String currentOperatorName() {

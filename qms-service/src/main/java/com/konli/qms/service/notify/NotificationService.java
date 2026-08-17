@@ -60,10 +60,19 @@ public class NotificationService {
      */
     public void notify(String module, String eventCode, String title, String content,
                         String bizType, String bizId, String bizNo, String link) {
+        // 业务归属 org: 取发起人当前组织, 使角色接收人按公司隔离(见 resolveUserIdsByRoles)。
+        // 发起人为跨公司管理员(org=null)时退化为全局广播, 与 DataScope 范式一致。
+        String orgId = currentOrgId();
+        notify(module, eventCode, title, content, bizType, bizId, bizNo, link, orgId);
+    }
+
+    /** 统一通知入口(显式指定业务归属 org 做公司隔离)。 */
+    public void notify(String module, String eventCode, String title, String content,
+                        String bizType, String bizId, String bizNo, String link, String orgId) {
         List<String> roles = notifyConfigService.resolveRoles(module, eventCode);
         List<String> receiverIds = notifyConfigService.resolveReceiverIds(module, eventCode);
-        // 接收人 = 角色解析出的所有用户 ∪ 具体接收人(去重)
-        Set<String> userIds = new LinkedHashSet<>(resolveUserIdsByRoles(roles));
+        // 接收人 = 角色解析出的(按 org 隔离的)用户 ∪ 具体接收人(显式点名, 不按 org 过滤)
+        Set<String> userIds = new LinkedHashSet<>(resolveUserIdsByRoles(roles, orgId));
         if (receiverIds != null) userIds.addAll(receiverIds.stream().filter(id -> id != null && !id.isBlank()).toList());
         for (String uid : userIds) {
             insert(uid, title, content, bizType, bizId, bizNo, link);
@@ -137,7 +146,15 @@ public class NotificationService {
     /** 按角色码解析用户并推送(带可读单据号 bizNo)。 */
     public void notifyRoles(List<String> roleCodes, String title, String content,
                             String bizType, String bizId, String bizNo, String link, String excludeUserId) {
-        for (String uid : resolveUserIdsByRoles(roleCodes)) {
+        // 未显式传 org 时, 沿用发起人当前组织做默认隔离
+        notifyRoles(roleCodes, title, content, bizType, bizId, bizNo, link, excludeUserId, currentOrgId());
+    }
+
+    /** 按角色码解析用户并推送(显式指定业务归属 org 做公司隔离)。 */
+    public void notifyRoles(List<String> roleCodes, String title, String content,
+                            String bizType, String bizId, String bizNo, String link,
+                            String excludeUserId, String orgId) {
+        for (String uid : resolveUserIdsByRoles(roleCodes, orgId)) {
             if (uid != null && !uid.equals(excludeUserId)) {
                 insert(uid, title, content, bizType, bizId, bizNo, link);
             }
@@ -282,14 +299,32 @@ public class NotificationService {
         }
     }
 
-    private List<String> resolveUserIdsByRoles(List<String> roleCodes) {
+    /**
+     * 按角色码解析用户(按 org 隔离): 仅返回归属 org 内、或跨公司(org=null)的管理员。
+     * orgId 为 null 时退化为全公司广播(系统公告/定时任务等无业务 org 上下文场景)。
+     */
+    private List<String> resolveUserIdsByRoles(List<String> roleCodes, String orgId) {
         if (roleCodes == null || roleCodes.isEmpty()) return List.of();
         String placeholders = roleCodes.stream().map(c -> "?").collect(Collectors.joining(","));
-        String sql = "SELECT DISTINCT u.id FROM ops.sys_user u "
+        StringBuilder sql = new StringBuilder("SELECT DISTINCT u.id FROM ops.sys_user u "
                 + "JOIN ops.sys_user_role ur ON ur.user_id = u.id "
                 + "JOIN ops.sys_role r ON r.id = ur.role_id "
-                + "WHERE r.role_code IN (" + placeholders + ") AND u.status = '启用' AND u.is_deleted = false";
-        return jdbcTemplate.query(sql, (rs, row) -> rs.getString(1), roleCodes.toArray());
+                + "WHERE r.role_code IN (" + placeholders + ") AND u.status = '启用' AND u.is_deleted = false");
+        List<Object> args = new ArrayList<>(roleCodes);
+        if (orgId != null && !orgId.isBlank()) {
+            sql.append(" AND (u.org_id = ? OR u.org_id IS NULL)");
+            args.add(orgId);
+        }
+        return jdbcTemplate.query(sql.toString(), (rs, row) -> rs.getString(1), args.toArray());
+    }
+
+    /** 取当前登录用户归属 org(跨公司管理员为 null)。无登录态时返回 null(全局广播)。 */
+    private String currentOrgId() {
+        try {
+            return userService.getCurrent().orgId();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /** 解析某事件配置的接收角色中文名(用于通知日志 receiver 展示)。 */

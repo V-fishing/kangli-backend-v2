@@ -73,6 +73,10 @@ public class NcmDefectRecord extends BaseEntity {
     @TableField("occurred_at")
     private LocalDateTime occurredAt;
 
+    /** 问题主题(人工发起 8D/CAPA/CA 时填写;从缺陷记录发起整改措施时透传为报告 issue)。 */
+    @TableField("issue")
+    private String issue;
+
     private String remark;
 
     private String disposition;

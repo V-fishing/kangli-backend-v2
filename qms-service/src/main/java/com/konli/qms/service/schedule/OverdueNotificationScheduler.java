@@ -56,7 +56,7 @@ public class OverdueNotificationScheduler {
             notificationService.notify("schedule", "patrol_overdue",
                     "巡检任务超期",
                     "巡检任务" + t.getTaskNo() + " 已超期" + days + "天未完成,请尽快处理。",
-                    "patrol_overdue", t.getId(), "/patrol/tasks");
+                    "patrol_overdue", t.getId(), t.getTaskNo(), "/patrol/tasks", t.getOrgId());
         }
     }
 
@@ -73,7 +73,7 @@ public class OverdueNotificationScheduler {
             notificationService.notify("schedule", "fia_overdue",
                     "首件检验超期提醒",
                     "校验单" + t.getCode() + "(工单" + t.getWoNo() + ") 已超期" + days + "天,请及时处理。",
-                    "fia_overdue", t.getId(), "/fia/tasks");
+                    "fia_overdue", t.getId(), t.getCode(), "/fia/tasks", t.getOrgId());
         }
     }
 
@@ -90,7 +90,7 @@ public class OverdueNotificationScheduler {
             notificationService.notify("schedule", "audit_nc_overdue",
                     "审核NC整改超期",
                     "审核不符合项" + nc.getNcNo() + " 整改超期" + days + "天,请尽快推进。",
-                    "audit_nc_overdue", nc.getId(), "/sqm/audit");
+                    "audit_nc_overdue", nc.getId(), nc.getNcNo(), "/sqm/audit", nc.getOrgId());
         }
     }
 
@@ -107,7 +107,7 @@ public class OverdueNotificationScheduler {
             notificationService.notify("schedule", "capa_overdue",
                     "纠正措施超期",
                     "纠正措施" + ca.getCaNo() + "(" + (ca.getIssue() != null ? ca.getIssue() : "") + ") 超期" + days + "天,请尽快处理。",
-                    "capa_overdue", ca.getId(), "/ncm/capa");
+                    "capa_overdue", ca.getId(), ca.getCaNo(), "/ncm/capa", ca.getOrgId());
         }
     }
 }

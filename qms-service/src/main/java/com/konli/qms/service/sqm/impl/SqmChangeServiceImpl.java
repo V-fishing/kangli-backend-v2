@@ -465,7 +465,7 @@ public class SqmChangeServiceImpl implements SqmChangeService {
                 supplierName(order.getSupplierId()), order.getTitle(),
                 order.getChangeNo(), order.getPartNo());
         notificationService.notify("sqm", "sqm_change_submitted",
-                title, content, "sqm_change", order.getId(), "/sqm/change");
+                title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change", order.getOrgId());
     }
 
     /** 通知下一位审批人。 */
@@ -474,7 +474,7 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         String content = String.format("《%s》(单号 %s) 前序审批已通过,现轮到【%s】审批。",
                 order.getTitle(), order.getChangeNo(), roleLabel(role));
         notificationService.notifyRoles(List.of(roleCode(role)),
-                title, content, "sqm_change", order.getId(), "/sqm/change", null);
+                title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change", null, order.getOrgId());
     }
 
     private void notifyApproved(SqmChangeOrder order) {
@@ -493,9 +493,9 @@ public class SqmChangeServiceImpl implements SqmChangeService {
 
     private void notifyPartiesAndApplicant(SqmChangeOrder order, String title, String content) {
         notificationService.notify("sqm", "sqm_change_result",
-                title, content, "sqm_change", order.getId(), "/sqm/change");
+                title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change", order.getOrgId());
         String applicantId = applicantUserId(order.getApplicant());
-        notificationService.notifyUser(applicantId, title, content, "sqm_change", order.getId(), "/sqm/change");
+        notificationService.notifyUser(applicantId, title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change");
     }
 
     private String roleLabel(String role) {

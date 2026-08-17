@@ -683,6 +683,15 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
 
     @Override
     @Transactional
+    public void linkD8(String defectId, String d8No) {
+        NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
+        if (def == null) return;
+        def.setD8No(d8No);
+        ncmDefectRecordMapper.updateById(def);
+    }
+
+    @Override
+    @Transactional
     public Object launch8dFromDefect(String defectId, DefectLaunchRequest req) {
         NcmDefectRecord def = ncmDefectRecordMapper.selectById(defectId);
         if (def == null) throw new BusinessException(400, "缺陷记录不存在");
@@ -693,7 +702,9 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
         r.setOrgId(def.getOrgId());
         r.setSource("不良记录");
         r.setSourceRefId(defectId);
-        r.setIssue("不良:" + def.getDefectNo());
+        // issue 优先用缺陷记录原始主题(人工/NCM 来源填写),回退 "不良:"+缺陷单号(SPC/SQM 兼容)
+        r.setIssue(def.getIssue() != null && !def.getIssue().isBlank()
+                ? def.getIssue() : "不良:" + def.getDefectNo());
         r.setSeverity(def.getSeverity() != null ? def.getSeverity() : "中");
         // 8D 新流程:发起时仅指定负责人(单选),团队由负责人在 D1 自行组建
         String team = resolveOwnerName(req);
@@ -809,7 +820,7 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
                 String ownerContent = "不良记录 " + def.getDefectNo() + " 已发起" + bizType + "报告(" + bizNo + "),"
                         + "您被指定为负责人,请登录系统在 D1 阶段组建团队并提交审核。"
                         + (req.getRemark() != null && !req.getRemark().isBlank() ? "\n指派备注: " + req.getRemark() : "");
-                notificationService.notifyUser(req.getOwnerUserId(), ownerTitle, ownerContent, "NCM_ASSIGN", bizId, link);
+                notificationService.notifyUser(req.getOwnerUserId(), ownerTitle, ownerContent, "NCM_ASSIGN", bizId, bizNo, link);
             }
             // 点对点外发到负责人个人
             directNotifyService.sendToUser(def.getOrgId(), assignerId, queryUserName(assignerId),
@@ -826,7 +837,7 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
                 rec.setAssigneeUserName(queryUserName(uid));
                 qmsAssignRecordMapper.insert(rec);
                 if (inbox) {
-                    notificationService.notifyUser(uid, title, content, "NCM_ASSIGN", bizId, link);
+                    notificationService.notifyUser(uid, title, content, "NCM_ASSIGN", bizId, bizNo, link);
                 }
                 // 点对点外发到处理人个人
                 directNotifyService.sendToUser(def.getOrgId(), assignerId, queryUserName(assignerId),
@@ -844,7 +855,7 @@ public class NcmDefectRecordServiceImpl implements NcmDefectRecordService {
                 qmsAssignRecordMapper.insert(rec);
                 if (inbox) {
                     notificationService.notifyRoles(
-                            List.of(roleCode), title, content, "NCM_ASSIGN", bizId, link, assignerId);
+                            List.of(roleCode), title, content, "NCM_ASSIGN", bizId, bizNo, link, assignerId, def.getOrgId());
                 }
             }
         }

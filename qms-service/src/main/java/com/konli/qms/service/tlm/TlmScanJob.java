@@ -120,7 +120,7 @@ public class TlmScanJob {
         try {
             // 统一走通知配置(module=tlm, eventCode=bizType)解析接收人/渠道(强约束 C2),
             // 取代直接写 notification_log 裸表; 配置缺失时静默不发, 不影响扫描主流程。
-            notificationService.notify("tlm", bizType, "工装预警", content, bizType, t.getId(), "/tlm/tooling/" + t.getId());
+            notificationService.notify("tlm", bizType, "工装预警", content, bizType, t.getId(), t.getToolNo(), "/tlm/tooling/" + t.getId(), t.getOrgId());
         } catch (Exception e) {
             log.warn("工装预警通知失败: {}", e.getMessage());
         }

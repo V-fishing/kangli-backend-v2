@@ -94,7 +94,7 @@ public class AssignReassignService {
             assignRecordMapper.insert(rec);
             if (inbox) {
                 notificationService.notifyRoles(req.getAssignRoleCodes(),
-                        buildTitle(ctx), buildContent(ctx, displayName), "NCM_ASSIGN", ctx.bizId(), ctx.link(), assignerId);
+                        buildTitle(ctx), buildContent(ctx, displayName), "NCM_ASSIGN", ctx.bizId(), ctx.link(), assignerId, ctx.orgId());
             }
         } else {
             throw new IllegalArgumentException("指派必须指定 ownerUserId 或 assignRoleCodes 之一");

@@ -573,7 +573,7 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
                 notificationService.notify("sqm", ev,
                         "来料异常超期提醒",
                         "来料异常" + a.getAbnormalNo() + " 超期" + days + "天未闭环,请及时处理。",
-                        "abnormal_overdue", a.getId(), "/sqm/abnormal");
+                        "abnormal_overdue", a.getId(), a.getAbnormalNo(), "/sqm/abnormal", a.getOrgId());
             }
         } catch (Exception e) { log.warn("异常超期扫描失败: {}", e.getMessage()); }
     }

@@ -22,6 +22,8 @@ public class NotifyCenterRow {
     private String bizType;
     private String bizId;
     private String bizNo;
+    /** 关联单据跳转链接(后端按 bizType+bizId 生成标准详情路由, 详情页用主键 UUID 拼接) */
+    private String bizLink;
     /** 主渠道(取首条明细渠道, 通常为 站内弹窗) */
     private String channel;
     /** 综合状态: 全部成功=成功; 任一失败=失败; 任一发送中=发送中 */

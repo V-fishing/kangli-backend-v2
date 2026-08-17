@@ -78,7 +78,7 @@ public class TlmCalibPlanServiceImpl implements TlmCalibPlanService {
                 String content = "计量器具 " + t.getToolName() + "(" + t.getToolNo() + ") 将于 "
                         + t.getCalibDueDate() + " 校准到期, 请安排校准。";
                 notificationService.notify("tlm", "tlm_calib_plan_created", "计量校准计划", content,
-                        "tlm_calib_plan_created", plan.getId(), "/tlm/metro/" + t.getId());
+                        "tlm_calib_plan_created", plan.getId(), null, "/tlm/metro/" + t.getId(), t.getOrgId());
             } catch (Exception e) {
                 log.warn("校准计划通知失败: {}", e.getMessage());
             }

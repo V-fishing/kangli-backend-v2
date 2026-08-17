@@ -100,7 +100,7 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         try {
             notificationService.notify("patrol", "patrol_task_created",
                     "巡检任务已创建", "巡检任务" + task.getTaskNo() + " 已分配,请前往巡检。",
-                    "patrol_task", task.getId(), "/patrol/tasks");
+                    "patrol_task", task.getId(), task.getTaskNo(), "/patrol/tasks", task.getOrgId());
         } catch (Exception e) {
             log.warn("[巡检] 任务创建通知失败: {}", e.getMessage());
         }
@@ -148,7 +148,7 @@ public class PatlTaskServiceImpl implements PatlTaskService {
             try {
                 notificationService.notify("patrol", "patrol_task_abnormal",
                         "巡检发现异常", "巡检点【" + checkpointName + "】检查异常: " + (remark != null ? remark : ""),
-                        "patrol_task", taskId, "/patrol/tasks");
+                        "patrol_task", taskId, task.getTaskNo(), "/patrol/tasks", task.getOrgId());
             } catch (Exception e) {
                 log.warn("[巡检] 异常通知失败: {}", e.getMessage());
             }
@@ -163,7 +163,7 @@ public class PatlTaskServiceImpl implements PatlTaskService {
             try {
                 notificationService.notify("patrol", "patrol_task_completed",
                         "巡检任务已完成", "巡检任务" + task.getTaskNo() + " 全部点位已完成。",
-                        "patrol_task", taskId, "/patrol/tasks");
+                        "patrol_task", taskId, task.getTaskNo(), "/patrol/tasks", task.getOrgId());
             } catch (Exception e) {
                 log.warn("[巡检] 完成通知失败: {}", e.getMessage());
             }
@@ -189,7 +189,7 @@ public class PatlTaskServiceImpl implements PatlTaskService {
         try {
             notificationService.notify("patrol", "patrol_task_closed",
                     "巡检任务已关闭", "巡检任务" + task.getTaskNo() + " 已被手动关闭。",
-                    "patrol_task", taskId, "/patrol/tasks");
+                    "patrol_task", taskId, task.getTaskNo(), "/patrol/tasks", task.getOrgId());
         } catch (Exception e) {
             log.warn("[巡检] 关闭通知失败: {}", e.getMessage());
         }

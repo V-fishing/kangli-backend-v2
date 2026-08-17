@@ -113,7 +113,7 @@ public class NcmCorrectiveActionServiceImpl implements NcmCorrectiveActionServic
             notificationService.notify("ncm", "ncm_capa_created",
                     "纠正措施已创建",
                     "纠正措施" + action.getCaNo() + "(" + (action.getIssue() != null ? action.getIssue() : "") + ") 已创建,负责人:" + (action.getOwner() != null ? action.getOwner() : "-"),
-                    "capa_action", action.getId(), "/ncm/capa");
+                    "capa_action", action.getId(), action.getCaNo(), "/ncm/capa", action.getOrgId());
         } catch (Exception e) {
             log.warn("[CAPA] 创建通知失败: {}", e.getMessage());
         }
@@ -144,7 +144,7 @@ public class NcmCorrectiveActionServiceImpl implements NcmCorrectiveActionServic
                 notificationService.notify("ncm", "ncm_capa_completed",
                         "纠正措施已完成",
                         "纠正措施" + action.getCaNo() + " 进度已达100%,请核查闭环。",
-                        "capa_action", id, "/ncm/capa");
+                        "capa_action", id, action.getCaNo(), "/ncm/capa", action.getOrgId());
             } catch (Exception e) {
                 log.warn("[CAPA] 完成通知失败: {}", e.getMessage());
             }
@@ -168,7 +168,7 @@ public class NcmCorrectiveActionServiceImpl implements NcmCorrectiveActionServic
                 notificationService.notify("ncm", "ncm_capa_closed",
                     "纠正措施已关闭",
                     "纠正措施" + action.getCaNo() + "(" + (action.getIssue() != null ? action.getIssue() : "") + ") 已关闭。",
-                    "capa_action", id, "/ncm/capa");
+                    "capa_action", id, action.getCaNo(), "/ncm/capa", action.getOrgId());
         } catch (Exception e) {
             log.warn("[CAPA] 关闭通知失败: {}", e.getMessage());
         }

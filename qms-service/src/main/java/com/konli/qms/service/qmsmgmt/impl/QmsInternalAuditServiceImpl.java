@@ -183,7 +183,7 @@ public class QmsInternalAuditServiceImpl implements QmsInternalAuditService {
             try {
                 notificationService.notify("qms-mgmt", "qms_audit_nc_created", "内审不符合项新增",
                         "内审 " + nc.getNcNo() + " 新增不符合项,请责任部门及时整改。",
-                        "qms_audit_nc", nc.getId(), "/qms-mgmt/audit");
+                        "qms_audit_nc", nc.getId(), nc.getNcNo(), "/qms-mgmt/audit");
             } catch (Exception e) {
                 log.warn("[QMS-MGMT] 不符合项通知发送失败: {}", e.getMessage());
             }

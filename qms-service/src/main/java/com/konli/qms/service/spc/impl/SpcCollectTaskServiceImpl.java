@@ -305,7 +305,7 @@ public class SpcCollectTaskServiceImpl implements SpcCollectTaskService {
         String title = "SPC 采集通知";
         try {
             notificationService.notify("spc", eventCode, title, content,
-                    "spc_collect", task.getId(), "/spc/collect-tasks");
+                    "spc_collect", task.getId(), null, "/spc/collect-tasks", task.getOrgId());
         } catch (Exception e) {
             log.warn("[SPC采集] 站内信推送失败(忽略): {}", e.getMessage());
         }

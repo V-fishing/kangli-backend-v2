@@ -10,6 +10,7 @@ import com.konli.qms.common.security.DataScopeGuard;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.domain.ncm.entity.Qms8dReport;
 import com.konli.qms.domain.ncm.entity.Qms8dStageDetail;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
@@ -23,8 +24,11 @@ import com.konli.qms.service.ncm.Ncm8dArchiveService;
 import com.konli.qms.service.ncm.Ncm8dService;
 import com.konli.qms.service.ncm.Ncm8dApprovalConfigService;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.NcmDefectRecordService;
 import com.konli.qms.service.ncm.dto.Abnormal8dLaunchRequest;
 import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import com.konli.qms.service.ncm.dto.EightDVo;
 import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.ncm.Qms8dFishboneService;
@@ -53,6 +57,9 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     private final Qms8dReportMapper qms8dReportMapper;
     private final Qms8dStageDetailMapper qms8dStageDetailMapper;
     private final SqmIncomingAbnormalMapper abnormalMapper;
+    // @Lazy 打破与 NcmDefectRecordServiceImpl(其构造器注入 Ncm8dService)的循环依赖
+    @Autowired @Lazy
+    private NcmDefectRecordService ncmDefectRecordService;
     private final JdbcTemplate jdbcTemplate;
     private final NcmCapaService ncmCapaService;
     private final Ncm8dApprovalConfigService approvalConfigService;
@@ -110,18 +117,32 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     public Qms8dReport create(Qms8dReport report) {
         // SR-PTL 简易流程:flowType=简易 -> 直接D8闭环,跳过D2-D7
         if ("简易".equals(report.getFlowType())) {
+            // 简易流程也先落缺陷记录(统一整改源头),再建 8D 报告并直接闭环
+            if (report.getOrgId() == null || report.getOrgId().isBlank() || "ROOT".equals(report.getOrgId())) {
+                report.setOrgId(resolveOrgId());
+            }
+            NcmDefectRecord def = buildManualDefect(report);
+            def = ncmDefectRecordService.create(def);
+
             report.setD8No("8D-S-" + System.currentTimeMillis());
             report.setCurrentStage("D8");
             report.setStatus("已闭环");
             report.setCloseDate(LocalDate.now());
-            // 简易流程为手动快速闭环,无上游触发事件,标记为人工来源(无需来源单号)
-            report.setSource("人工");
+            // 简易流程为手动快速闭环,无上游触发事件,来源指向刚登记的缺陷记录
+            report.setSource("不良记录");
+            report.setSourceRefId(def.getId());
             if (report.getCapaTriggered() == null) report.setCapaTriggered(false);
-            // 表单可能把 ROOT 超级管理员的组织(字面量 "ROOT")带进来,需归一化为真实组织,否则写入 UUID 列报 500
-        if (report.getOrgId() == null || report.getOrgId().isBlank() || "ROOT".equals(report.getOrgId())) {
-            report.setOrgId(resolveOrgId());
-        }
+            // severity 列为 NOT NULL,兜底为"一般",避免插入报 500
+            if (report.getSeverity() == null || report.getSeverity().isBlank()) {
+                report.setSeverity("一般");
+            }
+            // issue 优先保留用户填写的主题
+            if (report.getIssue() == null || report.getIssue().isBlank()) {
+                report.setIssue(def.getIssue() != null ? def.getIssue() : "不良:" + def.getDefectNo());
+            }
             qms8dReportMapper.insert(report);
+            // 回写缺陷记录:记录关联 8D 单号
+            ncmDefectRecordService.linkD8(def.getId(), report.getD8No());
             // 简易流程直接闭环 -> 触发 8D 归档
             ncm8dArchiveService.archive(report);
             notify8d(report, "新建 8D 报告(简易闭环)", String.format(
@@ -144,13 +165,25 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (report.getOrgId() == null || report.getOrgId().isBlank() || "ROOT".equals(report.getOrgId())) {
             report.setOrgId(resolveOrgId());
         }
-        if (report.getSource() == null || report.getSource().isBlank()) report.setSource("NCM");
+        if (report.getSource() == null || report.getSource().isBlank()) report.setSource("人工");
         // 来源编码归一化(前端短码 SQM/SPC → 存储值 SQM异常/SPC报警)
-        report.setSource(normalizeSource(report.getSource()));
+        String src = normalizeSource(report.getSource());
+        report.setSource(src);
+        // 统一整改源头:人工来源(无上游事件)先登记缺陷记录,再从缺陷记录发起 8D,
+        // 使 8D 的 sourceRefId 指向缺陷记录,缺陷记录成为全平台 8D/CAPA/CA 的唯一源头,不破例。
+        if ("人工".equals(src)) {
+            NcmDefectRecord def = buildManualDefect(report);
+            def = ncmDefectRecordService.create(def);
+            // 改为统一来源"不良记录",并关联刚登记的缺陷记录
+            report.setSource("不良记录");
+            report.setSourceRefId(def.getId());
+            // 从缺陷记录发起 8D(标准范式:launch8dFromDefect 内部回写缺陷记录 d8No、指派通知、保留 issue)
+            return (Qms8dReport) ncmDefectRecordService.launch8dFromDefect(def.getId(), new DefectLaunchRequest());
+        }
         // 事件类来源必须回填来源单号,否则会产生"有来源无单号"的脏数据
-        if (requiresSourceRef(report.getSource())
+        if (requiresSourceRef(src)
                 && (report.getSourceRefId() == null || report.getSourceRefId().isBlank())) {
-            throw new BusinessException(400, "来源类型为「" + report.getSource() + "」时必须填写来源单号(sourceRefId)");
+            throw new BusinessException(400, "来源类型为「" + src + "」时必须填写来源单号(sourceRefId)");
         }
         qms8dReportMapper.insert(report);
         // D1 团队组建不再预填:由负责人在 D1 阶段自行添加团队成员并提交审核
@@ -158,6 +191,25 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             "新建 8D 报告《%s》(单号 %s,严重度 %s),请跟进处理。",
             report.getIssue(), report.getD8No(), report.getSeverity()));
         return report;
+    }
+
+    /** 由人工发起的 8D 报告构造对应的缺陷记录(统一整改源头)。 */
+    private NcmDefectRecord buildManualDefect(Qms8dReport report) {
+        NcmDefectRecord def = new NcmDefectRecord();
+        def.setOrgId(report.getOrgId());
+        def.setSource("人工");
+        // 人工发起不良字典项(全局 code=NCM,由 V236 幂等 seed),满足 defect_dict_code NOT NULL 约束
+        def.setDefectDictCode("NCM");
+        def.setIssue(report.getIssue());
+        def.setSeverity(report.getSeverity() != null ? report.getSeverity() : "一般");
+        // 不良数量/批量为 NOT NULL:人工发起未提供,兜底 defectCount=1、batchTotal=1(单条发起)
+        def.setDefectCount(1);
+        def.setBatchTotal(1);
+        // 人工建 8D 不传工单号/工序,缺陷记录 wo_no/process_code 列 NOT NULL,兜底空串
+        def.setWoNo("");
+        def.setProcessCode("");
+        def.setRemark("人工发起 8D:" + (report.getIssue() != null ? report.getIssue() : ""));
+        return def;
     }
 
     private String resolveOrgId() {
@@ -196,7 +248,7 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     private void notify8d(Qms8dReport r, String title, String content) {
         try {
             notificationService.notify("ncm", "ncm_8d_status",
-                title, content, "ncm_8d", r.getId(), "/ncm/8d-reports");
+                title, content, "ncm_8d", r.getId(), r.getD8No(), "/ncm/8d-reports", r.getOrgId());
         } catch (Exception ignored) {
             log.warn("[8D通知] 站内信推送失败: {}", ignored.getMessage());
         }
@@ -224,7 +276,7 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 notificationService.notifyUser(id, "8D 团队组建通知",
                     String.format("您已被加入 8D 报告《%s》(单号 %s)的团队,请登录系统跟进处理。",
                         r.getIssue(), r.getD8No()),
-                    "ncm_8d", r.getId(), link);
+                    "ncm_8d", r.getId(), r.getD8No(), link);
             } catch (Exception ex) {
                 log.warn("[8D通知] 团队成员({})站内信推送失败: {}", id, ex.getMessage());
             }
@@ -250,47 +302,35 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (ab.getD8Id() != null && !ab.getD8Id().isBlank()) {
             throw new BusinessException(400, "该异常单已发起8D");
         }
-        report.setId(UUID.randomUUID().toString());
-        // 从异常单继承 orgId,对旧数据中 ROOT/null 兜底为 sys_org 首个组织
+        // 统一整改源头:先登记一条 source=SQM异常 的缺陷记录,再从该缺陷记录发起 8D,
+        // 使 8D 的 sourceRefId 指向缺陷记录(而非异常单),缺陷记录成为全平台 8D/CAPA/CA 的唯一源头
         String orgId = ab.getOrgId();
         if (orgId == null || orgId.isBlank() || "ROOT".equals(orgId)) {
             orgId = resolveOrgId();
         }
-        report.setOrgId(orgId);
-        report.setSource("SQM异常");
-        // 回填业务单号(异常单号)而非主键 UUID,以便追溯跳转与闭环时按单号回写异常单
-        report.setSourceRefId(ab.getAbnormalNo());
-        report.setD8No("8D-" + System.currentTimeMillis());
-        report.setCurrentStage("D1");
-        report.setStatus("进行中");
-        report.setCapaTriggered(false);
-        report.setFlowType("8D");
-        // 8D 新流程:发起时指定负责人(单选 ownerUserId),团队由负责人在 D1 自行组建
-        if (launch != null && launch.getOwnerUserId() != null && !launch.getOwnerUserId().isBlank()) {
-            report.setOwnerUserId(launch.getOwnerUserId());
-        }
-        String ownerName = resolveOwnerName(launch);
-        if (ownerName != null) {
-            report.setTeam(ownerName);
-            report.setOwnerUserName(ownerName);
-        } else {
-            report.setTeam("质量团队");
-        }
-        qms8dReportMapper.insert(report);
-        notify8d(report, "从来料异常发起 8D 报告", String.format(
-            "已根据来料异常单发起 8D 报告《%s》(单号 %s),请跟进处理。",
-            report.getIssue(), report.getD8No()));
-        // 指定负责人时写入指派记录并站内信通知负责人本人
-        if (launch != null && launch.getOwnerUserId() != null && !launch.getOwnerUserId().isBlank()) {
-            saveAbnormalOwnerAssign(ab, report.getId(), report.getD8No(), "8D", launch);
-        }
+        NcmDefectRecord def = new NcmDefectRecord();
+        def.setOrgId(orgId);
+        def.setSource("SQM异常");
+        def.setDefectDictCode("SQM"); // 来料异常不良字典项(全局,由 V235 幂等 seed)
+        def.setSeverity("严重".equals(ab.getLevel()) ? "严重" : ("一般".equals(ab.getLevel()) ? "一般" : "中"));
+        def.setDefectCount(ab.getQty() != null ? ab.getQty() : 1);
+        def.setBatchTotal(ab.getIncomingQty() != null && ab.getIncomingQty() > 0 ? ab.getIncomingQty() : 1);
+        def.setBatchNo(ab.getBatchNo());
+        def.setProductModel(ab.getPartName());
+        def.setRemark("来料异常单 " + ab.getAbnormalNo() + ":" + (ab.getDescription() != null ? ab.getDescription() : ""));
+        def = ncmDefectRecordService.create(def);
+
+        // 从缺陷记录发起 8D(标准范式:launch8dFromDefect 内部回写缺陷记录 d8No 并指派通知)
+        Qms8dReport created = (Qms8dReport) ncmDefectRecordService.launch8dFromDefect(def.getId(), launch != null ? launch : new DefectLaunchRequest());
+
+        // 保留异常单反向链接:回写 d8Id / rectifyType / 状态(异常单→8D 可追溯)
         SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
         upd.setId(abnormalId);
-        upd.setD8Id(report.getId());
+        upd.setD8Id(created.getId());
         upd.setRectifyType("8D");
         upd.setStatus("整改中");
         abnormalMapper.updateById(upd);
-        return report;
+        return created;
     }
 
     /** 负责人指派:写 qms_assign_record 并站内信通知负责人本人(8D 新流程:仅指定负责人)。 */
@@ -321,7 +361,7 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                     + "您被指定为负责人,请登录系统在 D1 阶段组建团队并提交审核。"
                     + (launch.getRemark() != null && !launch.getRemark().isBlank() ? "\n指派备注: " + launch.getRemark() : "");
             String link = "/sqm/abnormals";
-            notificationService.notifyUser(launch.getOwnerUserId(), title, content, "NCM_ASSIGN", bizId, link);
+            notificationService.notifyUser(launch.getOwnerUserId(), title, content, "NCM_ASSIGN", bizId, bizNo, link);
         }
     }
 

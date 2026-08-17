@@ -161,7 +161,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         try {
             notificationService.notify("sqm", "sqm_audit_plan_created",
                     "审核计划已创建", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已创建,请确认并安排执行。",
-                    "audit_task", plan.getId(), "/sqm/audit");
+                    "audit_task", plan.getId(), plan.getPlanNo(), "/sqm/audit", plan.getOrgId());
         } catch (Exception e) {
             log.warn("[审核] 计划创建通知失败: {}", e.getMessage());
         }
@@ -233,7 +233,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         try {
             notificationService.notify("sqm", "sqm_audit_plan_started",
                     "审核计划已开始", "审核计划" + plan.getPlanNo() + "(" + plan.getAuditType() + ") 已开始执行,请及时完成审核记录。",
-                    "audit_task", plan.getId(), "/sqm/audit");
+                    "audit_task", plan.getId(), plan.getPlanNo(), "/sqm/audit", plan.getOrgId());
         } catch (Exception e) {
             log.warn("[审核] 计划开始通知失败: {}", e.getMessage());
         }
@@ -567,7 +567,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
                 notificationService.notify("sqm", "sqm_audit_nc_major",
                         "审核严重不符合项",
                         "审核不符合项" + nc.getNcNo() + "(" + nc.getLevel() + "): " + (nc.getDescription() != null ? nc.getDescription() : ""),
-                        "audit_task", nc.getId(), "/sqm/audit");
+                        "audit_task", nc.getId(), nc.getNcNo(), "/sqm/audit", nc.getOrgId());
             } catch (Exception ignored) {}
         }
         return nc;
@@ -595,7 +595,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
             notificationService.notify("sqm", "sqm_audit_nc_closed",
                     "审核不符合项已闭环",
                     "审核不符合项" + nc.getNcNo() + " 整改验证通过,已闭环。" + (verifyResult != null ? " 验证结论:" + verifyResult : ""),
-                    "audit_task", ncId, "/sqm/audit");
+                    "audit_task", ncId, nc.getNcNo(), "/sqm/audit", nc.getOrgId());
         } catch (Exception e) {
             log.warn("[审核] NC闭环通知失败: {}", e.getMessage());
         }
@@ -722,7 +722,7 @@ public class SqmAuditServiceImpl implements SqmAuditService {
                 notificationService.notify("sqm", "sqm_audit_nc_overdue",
                         "审核NC整改超期",
                         "审核不符合项 " + nc.getNcNo() + " 整改超期" + days + "天,已升级通知。",
-                        "audit_nc_overdue", nc.getId(), "/sqm/audit");
+                        "audit_nc_overdue", nc.getId(), nc.getNcNo(), "/sqm/audit", nc.getOrgId());
             }
         } catch (Exception e) { log.warn("NC超期扫描异常: {}", e.getMessage()); }
     }

@@ -637,7 +637,7 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                         String.format("参数【%s】于 %s 触发 %s 级报警(规则:%s,实测值:%s)。请及时处理。",
                             param.getParamName(), alarm.getAlarmTime(), alarm.getLevel(),
                             alarm.getTriggeredRule(), alarm.getCurrentValue()),
-                        "spc_alarm", alarm.getId(), "/spc/alarms", null);
+                        "spc_alarm", alarm.getId(), alarm.getCode(), "/spc/alarms", null, alarm.getOrgId());
                 } catch (Exception ignored) {
                     // 站内信异常不回滚报警
                 }

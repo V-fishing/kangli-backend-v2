@@ -127,6 +127,8 @@ public class NotifyMessageServiceImpl implements NotifyMessageService {
             row.setBizId(first.getBizId());
             // 优先取调用方传入的可读单据号; 未传则为空(前端展示「—」), 不再回退显示 UUID
             row.setBizNo(first.getBizNo());
+            // 跳转链接: 后端按 bizType 生成标准详情路由(bizId 即业务主键 UUID), 前端点击直接跳转
+            row.setBizLink(buildBizLink(first.getBizType(), first.getBizId(), first.getBizNo()));
             row.setChannel(first.getChannel());
             // 综合状态: 任一失败→失败; 否则任一发送中→发送中; 否则成功
             boolean anyFail = items.stream().anyMatch(i -> "失败".equals(i.getStatus()));
@@ -177,5 +179,41 @@ public class NotifyMessageServiceImpl implements NotifyMessageService {
         if (userId == null) return null;
         SysUser u = sysUserMapper.selectById(userId);
         return u != null ? u.getRealName() : null;
+    }
+
+    /**
+     * 按业务类型生成关联单据跳转链接(bizId 即业务主键 UUID, 直接拼接详情路由)。
+     * 覆盖主要业务模块; 未识别的类型返回 null(前端不渲染链接)。
+     */
+    private String buildBizLink(String bizType, String bizId, String bizNo) {
+        if (bizId == null || bizId.isBlank()) return null;
+        if (bizType == null) return null;
+        // NCM_ASSIGN 同时覆盖 8D/CAPA/CA 指派, biz_id 指向的表不固定,
+        // 改用 biz_no 前缀路由(8D-/CAPA-/CA-), 无法识别时回退到不良记录列表。
+        if ("NCM_ASSIGN".equals(bizType)) {
+            if (bizNo != null && bizNo.startsWith("8D-")) return "/ncm/8d-reports/" + bizId;
+            if (bizNo != null && (bizNo.startsWith("CAPA-") || bizNo.startsWith("CA-"))) return "/ncm/capas/" + bizId;
+            return "/ncm/defect-records";
+        }
+        return switch (bizType) {
+            case "ncm_8d", "ncm_8d_status" -> "/ncm/8d-reports/" + bizId;
+            case "capa_action" -> "/ncm/capas/" + bizId;
+            case "sqm_change" -> "/sqm/changes";
+            case "audit_task", "audit_nc_overdue" -> "/sqm/audits";
+            case "abnormal_overdue" -> "/sqm/abnormals";
+            case "fmea_overdue", "sqm_fmea" -> "/sqm/fmea";
+            case "patrol_task", "patrol_overdue" -> "/patrol/tasks";
+            case "fia_overdue" -> "/fia/tasks";
+            case "spc_alarm" -> "/spc/alarms";
+            case "spc_collect" -> "/spc/collect-tasks";
+            case "tlm_repair", "tlm_scrap", "tlm_life_over", "tlm_tooling", "tlm_repair_done" -> "/tlm/tooling";
+            case "tlm_calib_plan_created" -> "/tlm/metro/plans";
+            case "qms_quality_goal" -> "/qms-mgmt/goal";
+            case "qms_audit_nc" -> "/qms-mgmt/audit";
+            case "qms_compliance_board" -> "/qms-mgmt/dashboard";
+            case "qms_adverse_event" -> "/qms-mgmt/adverse";
+            case "capa_overdue" -> "/ncm/capas";
+            default -> null;
+        };
     }
 }

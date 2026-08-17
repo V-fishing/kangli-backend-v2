@@ -180,7 +180,7 @@ public class QmsQualityGoalServiceImpl implements QmsQualityGoalService {
                 String detail = "质量目标「" + g.getGoalName() + "」(" + g.getGoalType() + ") 达成率 "
                         + r + "%,未达目标值 " + g.getTargetValue() + ",请关注改进。";
                 notificationService.notify("qms-mgmt", "qms_goal_warn", "质量目标未达标预警", detail,
-                        "qms_quality_goal", g.getId(), "/qms-mgmt/goal");
+                        "qms_quality_goal", g.getId(), null, "/qms-mgmt/goal", g.getOrgId());
             }
             log.info("[QMS-MGMT] 质量目标预警扫描完成, 命中 {} 条", unReached.size());
         } catch (Exception e) {

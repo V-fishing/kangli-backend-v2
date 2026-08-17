@@ -778,7 +778,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
                 task.getCode(), task.getWoNo(), task.getLineName(), task.getProcName(),
                 task.getSlaDueAt() != null ? task.getSlaDueAt().toString() : "-");
         notificationService.notify("fia", "fia_task_created",
-                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks");
+                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks", task.getOrgId());
     }
 
     /** 将前端传入的标识(可能是主键 UUID,也可能是校验单号 code)解析为真实主键;解析失败返回 null */

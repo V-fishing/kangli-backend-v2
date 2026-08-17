@@ -50,7 +50,8 @@ public class AuditAspect {
             long cost = System.currentTimeMillis() - start;
             String recordId = "SUCCESS".equals(status) ? eval(auditable.recordExpr(), pjp, result) : null;
             String detail   = "SUCCESS".equals(status) ? eval(auditable.detailExpr(), pjp, result) : null;
-            recorder.record(module, action, method, recordId, detail, status, error, cost);
+            String recordNo = "SUCCESS".equals(status) ? eval(auditable.recordNoExpr(), pjp, result) : null;
+            recorder.record(module, action, method, recordId, recordNo, detail, status, error, cost);
         }
         return result;
     }

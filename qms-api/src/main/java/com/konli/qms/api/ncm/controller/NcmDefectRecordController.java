@@ -121,7 +121,7 @@ public class NcmDefectRecordController {
     /** 不良记录一键发起8D(跨模块:defect->8D),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-8d")
     @PreAuthorize("hasAuthority('ncm.8d.create')")
-    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id", recordNoExpr = "#result.data.d8No",
             detailExpr = "'由不良记录发起8D' + (#req != null && #req.ownerUserId != null ? (':负责人 ' + #req.ownerUserId) : '')")
     public R<Object> launch8dFromDefect(@PathVariable String id,
                                         @RequestBody(required = false) DefectLaunchRequest req) {
@@ -131,7 +131,7 @@ public class NcmDefectRecordController {
     /** 不良记录一键发起CAPA(跨模块:defect->CAPA),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-capa")
     @PreAuthorize("hasAuthority('ncm.capa.create')")
-    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id", recordNoExpr = "#result.data.capaNo",
             detailExpr = "'由不良记录发起CAPA'")
     public R<Object> launchCapaFromDefect(@PathVariable String id,
                                           @RequestBody(required = false) DefectLaunchRequest req) {
@@ -141,7 +141,7 @@ public class NcmDefectRecordController {
     /** 不良记录一键发起CA(跨模块:defect->CA),可携带指派处理人+通知方式 */
     @PostMapping("/defect-records/{id}/launch-ca")
     @PreAuthorize("hasAuthority('ncm.record.create')")
-    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id",
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#id", recordNoExpr = "#result.data.caNo",
             detailExpr = "'由不良记录发起CA'")
     public R<Object> launchCaFromDefect(@PathVariable String id,
                                         @RequestBody(required = false) DefectLaunchRequest req) {

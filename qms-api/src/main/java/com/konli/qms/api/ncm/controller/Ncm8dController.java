@@ -66,14 +66,14 @@ public class Ncm8dController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('ncm.8d.create')")
-    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'发起8D报告'")
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", recordNoExpr = "#result.data.d8No", detailExpr = "'发起8D报告'")
     public R<Qms8dReport> create(@RequestBody Qms8dReport report) {
         return R.ok(ncm8dService.create(report));
     }
 
     @PostMapping("/launch")
     @PreAuthorize("hasAuthority('ncm.8d.create')")
-    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'由异常发起8D报告'")
+    @Auditable(module = "NCM", action = "CREATE", recordExpr = "#result.data.id", recordNoExpr = "#result.data.d8No", detailExpr = "'由异常发起8D报告'")
     public R<Qms8dReport> launchFromAbnormal(@RequestBody Abnormal8dLaunchRequest req) {
         return R.ok(ncm8dService.launchFromAbnormal(req));
     }

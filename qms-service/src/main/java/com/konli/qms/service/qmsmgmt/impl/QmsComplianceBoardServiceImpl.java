@@ -113,7 +113,7 @@ public class QmsComplianceBoardServiceImpl implements QmsComplianceBoardService 
                 notificationService.notify("qms-mgmt", "qms_health_warn", "体系健康度预警",
                         String.format("当前体系健康度得分 %.1f,低于阈值 %.0f,请关注目标达成/内审闭环/不良事件/客户反馈。",
                                 health, HEALTH_WARN_THRESHOLD),
-                        "qms_compliance_board", null, "/qms-mgmt/board");
+                        "qms_compliance_board", null, null, "/qms-mgmt/board");
             } catch (Exception e) {
                 log.warn("[QMS-MGMT] 健康度预警推送失败: {}", e.getMessage());
             }

@@ -41,6 +41,7 @@ public class AuditLogController {
                 rs.getString("operator_id"),
                 rs.getString("operator_name"),
                 rs.getString("record_id"),
+                rs.getString("record_no"),
                 rs.getString("detail"),
                 rs.getString("status"),
                 rs.getObject("cost_ms") != null ? rs.getInt("cost_ms") : null,
@@ -77,7 +78,7 @@ public class AuditLogController {
         int offset = (page - 1) * size;
 
         List<AuditLogVO> records = jdbc.query(
-            "SELECT id, module, action, operator_id, operator_name, record_id, detail, status, cost_ms, created_at "
+            "SELECT id, module, action, operator_id, operator_name, record_id, record_no, detail, status, cost_ms, created_at "
             + "FROM ops.sys_audit_log " + where
             + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
             ROW_MAPPER, append(args, size, offset).toArray());
@@ -120,7 +121,8 @@ public class AuditLogController {
             args.add(operator);
         }
         if (recordId != null && !recordId.isBlank()) {
-            where.append(" AND record_id = ?");
+            where.append(" AND (record_id = ? OR record_no = ?)");
+            args.add(recordId);
             args.add(recordId);
         }
         if (status != null && !status.isBlank()) {
@@ -145,7 +147,7 @@ public class AuditLogController {
         int offset = (p - 1) * s;
 
         List<AuditLogVO> records = jdbc.query(
-            "SELECT id, module, action, operator_id, operator_name, record_id, detail, status, cost_ms, created_at "
+            "SELECT id, module, action, operator_id, operator_name, record_id, record_no, detail, status, cost_ms, created_at "
             + "FROM ops.sys_audit_log " + where
             + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
             ROW_MAPPER, append(args, s, offset).toArray());
@@ -171,7 +173,7 @@ public class AuditLogController {
 
     /** 操作轨迹 VO — 时间线展示所需字段。 */
     public record AuditLogVO(Long id, String module, String action, String operatorId,
-                             String operatorName, String recordId, String detail,
+                             String operatorName, String recordId, String recordNo, String detail,
                              String status, Integer costMs, LocalDateTime createdAt) {
     }
 }

@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
+import com.konli.qms.domain.ncm.entity.NcmDefectRecord;
 import com.konli.qms.domain.ncm.entity.QmsCapa;
 import com.konli.qms.domain.ncm.entity.QmsCapaAction;
 import com.konli.qms.domain.ncm.entity.Qms8dReport;
@@ -15,9 +16,12 @@ import com.konli.qms.domain.ncm.mapper.QmsCapaMapper;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingAbnormalMapper;
 import com.konli.qms.service.ncm.NcmCapaService;
+import com.konli.qms.service.ncm.NcmDefectRecordService;
 import com.konli.qms.service.ncm.dto.AbnormalCapaLaunchRequest;
 import com.konli.qms.service.ncm.dto.CapaVo;
 import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -38,6 +42,9 @@ public class NcmCapaServiceImpl implements NcmCapaService {
     private final SqmIncomingAbnormalMapper abnormalMapper;
     private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
     private final com.konli.qms.service.assign.AssignReassignService assignReassignService;
+    // @Lazy 打破与 NcmDefectRecordServiceImpl(其构造器注入 NcmCapaService)的循环依赖
+    @Autowired @Lazy
+    private NcmDefectRecordService ncmDefectRecordService;
 
     private String resolveDefaultOrgId() {
         try {
@@ -147,20 +154,28 @@ public class NcmCapaServiceImpl implements NcmCapaService {
         if (ab == null) {
             throw new BusinessException(404, "来料异常单不存在");
         }
-        if (capa.getIssue() == null || capa.getIssue().isBlank()) {
-            capa.setIssue("来料异常:" + (ab.getAbnormalNo() != null ? ab.getAbnormalNo() : abnormalId));
+        // 统一整改源头:先登记一条 source=SQM异常 的缺陷记录,再从该缺陷记录发起 CAPA,
+        // 使 CAPA 的 sourceRefId 指向缺陷记录(而非异常单),缺陷记录成为全平台 8D/CAPA/CA 的唯一源头
+        String orgId = ab.getOrgId();
+        if (orgId == null || orgId.isBlank() || "ROOT".equals(orgId)) {
+            orgId = resolveDefaultOrgId();
         }
-        if (capa.getTriggerType() == null || capa.getTriggerType().isBlank()) {
-            capa.setTriggerType("来料异常");
-        }
-        if (capa.getCapaType() == null || capa.getCapaType().isBlank()) {
-            capa.setCapaType("纠正措施");
-        }
-        if (capa.getOwner() == null || capa.getOwner().isBlank()) {
-            CompanyContext.CurrentUser u = CompanyContext.get();
-            capa.setOwner(u != null && u.username() != null ? u.username() : "系统");
-        }
-        QmsCapa created = create(capa);
+        NcmDefectRecord def = new NcmDefectRecord();
+        def.setOrgId(orgId);
+        def.setSource("SQM异常");
+        def.setDefectDictCode("SQM"); // 来料异常不良字典项(全局,由 V235 幂等 seed)
+        def.setSeverity("严重".equals(ab.getLevel()) ? "严重" : ("一般".equals(ab.getLevel()) ? "一般" : "中"));
+        def.setDefectCount(ab.getQty() != null ? ab.getQty() : 1);
+        def.setBatchTotal(ab.getIncomingQty() != null && ab.getIncomingQty() > 0 ? ab.getIncomingQty() : 1);
+        def.setBatchNo(ab.getBatchNo());
+        def.setProductModel(ab.getPartName());
+        def.setRemark("来料异常单 " + ab.getAbnormalNo() + ":" + (ab.getDescription() != null ? ab.getDescription() : ""));
+        def = ncmDefectRecordService.create(def);
+
+        // 从缺陷记录发起 CAPA(标准范式:launchCapaFromDefect 内部回写缺陷记录 capaNo 并指派通知)
+        QmsCapa created = (QmsCapa) ncmDefectRecordService.launchCapaFromDefect(def.getId(), req.getLaunch() != null ? req.getLaunch() : new DefectLaunchRequest());
+
+        // 保留异常单反向链接:回写 capaId / rectifyType / 状态(异常单→CAPA 可追溯)
         SqmIncomingAbnormal upd = new SqmIncomingAbnormal();
         upd.setId(abnormalId);
         upd.setCapaId(created.getId());

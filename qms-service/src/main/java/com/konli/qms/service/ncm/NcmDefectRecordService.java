@@ -42,6 +42,9 @@ public interface NcmDefectRecordService {
     /** 不良记录一键发起8D(SR-NCM处置决策):创建8D单,source=不良记录,并按 req 指派处理人+通知。返回8D记录 */
     Object launch8dFromDefect(String defectId, DefectLaunchRequest req);
 
+    /** 回写缺陷记录关联的 8D 单号(简易闭环流程手动建 8D 后调用)。 */
+    void linkD8(String defectId, String d8No);
+
     /** 不良记录一键发起CAPA(SR-NCM处置决策):创建CAPA单,并按 req 指派处理人+通知。返回CAPA记录 */
     Object launchCapaFromDefect(String defectId, DefectLaunchRequest req);
 

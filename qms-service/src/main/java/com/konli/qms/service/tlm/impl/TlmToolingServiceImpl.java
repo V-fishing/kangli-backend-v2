@@ -159,7 +159,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         if (approverId != null && !approverId.isBlank()) {
             notificationService.notifyUser(approverId, "工装送修待审批",
                     "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 发起送修,请审批",
-                    "tlm_repair", r.getId(), "/tlm/tooling/" + id);
+                    "tlm_repair", r.getId(), t.getToolNo(), "/tlm/tooling/" + id);
         } else {
             // 无审批人配置: 直接置维修中(退化流程, 不阻断主流程)
             t.setStatus("REPAIRING");
@@ -264,7 +264,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         if (approverId != null && !approverId.isBlank()) {
             notificationService.notifyUser(approverId, "工装报废待审批",
                     "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 发起报废,请审批",
-                    "tlm_scrap", s.getId(), "/tlm/tooling/" + id);
+                    "tlm_scrap", s.getId(), t.getToolNo(), "/tlm/tooling/" + id);
         } else {
             log.warn("[TLM] 工装 {} 发起报废但未配置审批人(审核配置中无「工装报废审核」节点),流程待人工介入", t.getToolNo());
         }
@@ -416,7 +416,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
                 // 统一走通知配置(module=tlm, event_code=tlm_life_over)解析接收人/渠道(强约束 C2)
                 notificationService.notify("tlm", "tlm_life_over", "工装寿命超限预警",
                         "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 已达寿命上限,已自动锁定",
-                        "tlm_life_over", t.getId(), "/tlm/tooling/" + t.getId());
+                        "tlm_life_over", t.getId(), t.getToolNo(), "/tlm/tooling/" + t.getId(), t.getOrgId());
             } catch (Exception e) {
                 log.warn("工装寿命预警通知失败: {}", e.getMessage());
             }
@@ -512,7 +512,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
             try {
                 notificationService.notify("tlm", "tlm_repair_verify_fail", "工装验证不通过已锁定",
                         "工装 " + t.getToolName() + "(" + t.getToolNo() + ") 维修后验证不通过,已自动锁定禁止派工,请重新安排维修。",
-                        "tlm_tooling", t.getId(), "/tlm/tooling/" + id);
+                        "tlm_tooling", t.getId(), t.getToolNo(), "/tlm/tooling/" + id, t.getOrgId());
             } catch (Exception e) {
                 log.warn("[TLM] 工装验证不通过锁定通知失败: {}", e.getMessage());
             }
@@ -530,7 +530,7 @@ public class TlmToolingServiceImpl implements TlmToolingService {
             try {
                 notificationService.notify("tlm", "tlm_repair_done", "计量器具维修完成待校准",
                         "计量器具 " + t.getToolName() + "(" + t.getToolNo() + ") 维修已完成，请安排重新校准并录入后方可解锁使用",
-                        "tlm_repair_done", t.getId(), "/tlm/metro");
+                        "tlm_repair_done", t.getId(), t.getToolNo(), "/tlm/metro", t.getOrgId());
             } catch (Exception e) {
                 log.warn("计量器具维修完成待校准通知失败: {}", e.getMessage());
             }
