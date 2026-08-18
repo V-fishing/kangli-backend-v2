@@ -23,7 +23,7 @@ public class PerfAnalysisController {
     private final PerfAnalysisService perfAnalysisService;
 
     @GetMapping("/rank")
-    @PreAuthorize("hasAuthority('sqm.capa')")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<PageResult<Map<String, Object>>> rank(@RequestParam String period,
                                                    @RequestParam(required = false) String category,
                                                    @RequestParam(defaultValue = "1") int page,
@@ -32,7 +32,7 @@ public class PerfAnalysisController {
     }
 
     @GetMapping("/trend")
-    @PreAuthorize("hasAuthority('sqm.capa')")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<List<SqmSupplierPerformance>> trend(@RequestParam List<String> supplierIds,
                                                  @RequestParam String periodStart,
                                                  @RequestParam String periodEnd) {
@@ -40,7 +40,7 @@ public class PerfAnalysisController {
     }
 
     @GetMapping("/pareto")
-    @PreAuthorize("hasAuthority('sqm.capa')")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<List<Map<String, Object>>> pareto(@RequestParam String periodStart,
                                                @RequestParam String periodEnd,
                                                @RequestParam(defaultValue = "10") int topN) {

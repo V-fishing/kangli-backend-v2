@@ -22,13 +22,13 @@ public class SqmPerfMetricCfgController {
     private final SqmPerfMetricCfgService sqmPerfMetricCfgService;
 
     @GetMapping
-    @PreAuthorize("hasAuthority('sqm.capa')")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<List<SqmPerfMetricCfg>> list() {
         return R.ok(sqmPerfMetricCfgService.list());
     }
 
     @PostMapping
-    @PreAuthorize("hasAuthority('sqm.capa')")
+    @PreAuthorize("hasAuthority('sqm.perf.cfg')")
     public R<SqmPerfMetricCfg> save(@RequestBody SqmPerfMetricCfg cfg) {
         return R.ok(sqmPerfMetricCfgService.save(cfg));
     }

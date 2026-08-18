@@ -117,14 +117,14 @@ public class Ncm8dController {
 
     /** 8D 阶段审核配置:读取当前公司的“哪些阶段需审核人签名及指定签批人”。 */
     @GetMapping("/approval-config")
-    @PreAuthorize("hasAuthority('ncm.8d.list')")
+    @PreAuthorize("hasAuthority('system.audit-config')")
     public R<List<Qms8dApprovalConfig>> approvalConfig() {
         return R.ok(ncm8dApprovalConfigService.getConfig());
     }
 
     /** 8D 阶段审核配置:全量保存当前公司的配置(D1-D8 共 8 条)。 */
     @PostMapping("/approval-config")
-    @PreAuthorize("hasAuthority('ncm.8d.create')")
+    @PreAuthorize("hasAuthority('system.audit-config')")
     public R<Void> saveApprovalConfig(@RequestBody List<Qms8dApprovalConfig> items) {
         ncm8dApprovalConfigService.saveConfig(items);
         return R.ok();

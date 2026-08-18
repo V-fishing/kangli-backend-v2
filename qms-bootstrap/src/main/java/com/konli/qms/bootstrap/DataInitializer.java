@@ -125,12 +125,17 @@ public class DataInitializer implements CommandLineRunner {
         assignBtn("fia", "fia.sign.inspector", "检验员签名");
         assignBtn("fia", "fia.sign.reviewer", "复核人签名");
         assignBtn("fia", "fia.sign.approver", "批准人签名");
-        assignBtn("fia", "fia.task.disposition", "处置路径");
+        assignBtn("fia", "fia.sign.disposition", "处置路径");
+        assignBtn("fia", "fia.wolock.emergency", "工单紧急放行");
+        assignBtn("fia", "fia.wolock.release", "工单审批释放");
         assignBtn("ncm", "ncm.record.delete", "记录/过滤方案删除");
         assignBtn("ncm", "ncm.capa.close", "CAPA关闭");
         assignBtn("ncm", "ncm.capa.approve", "CAPA审批");
         assignBtn("ncm", "ncm.capa.reset", "CAPA重置");
         assignBtn("ncm", "ncm.corrective.close", "纠正措施关闭");
+        assignBtn("ncm", "ncm.ca.list", "纠正措施查询");
+        assignBtn("ncm", "ncm.ca.create", "纠正措施管理");
+        assignBtn("ncm", "ncm.ca.close", "纠正措施关闭");
         assignBtn("sqm", "sqm.change.submit", "变更提交");
         assignBtn("sqm", "sqm.change.approve", "变更审批");
         assignBtn("sqm", "sqm.change.close", "变更关闭");
@@ -141,7 +146,6 @@ public class DataInitializer implements CommandLineRunner {
         assignBtn("sqm", "sqm.fmea.scan-overdue", "FMEA超期扫描");
         assignBtn("sqm", "sqm.abnormal.close", "异常关闭");
         assignBtn("sqm", "sqm.abnormal.escalation-check", "异常升级检查");
-        assignBtn("sqm", "sqm.audit.plan.confirm", "审核计划确认");
         assignBtn("sqm", "sqm.audit.plan.start", "审核开始");
         assignBtn("sqm", "sqm.audit.nc.close", "NC关闭");
         assignBtn("sqm", "sqm.audit.archive", "审核归档");
@@ -178,6 +182,27 @@ public class DataInitializer implements CommandLineRunner {
         // 切换分公司(可配置权限,超管默认拥有,可分配给其他角色;无权限者顶栏不显示切换器)。
         // 挂在始终存在的 system.org.list 菜单下,避免依赖 seedRbac 才创建的 system.org 菜单(幂等且不受 seedRbac 守卫影响)。
         assignBtn("system.org.list", "system.org.switch", "切换分公司");
+
+        // 绩效模块权限码(原 Controller 错用 sqm.capa,已改为 sqm.perf.* 与 sqm.supplier.list 对齐)
+        assignBtn("sqm", "sqm.perf.calc", "绩效自动计算");
+        assignBtn("sqm", "sqm.perf.create", "绩效手工录入");
+        assignBtn("sqm", "sqm.perf.cfg", "绩效指标配置");
+        // 审核/签批配置(8D 阶段签批 + 供应商会签),页面在系统管理-审核配置
+        assignBtn("sqm", "system.audit-config", "审核/签批配置");
+
+        // 售后模块权限码(cs 菜单由 Flyway V018/V203 预置)
+        assignBtn("cs", "cs.workorder.list", "售后工单查询");
+        assignBtn("cs", "cs.workorder.create", "工单新建");
+        assignBtn("cs", "cs.workorder.edit", "工单编辑");
+        assignBtn("cs", "cs.workorder.assign", "工单派单/完成");
+        assignBtn("cs", "cs.workorder.close", "工单评价闭环");
+        assignBtn("cs", "cs.workorder.delete", "工单删除");
+        assignBtn("cs", "cs.feedback.list", "客户反馈查询");
+        assignBtn("cs", "cs.feedback.create", "反馈登记");
+        assignBtn("cs", "cs.feedback.edit", "反馈编辑");
+        assignBtn("cs", "cs.feedback.delete", "反馈删除");
+        assignBtn("cs", "cs.feedback.handle", "反馈处理");
+        assignBtn("cs", "cs.feedback.link", "反馈联动");
         // 确保 admin 始终有关联 sysadmin 角色(seedRbac 有 count>0 幂等跳过,admin 关联可能被跳过)
         String sysadminRoleId = queryId("SELECT id FROM ops.sys_role WHERE role_code='sysadmin' AND org_id IS NULL");
         if (sysadminRoleId != null) {

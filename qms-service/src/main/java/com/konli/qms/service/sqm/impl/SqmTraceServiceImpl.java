@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import com.konli.qms.domain.sqm.dto.TraceNodeSaveRequest;
 
@@ -291,8 +292,18 @@ public class SqmTraceServiceImpl implements SqmTraceService {
             conds.add(" plant_code = " + quote(plantCode));
         }
         if (keyword != null && !keyword.trim().isEmpty()) {
-            String kwq = quote("%" + keyword.trim() + "%");
-            conds.add(" (code ILIKE " + kwq + " OR name ILIKE " + kwq + " OR batch_no ILIKE " + kwq + " OR barcode ILIKE " + kwq + ")");
+            String kw = keyword.trim();
+            String kwq = quote("%" + kw + "%");
+            StringBuilder kwCond = new StringBuilder(" (code ILIKE " + kwq + " OR name ILIKE " + kwq
+                    + " OR batch_no ILIKE " + kwq + " OR barcode ILIKE " + kwq);
+            // 桥接反查: 成品/被装件关联条码 → 关联到的半成品/成品 prod_batch_or_sn(仅成品/半成品块有该列)
+            Set<String> bridge = bridgeBarcodes(kw);
+            if (!bridge.isEmpty()) {
+                String inList = bridge.stream().map(this::quote).collect(Collectors.joining(","));
+                kwCond.append(" OR (source_table = 'finished_goods_inspection' AND batch_no IN (").append(inList).append("))");
+            }
+            kwCond.append(")");
+            conds.add(kwCond.toString());
         }
         String where = "";
         if (!conds.isEmpty()) {
@@ -337,6 +348,26 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         }
     }
 
+    /**
+     * 桥接反查: 按成品/关键件关联条码(product_barcode / material_barcode)在 critical_material_binding
+     * 中找到关联到的源表业务条码(prod_batch_or_sn), 供 semi/finished 列表按"成品/被装件条码"反查出对应源表行。
+     * 例: 搜 WBA0125040014(仅存在于绑定表) → 反查出被装件 material_barcode → 命中对应半成品 prod_batch_or_sn。
+     * 列表行仍是干净的源表记录, 仅扩展了检索维度; 绑定表自身行不进入列表(避免污染台账语义)。
+     */
+    private Set<String> bridgeBarcodes(String keyword) {
+        Set<String> out = new LinkedHashSet<>();
+        if (keyword == null || keyword.trim().isEmpty()) return out;
+        String kwq = "%" + keyword.trim() + "%";
+        jdbcTemplate.query(
+                "SELECT DISTINCT material_barcode FROM qms.critical_material_binding"
+                        + " WHERE product_barcode ILIKE ? OR material_barcode ILIKE ?",
+                rs -> {
+                    String v = rs.getString(1);
+                    if (v != null && !v.isBlank()) out.add(v);
+                }, kwq, kwq);
+        return out;
+    }
+
     private String sourceWhere(String type, String keyword, String plantCode) {
         List<String> conds = new ArrayList<>();
         if (plantCode != null && !plantCode.isBlank()) {
@@ -349,8 +380,17 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 conds.add(" (material_code ILIKE " + kwq + " OR material_name ILIKE " + kwq
                         + " OR material_barcode ILIKE " + kwq + " OR material_batch_no ILIKE " + kwq + ")");
             } else {
-                conds.add(" (prod_batch_or_sn ILIKE " + kwq + " OR material_code ILIKE " + kwq
-                        + " OR product_name ILIKE " + kwq + ")");
+                // 源表自身三列
+                StringBuilder kwCond = new StringBuilder(" (prod_batch_or_sn ILIKE " + kwq
+                        + " OR material_code ILIKE " + kwq + " OR product_name ILIKE " + kwq);
+                // 桥接反查: 成品/被装件条码 → 关联到的半成品/成品 prod_batch_or_sn
+                Set<String> bridge = bridgeBarcodes(kw);
+                if (!bridge.isEmpty()) {
+                    String inList = bridge.stream().map(this::quote).collect(Collectors.joining(","));
+                    kwCond.append(" OR prod_batch_or_sn IN (").append(inList).append(")");
+                }
+                kwCond.append(")");
+                conds.add(kwCond.toString());
             }
         }
         if (conds.isEmpty()) {

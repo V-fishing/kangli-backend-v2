@@ -281,6 +281,13 @@ public class TlmToolingController {
         return R.ok(toolingService.scrapPage(keyword, scrapNo, status, page, size));
     }
 
+    // 详情页审批渠道: 按工装精确查 PENDING 报废单(不受组织过滤)
+    @GetMapping("/scrap/by-tool/{toolId}")
+    @PreAuthorize("hasAuthority('tlm.tooling.scrap')")
+    public R<TlmScrap> pendingScrapByTool(@PathVariable String toolId) {
+        return R.ok(toolingService.pendingScrapByTool(toolId));
+    }
+
     // ===== 维修工单查询 =====
     @GetMapping("/repair/page")
     @PreAuthorize("hasAuthority('tlm.repair.list')")

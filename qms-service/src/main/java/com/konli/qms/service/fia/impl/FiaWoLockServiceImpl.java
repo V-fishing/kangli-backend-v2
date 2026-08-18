@@ -221,12 +221,14 @@ public class FiaWoLockServiceImpl implements FiaWoLockService {
         return result;
     }
 
+    @Override
     public void release(String orgId, String woNo, String approverId, String releaseReason, String traceTag) {
         FiaWoLock exist = getByWoNo(orgId, woNo);
         String taskCode = exist != null ? exist.getTaskCode() : null;
         unlockByApproval(orgId, woNo, approverId, releaseReason, traceTag, taskCode);
     }
 
+    @Override
     @Transactional
     public void emergencyRelease(String orgId, String woNo, String approverId, String releaseReason, String traceTag) {
         FiaWoLock exist = getByWoNo(orgId, woNo);

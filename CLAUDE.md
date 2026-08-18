@@ -81,7 +81,7 @@ QMS-backend/
 - **`AuditMetaObjectHandler`**:自动填充 createdBy/updatedBy = CompanyContext.userId(非 "system")。`lockUntil` 字段用 `@TableField(updateStrategy = FieldStrategy.ALWAYS)` 确保 null 重置可写。
 - **`StringArrayTypeHandler`**:PG `VARCHAR[]` <-> `String[]`(用于 `fia_sign_config.sign_methods` 等)。实体需 `@TableName(autoResultMap = true)` + `@TableField(typeHandler = StringArrayTypeHandler.class)`。
 - **`stringtype=unspecified`**(application-dev.yml datasource URL):让 MyBatis-Plus 写 String 到 UUID 列无需显式 cast。
-- **`PermissionLoader`**:按 userId 查 sys_role_menu + sys_role_button 的 menu_code/btn_code。Redis 缓存 key `qms:perms:{userId}`,TTL 30min。`evictUser`(用户角色变更)、`evictAll`(角色权限变更)。
+- **`PermissionLoader`**:按 userId 查 sys_role_menu + sys_role_button 的 menu_code/btn_code。Redis 缓存 key `qms:perms:{userId}`,TTL 30min,**缓存 value 带全局版本号前缀**(`{version}:{codes}`)。读前先比对 `ops.sys_perm_version.version`(DB 单行表,由 sys_role_menu/sys_role_button/sys_user_role 三表触发器自动自增);任一权限表变更(无论页面/手工 SQL/迁移脚本)都 bump 版本号,使所有用户缓存强制失效——根治「绕过页面改库后 30min 不刷新」。`evictUser`(用户角色变更)、`evictAll`(角色权限变更)保留为手动清 Redis 兜底。
 
 ### 多分公司(简化模型)
 

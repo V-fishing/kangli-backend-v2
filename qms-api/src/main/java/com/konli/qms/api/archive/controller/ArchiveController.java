@@ -47,7 +47,7 @@ public class ArchiveController {
      */
     @GetMapping
     @PreAuthorize("hasAuthority('sqm.audit.list') or hasAuthority('fia.task.list') or hasAuthority('ncm.8d.list') or hasAuthority('patl.task.list')")
-    public R<List<Map<String, Object>>> list(
+    public R<com.konli.qms.common.api.PageResult<Map<String, Object>>> list(
             @RequestParam(required = false) String type,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,

@@ -25,9 +25,6 @@ public interface SqmAuditService {
     /** 独立事务创建审核计划(联动场景:失败不回滚调用方主事务)。 */
     SqmAuditPlan createPlanInNewTx(SqmAuditPlan plan);
 
-    /** 确认排期：将状态从「计划中」→「待执行」。 */
-    void confirmPlan(String id);
-
     /** 启动审核计划：将状态置为「进行中」。 */
     SqmAuditPlan startPlan(String id);
 

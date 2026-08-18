@@ -4,6 +4,7 @@ import com.konli.qms.common.dto.PendingApprovalDTO;
 import com.konli.qms.common.api.R;
 import com.konli.qms.service.approval.ApprovalCenterService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -27,6 +28,7 @@ public class ApprovalCenterController {
      *
      * @param limit 可选上限:仅返回前 limit 条(服务端截断),不传则返回全部。
      */
+    @PreAuthorize("hasAuthority('approval.center.pending')")
     @GetMapping("/pending")
     public R<List<PendingApprovalDTO>> pending(@RequestParam(required = false) Integer limit) {
         List<PendingApprovalDTO> list = approvalCenterService.myPending();

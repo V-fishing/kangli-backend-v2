@@ -34,7 +34,7 @@ public class TlmMetroRecordController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyAuthority('tlm.metro.calib','tlm.metro.list')")
+    @PreAuthorize("hasAnyAuthority('tlm.metro.calib','tlm.metro.list','tlm.metro.collect')")
     public R<TlmMetroRecord> create(@RequestBody TlmMetroRecord record) {
         return R.ok(metroRecordService.create(record));
     }

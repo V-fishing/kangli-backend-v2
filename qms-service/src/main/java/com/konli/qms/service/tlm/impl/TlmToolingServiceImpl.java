@@ -582,6 +582,22 @@ public class TlmToolingServiceImpl implements TlmToolingService {
         return new PageResult<TlmScrap>(p.getRecords(), p.getTotal(), page, size);
     }
 
+    /** 按工装精确查 PENDING 报废单:详情页审批入口用, 跨组织也可命中(用户已通过详情页进入该工装)。 */
+    @Override
+    public TlmScrap pendingScrapByTool(String toolId) {
+        if (toolId == null || toolId.isBlank()) return null;
+        LambdaQueryWrapper<TlmScrap> w = new LambdaQueryWrapper<>();
+        w.eq(TlmScrap::getToolId, toolId).eq(TlmScrap::getStatus, "PENDING");
+        w.orderByDesc(TlmScrap::getCreatedAt).last("LIMIT 1");
+        List<TlmScrap> list = scrapMapper.selectList(w);
+        TlmScrap s = list.isEmpty() ? null : list.get(0);
+        if (s != null && (s.getToolNo() == null || s.getToolName() == null) && s.getToolId() != null) {
+            TlmTooling t = toolingMapper.selectById(s.getToolId());
+            if (t != null) { s.setToolNo(t.getToolNo()); s.setToolName(t.getToolName()); }
+        }
+        return s;
+    }
+
     /**
      * 维修工单分页查询。支持按工装编号/名称关键词、状态筛选。
      * 仅返回当前组织数据（curOrg 为空时按 DataScope 全局可见）；回填工装编号/名称。

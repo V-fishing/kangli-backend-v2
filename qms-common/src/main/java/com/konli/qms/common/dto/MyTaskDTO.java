@@ -24,6 +24,8 @@ public class MyTaskDTO {
     private String assignee;
     /** 截止时间(若有) */
     private LocalDateTime dueAt;
+    /** 闭环完成时间(用于"本月已闭环"聚合): 有独立闭环字段的模块用真实闭环时间, 否则回退 updatedAt/createdAt */
+    private LocalDateTime closedAt;
     /** 前端跳转路由 */
     private String url;
 }

@@ -82,7 +82,6 @@ sqm.supplier.list          查看供应商               (检验员+)
 sqm.supplier.create         编辑供应商               (SQE+)
 sqm.audit.list             查看审核                (检验员+)
 sqm.audit.create            创建审核计划/记录       (SQE+)
-sqm.audit.plan.confirm      确认审核计划            (质量经理+)
 sqm.audit.plan.start       开始审核                (SQE+)
 sqm.audit.nc.close          关闭 NC                 (SQE+)
 sqm.audit.archive           生成归档报告            (SQE+)
@@ -461,7 +460,8 @@ system.delegation.manage     代班管理                (管理员)
 │   → 新 token + refreshToken (滚动刷新,旧refresh失效)  │
 │                                                    │
 │ 权限缓存: 每请求查 Redis (key: qms:perms:{userId})    │
-│ TTL 30min, 角色变更时 evictAll                        │
+│ TTL 30min, 缓存带版本号; 权限表触发器自动 bump        │
+│ ops.sys_perm_version, 任何改库路径都强制失效缓存       │
 └──────────────────────────────────────────────────────┘
 ```
 

@@ -74,13 +74,6 @@ public class SqmAuditController {
         return R.ok(sqmAuditService.createPlan(plan));
     }
 
-    @PutMapping("/plans/{id}/confirm")
-    @PreAuthorize("hasAuthority('sqm.audit.plan.confirm')")
-    public R<Void> confirmPlan(@PathVariable String id) {
-        sqmAuditService.confirmPlan(id);
-        return R.ok();
-    }
-
     @PostMapping("/plans/{id}/start")
     @PreAuthorize("hasAuthority('sqm.audit.plan.start')")
     public R<SqmAuditPlan> startPlan(@PathVariable String id) {
@@ -127,14 +120,14 @@ public class SqmAuditController {
 
     /** 列出全部审核类型的会签配置(供管理员配置页使用)。 */
     @GetMapping("/audit-approval-cfg")
-    @PreAuthorize("hasAuthority('sqm.audit.list')")
+    @PreAuthorize("hasAuthority('system.audit-config')")
     public R<List<SqmAuditApprovalCfg>> listApprovalCfg() {
         return R.ok(approvalCfgService.listAll());
     }
 
     /** 保存某审核类型的会签配置,并重置该类型计划的会签链(下次打开详情按新配置重建)。 */
     @PutMapping("/audit-approval-cfg")
-    @PreAuthorize("hasAuthority('sqm.audit.approve')")
+    @PreAuthorize("hasAuthority('system.audit-config')")
     public R<Void> saveApprovalCfg(@RequestBody AuditApprovalCfgRequest req) {
         List<AuditorDef> auditors = new ArrayList<>();
         if (req.getAuditors() != null) {

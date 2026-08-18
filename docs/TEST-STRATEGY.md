@@ -354,8 +354,8 @@ e2e:
 <!--AUTO:STRATEGY_DATE-->
 
 <!--AUTO:STRATEGY_RESULTS-->
-- 后端测试：38 项，通过 38，失败 0（BUILD SUCCESS）
-- 权限码一致性：前端 29 / 后端 126，破例 6 处
+- 后端测试：186 项，通过 186，失败 0（BUILD SUCCESS）
+- 权限码一致性：前端 31 / 后端 135，破例 1 处
 <!--AUTO:STRATEGY_RESULTS-->
 
 ### 10.1 测试依赖

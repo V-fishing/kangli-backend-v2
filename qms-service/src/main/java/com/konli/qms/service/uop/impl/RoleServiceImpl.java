@@ -127,7 +127,38 @@ public class RoleServiceImpl implements RoleService {
                 sysRoleMenuMapper.insert(rm);
             }
         }
+        // 反向三级约束: 勾选菜单即授予该菜单下挂的 *.list 查询权限码(若已注册)。
+        // 消除"给了二级菜单、却因未单独勾列表按钮码而进页 403"的割裂: 菜单可见性天然
+        // 包含"能查看该页列表"。增删改等非 .list 码仍须单独勾选(最小权限)。
+        grantMenuListCodes(roleId);
         permissionLoader.evictAll();
+    }
+
+    /**
+     * 基于角色当前已授权的菜单集合, 把每个菜单下挂的 *.list 查询权限码补进 sys_role_button
+     * (幂等: 已存在的行因唯一约束跳过)。与 assignButtons 的"DELETE ALL 再重插"兼容——
+     * 不论保存顺序如何, 最终角色都能拿到其菜单对应的列表查询码。
+     */
+    private void grantMenuListCodes(String roleId) {
+        List<SysRoleMenu> rms = sysRoleMenuMapper.selectList(
+            new LambdaQueryWrapper<SysRoleMenu>().eq(SysRoleMenu::getRoleId, roleId));
+        if (rms.isEmpty()) return;
+        Set<String> menuIds = rms.stream().map(SysRoleMenu::getMenuId).collect(Collectors.toSet());
+        List<SysButton> listBtns = sysButtonMapper.selectList(
+            new LambdaQueryWrapper<SysButton>()
+                .in(SysButton::getMenuId, menuIds)
+                .likeRight(SysButton::getBtnCode, ".list"));
+        if (listBtns.isEmpty()) return;
+        Set<String> existing = sysRoleButtonMapper.selectList(
+                new LambdaQueryWrapper<SysRoleButton>().eq(SysRoleButton::getRoleId, roleId))
+            .stream().map(SysRoleButton::getButtonId).collect(Collectors.toSet());
+        for (SysButton b : listBtns) {
+            if (existing.contains(b.getId())) continue;
+            SysRoleButton rb = new SysRoleButton();
+            rb.setRoleId(roleId);
+            rb.setButtonId(b.getId());
+            sysRoleButtonMapper.insert(rb);
+        }
     }
 
     @Override
@@ -162,6 +193,9 @@ public class RoleServiceImpl implements RoleService {
                 }
             }
         }
+        // 反向三级约束: 不论保存顺序(menus 先/buttons 先), 基于最新菜单集合补 .list 码,
+        // 抵消本方法开头 DELETE ALL 对 assignMenus 已补 .list 码的影响。
+        grantMenuListCodes(roleId);
         permissionLoader.evictAll();
     }
 

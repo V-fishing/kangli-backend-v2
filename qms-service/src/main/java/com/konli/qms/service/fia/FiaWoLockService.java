@@ -31,6 +31,12 @@ public interface FiaWoLockService {
     /** 质量主管紧急放行 -> 审批解锁并留痕(追溯标签)。 */
     void unlockByApproval(String orgId, String woNo, String approverId, String releaseReason, String traceTag, String taskCode);
 
+    /** 审批放行(质量主管放行):解锁并留痕(追溯标签),复用 unlockByApproval 语义。 */
+    void release(String orgId, String woNo, String approverId, String releaseReason, String traceTag);
+
+    /** 紧急放行:解锁类型置"紧急放行"并留痕。 */
+    void emergencyRelease(String orgId, String woNo, String approverId, String releaseReason, String traceTag);
+
     /** 查询工单当前锁定记录(无则返回 null)。 */
     FiaWoLock getByWoNo(String orgId, String woNo);
 

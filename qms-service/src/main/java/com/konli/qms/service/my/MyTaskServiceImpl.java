@@ -94,6 +94,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(t.getStatus());
             d.setAssignee(null);
             d.setDueAt(t.getSlaDueAt());
+            // 闭环时间: 优先批准时间, 兜底创建时间(首件无独立闭环字段)
+            d.setClosedAt(t.getApprovedAt() != null ? t.getApprovedAt() : t.getCreatedAt());
             d.setUrl("/fia/tasks");
             res.add(d);
         }
@@ -119,6 +121,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(r.getStatus());
             d.setAssignee(r.getOwnerUserName());
             d.setDueAt(null);
+            // 闭环时间: 8D 用独立 closeDate, 无则回退 updatedAt
+            d.setClosedAt(r.getCloseDate() != null ? r.getCloseDate().atStartOfDay() : r.getUpdatedAt());
             d.setUrl("/ncm/8d-reports/" + r.getId());
             res.add(d);
         }
@@ -144,6 +148,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(t.getStatus());
             d.setAssignee(null);
             d.setDueAt(t.getPlanTime());
+            // 闭环时间: 巡检用完成时间 finishTime, 无则回退 updatedAt
+            d.setClosedAt(t.getFinishTime() != null ? t.getFinishTime() : t.getUpdatedAt());
             d.setUrl("/patrol/tasks");
             res.add(d);
         }
@@ -169,6 +175,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(c.getStatus());
             d.setAssignee(c.getOwner());
             d.setDueAt(c.getDueDate() != null ? c.getDueDate().atStartOfDay() : null);
+            // 闭环时间: CAPA 无独立闭环字段, 回退 updatedAt
+            d.setClosedAt(c.getUpdatedAt());
             d.setUrl("/ncm/capas/" + c.getId());
             res.add(d);
         }
@@ -194,6 +202,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(c.getStatus());
             d.setAssignee(c.getOwnerName());
             d.setDueAt(c.getDueDate() != null ? c.getDueDate().atStartOfDay() : null);
+            // 闭环时间: 纠正措施无独立闭环字段, 回退 updatedAt
+            d.setClosedAt(c.getUpdatedAt());
             d.setUrl("/ncm/corrective-actions/" + c.getId());
             res.add(d);
         }
@@ -219,6 +229,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(a.getStatus());
             d.setAssignee(null);
             d.setDueAt(null);
+            // 闭环时间: 来料异常用独立 closeDate, 无则回退 updatedAt
+            d.setClosedAt(a.getCloseDate() != null ? a.getCloseDate().atStartOfDay() : a.getUpdatedAt());
             d.setUrl("/sqm/abnormals");
             res.add(d);
         }
@@ -244,6 +256,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(p.getStatus());
             d.setAssignee(p.getAuditLead());
             d.setDueAt(p.getPlanDate() != null ? p.getPlanDate().atStartOfDay() : null);
+            // 闭环时间: 审核计划无独立闭环字段, 回退 updatedAt
+            d.setClosedAt(p.getUpdatedAt());
             d.setUrl("/sqm/audits/plan/" + p.getId());
             res.add(d);
         }
@@ -269,6 +283,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(r.getStatus());
             d.setAssignee(r.getOwner());
             d.setDueAt(r.getTargetDate() != null ? r.getTargetDate().atStartOfDay() : null);
+            // 闭环时间: FMEA 用独立 closeDate, 无则回退 updatedAt
+            d.setClosedAt(r.getCloseDate() != null ? r.getCloseDate().atStartOfDay() : r.getUpdatedAt());
             d.setUrl("/sqm/fmea");
             res.add(d);
         }
@@ -294,6 +310,8 @@ public class MyTaskServiceImpl implements MyTaskService {
             d.setStatus(o.getStatus());
             d.setAssignee(o.getOwnerName());
             d.setDueAt(o.getExpectTime());
+            // 闭环时间: 售后工单无独立闭环字段, 回退 updatedAt
+            d.setClosedAt(o.getUpdatedAt());
             d.setUrl("/cs/work-orders");
             res.add(d);
         }

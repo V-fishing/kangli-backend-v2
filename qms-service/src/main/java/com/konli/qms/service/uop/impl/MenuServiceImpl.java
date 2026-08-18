@@ -70,55 +70,31 @@ public class MenuServiceImpl implements MenuService {
     }
 
     /**
-     * 计算需保留的菜单 id:自身码在 allowed,或含"码在 allowed 的后代",或含"码在 allowed 的祖先"。
-     * 这样按根模块码(fia/spc/...)授权即显示整个模块;按子页签码授权即只显示该页签(模块仍在)。
+     * 计算需保留的菜单 id。保留规则(精确,杜绝"未授权兄弟菜单搭便车显示"):
+     *  - selected:自身 menu_code 在 allowed(被直接授权)。
+     *  - 向上:selected 节点的所有祖先链(保证父模块壳可见)。
+     * 子菜单是否可见完全取决于其自身 menu_code 是否被授权;绝不因父模块被授权而连带展出
+     * 全部未授权子菜单(此前"向下展开全部后代"的写法会导致:角色仅勾二级子菜单、约束自动补父
+     * 模块码后,父模块下所有兄弟子菜单都被放出,点击即 403)。
+     * 超管走 fullTree 不受此约束;模块级整模块可见的需求由显式授权各子菜单码满足(最小权限)。
      */
     private Set<String> computeKept(List<SysMenu> menus, Set<String> allowed) {
         Map<String, SysMenu> byId = menus.stream().collect(Collectors.toMap(SysMenu::getId, m -> m));
-        Map<String, List<SysMenu>> childrenMap = new HashMap<>();
-        for (SysMenu m : menus) {
-            if (m.getParentId() != null) {
-                childrenMap.computeIfAbsent(m.getParentId(), k -> new ArrayList<>()).add(m);
-            }
-        }
         Set<String> selected = menus.stream()
                 .filter(m -> allowed.contains(m.getMenuCode()))
                 .map(SysMenu::getId)
                 .collect(Collectors.toSet());
 
-        Map<String, Boolean> hasSelDesc = new HashMap<>();
-        Set<String> kept = new HashSet<>();
-        for (SysMenu m : menus) {
-            if (hasSelectedDescendant(m, selected, childrenMap, hasSelDesc)) {
-                kept.add(m.getId());
-            }
-        }
-        // 向上找祖先:若祖先被选中或已被保留,则本节点保留
-        for (SysMenu m : menus) {
-            if (kept.contains(m.getId())) continue;
-            String pid = m.getParentId();
+        Set<String> kept = new HashSet<>(selected);
+        // 向上:选中节点的全部祖先(保证父模块壳可见)
+        for (String sid : selected) {
+            String pid = byId.get(sid) != null ? byId.get(sid).getParentId() : null;
             while (pid != null) {
-                if (selected.contains(pid) || kept.contains(pid)) {
-                    kept.add(m.getId());
-                    break;
-                }
-                SysMenu p = byId.get(pid);
-                pid = (p != null) ? p.getParentId() : null;
+                if (!kept.add(pid)) break; // 已处理过,避免重复遍历
+                pid = byId.get(pid) != null ? byId.get(pid).getParentId() : null;
             }
         }
         return kept;
-    }
-
-    private boolean hasSelectedDescendant(SysMenu node, Set<String> selected,
-                                          Map<String, List<SysMenu>> childrenMap,
-                                          Map<String, Boolean> cache) {
-        if (cache.containsKey(node.getId())) return cache.get(node.getId());
-        boolean sel = selected.contains(node.getId());
-        for (SysMenu k : childrenMap.getOrDefault(node.getId(), List.of())) {
-            if (hasSelectedDescendant(k, selected, childrenMap, cache)) sel = true;
-        }
-        cache.put(node.getId(), sel);
-        return sel;
     }
 
     private List<MenuNode> buildTree(List<SysMenu> menus) {

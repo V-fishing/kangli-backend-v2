@@ -175,20 +175,6 @@ public class SqmAuditServiceImpl implements SqmAuditService {
         return createPlan(plan);
     }
 
-    /** @deprecated 新计划创建即"待执行",不再需要确认步骤;旧数据兼容仍可调用 */
-    @Override
-    @Transactional
-    public void confirmPlan(String id) {
-        SqmAuditPlan p = sqmAuditPlanMapper.selectById(id);
-        if (p == null) throw new BusinessException(404, "审核计划不存在");
-        if ("待执行".equals(p.getStatus()) || "进行中".equals(p.getStatus()) || "已完成".equals(p.getStatus()))
-            throw new BusinessException(400, "该计划无需确认,已处于" + p.getStatus() + "状态");
-        if (!"计划中".equals(p.getStatus()))
-            throw new BusinessException(400, "仅计划中状态可确认排期");
-        p.setStatus("待执行");
-        sqmAuditPlanMapper.updateById(p);
-    }
-
     @Override
     @Transactional
     public SqmAuditPlan startPlan(String id) {

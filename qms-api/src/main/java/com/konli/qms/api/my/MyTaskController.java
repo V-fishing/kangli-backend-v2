@@ -5,6 +5,7 @@ import com.konli.qms.common.dto.MyTaskDTO;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.service.my.MyTaskService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -23,6 +24,7 @@ public class MyTaskController {
 
     private final MyTaskService myTaskService;
 
+    @PreAuthorize("hasAuthority('my.task.list')")
     @GetMapping("/tasks")
     public R<List<MyTaskDTO>> list(
             @RequestParam(required = false, defaultValue = "0") Integer limit,

@@ -1,5 +1,7 @@
 package com.konli.qms.service.archive;
 
+import com.konli.qms.common.api.PageResult;
+
 import java.util.List;
 import java.util.Map;
 
@@ -23,9 +25,9 @@ public interface ArchiveService {
      * @param keyword 模糊匹配 reportNo/woNo/archiveNo;null/空 = 不限
      * @param page    页码(从 1 开始),null = 1
      * @param size    每页条数,null = 20
-     * @return 统一格式:[{archiveType, archiveNo, refId, refNo, archiveDate, retentionUntil, reportHash}]
+     * @return 分页结果:{records:[{archiveType, archiveNo, refId, refNo, archiveDate, retentionUntil, reportHash}], total, page, size}
      */
-    List<Map<String, Object>> list(String type, String keyword, Integer page, Integer size);
+    PageResult<Map<String, Object>> list(String type, String keyword, Integer page, Integer size);
 
     /**
      * 留存到期提醒:查所有归档表中 retentionUntil <= now()+days 的记录。

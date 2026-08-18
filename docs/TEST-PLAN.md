@@ -45,14 +45,14 @@
 | M3 | 供应商管理 sqm | `api/sqm` `service/sqm` | SupplierController、Abnormal/Impl、Audit/Impl、Change/Impl、Fmea/Impl、PerfAnalysis/Impl、Trace/Impl | 来料异常→8D/CAPA 双路径、审核会签链、物料变更 ECN 审批、绩效分级联动、全链路追溯树 | P0 | UT+IT |
 | M4 | 统计过程控制 spc | `api/spc` `service/spc` | SpcAlarm/Impl、SpcSubgroup/Impl、SpcRule、SpcParam | 判异规则引擎、计数型/计量型采集、超界子组触发告警、告警→8D | P0 | UT+IT |
 | M5 | 首件检验 fia | `api/fia` `service/fia` | FiaTask/Impl、FiaIncomingCheck/Impl、FiaSignConfig | 三级电子签名（带密码）、不合格处置、批量来料建单、工装首件 | P1 | UT+IT |
-| M6 | 售后 cs | `api/cs` `service/cs` | CsWorkOrder/Impl、CsFeedback/Impl | 工单状态机（PENDING→ASSIGNED→DONE→CLOSED）、派单/完成/关闭、客户反馈→NCM 触发 | P1 | UT |
-| M7 | 巡检 patrol | `api/patrol` `service/patrol` | PatrolRoute/Task/Abnormal | 巡检路线、任务闭环、异常上报 | P2 | UT |
-| M8 | 体系管理 qmsmgmt | `api` `service` | QmsGoal/Audit/Adverse/Board | 质量目标、内审计划、不良事件、合规看板 | P2 | UT |
-| M9 | 统一归档 archive | `api/archive` `service` | Archive | 报告 PDF 归档、检索 | P2 | UT |
-| M10 | 通知/系统 notify/system | `api` `service` | NotifyConfig/Impl、SysConfig | 通知渠道配置、ops.notify_config 落库、系统参数 | P1 | UT+CT |
-| M11 | 通用审批中心 approval | `api/approval` `service` | ApprovalCenter/Impl | 审批聚合分支、从审核配置读审批人、指派推送 | P1 | UT+IT |
-| M12 | 我的任务/改派 my/assign | `api/my` `service/assign` | MyTask/AssignReassign | 任务聚合、改派流转 | P2 | UT |
-| M13 | KPI kpi | `api/kpi` | KpiCompare | 指标对比计算 | P2 | UT |
+| M6 | 售后 cs | `api/cs` `service/cs` | CsWorkOrder/Impl、CsFeedback/Impl | 工单状态机（PENDING→ASSIGNED→DONE→CLOSED）、派单/完成/关闭、客户反馈→NCM 触发 | P1 | UT（已落地 20：CsWorkOrder Service 10 + Controller 10；cs.workorder.* 与 cs.satisfaction.list 权限码合规） |
+| M7 | 巡检 patrol | `api/patrol` `service/patrol` | PatlTask/Impl、PatlRoute/Impl、PatlAbnormal/Impl | 巡检任务状态机（待巡检→已完成）、点位提交、异常计数、异常上报闭环、归档触发 | P2 | UT（已落地 14：Service 9 + Controller 5） |
+| M8 | 体系管理 qmsmgmt | `api/qmsmgmt` `service/qmsmgmt` | QmsQualityGoal/Impl、QmsInternalAudit/Impl、QmsAdverseEvent/Impl、QmsComplianceBoard/Impl | 质量目标默认值/达成率统计、内审计划、不良事件、合规看板 | P2 | UT（已落地 39：QualityGoal Service 7 + Controller 6 + InternalAudit Service 7 + Controller 5 + AdverseEvent Service 5 + Controller 4 + ComplianceBoard Service 3 + Controller 2；qms-mgmt.* 与 qms-mgmt.dashboard.list 权限码合规） |
+| M9 | 统一归档 archive | `api/archive` `service/archive` | Archive/Impl | 跨表 UNION 查询、留存到期提醒、档案详情/PDF、历史补归档 | P2 | UT（已落地 15：Service 9 + Controller 6） |
+| M10 | 通知/系统 notify/system | `api` `service` | NotifyConfig/Impl、SysConfig | 通知渠道配置、ops.notify_config 落库、系统参数 | P1 | UT+CT（已落地 17：NotifyConfig Service 11 + Controller 6；其余待补） |
+| M11 | 通用审批中心 approval | `api/approval` `service` | ApprovalCenter/Impl | 审批聚合分支、从审核配置读审批人、指派推送 | P1 | UT（已落地 11：Service 8 + Controller 3；**权限缺口已闭环：pending 端点补 `@PreAuthorize('approval.center.pending')` + V237 种子授权**，铁律第 9 条 C1 合规） |
+| M12 | 我的任务/改派 my/assign | `api/my` `service/assign` | MyTask/AssignReassign | 任务聚合、改派流转 | P2 | UT（已落地 17：MyTask Service 8 + MyTask Controller 3 + AssignReassign Service 6；**权限缺口已闭环：my/tasks 端点补 `@PreAuthorize('my.task.list')` + V237 种子授权**，铁律第 9 条 C1 合规） |
+| M13 | KPI kpi | `api/kpi` | KpiCompare | 指标对比计算 | P2 | UT（已落地 5：KpiCompare Service 3 + Controller 2；compare 端点 `@PreAuthorize` = system.org.switch，铁律第 9 条合规） |
 | M14 | 工装 tlm | `api/tlm` `service/tlm` | Tooling/Metro/Repair/Scrap/Maint | **二期暂缓**（无种子、缺 tlm.* 权限码）；仅做 UI 存在性契约检查 | 暂缓 | CT（破例已知） |
 | M15 | 公共组件 common | `common` | DataScopeInterceptor、R、BusinessException、JwtUtil、ObjectStorageService(Minio) | org_id 别名解析、统一响应、异常码、JWT 解析、MinIO 上传 | P0 | UT（纯单元） |
 
@@ -134,7 +134,7 @@ scripts/
 ## 6. 进度看板（自动刷新区）
 
 > 最近运行：<!--AUTO:PLAN_PROGRESS-->
-> T1 已完成。后端 UT：38 用例（M15 common 14 / M1 uop 6 / M4 spc 4 / M3 sqm 5 / M2 ncm 9，含原 ncm 6 基线）。T2 已完成：IT 6 用例（AuthLogin 4 + Ncm8dCreate 2，直连本机 dev 容器 + 独立库 qms_test）。T3 已完成：CT 权限契约脚本落地并发现 fia/wo-lock 与 emergency-release 真实断裂。T4 进行中：前端 Vitest 15 用例已落地全绿，Playwright 5 旅程待补。
+> T1 已完成。后端 UT：38 用例（M15 common 14 / M1 uop 6 / M4 spc 4 / M3 sqm 5 / M2 ncm 9，含原 ncm 6 基线）。T2 已完成：IT 6 用例（AuthLogin 4 + Ncm8dCreate 2，直连本机 dev 容器 + 独立库 qms_test）。T3 已完成：CT 权限契约脚本落地并发现 fia/wo-lock 与 emergency-release 真实断裂。T4 已完成：前端 Vitest 15 用例全绿（Playwright 5 旅程环境就绪后补）。T5 已完成：CI 四 stage 门禁。扩面进行中：M7 patrol 14 + M8 qmsmgmt 13 + M9 archive 15 + M10 notify 17 + M11 approval 11 + M12 my/assign 17 + M13 kpi 5 + M6 cs 20 已落地，后端 UT 累计 176 全绿（common 14 / service 101 / api 61）。
 <!--AUTO:PLAN_PROGRESS-->
 
 | 期次 | 范围 | 用例数 | 状态 |
@@ -144,3 +144,12 @@ scripts/
 | T3 | CT 权限契约 + 断裂发现 | 2 脚本 | ✅ 已完成 |
 | T4 | ET Vitest 15 + Playwright 5 | 15（Vitest 已落地）/ 5 旅程待补（环境就绪后补） | ✅ 组件测试已完成 |
 | T5 | CI 串联 | 4 stages | ✅ 已完成 |
+| 扩面 | M7 patrol 模块 UT | 14（已落地） | ✅ 已完成 |
+| 扩面 | M8 qmsmgmt 模块 UT（全量：QualityGoal + InternalAudit + AdverseEvent + ComplianceBoard） | 39（已落地） | ✅ 已完成 |
+| 扩面 | M9 archive 模块 UT | 15（已落地） | ✅ 已完成 |
+| 扩面 | M10 notify/system 模块 UT | 17（已落地：NotifyConfig Service 11 + Controller 6） | ✅ 已完成 |
+| 扩面 | M11 approval 模块 UT | 11（已落地：Service 8 + Controller 3；pending 端点权限缺口已闭环 @PreAuthorize + V237 种子） | ✅ 已完成 |
+| 扩面 | M12 my/assign 模块 UT | 17（已落地：MyTask Service 8 + MyTask Controller 3 + AssignReassign Service 6；my/tasks 端点权限缺口已闭环 @PreAuthorize + V237 种子） | ✅ 已完成 |
+| 扩面 | M13 kpi 模块 UT | 5（已落地：KpiCompare Service 3 + Controller 2；compare 权限码 system.org.switch 合规） | ✅ 已完成 |
+| 扩面 | M6 cs 模块 UT | 20（已落地：CsWorkOrder Service 10 + Controller 10；cs.workorder.* 与 cs.satisfaction.list 权限码合规） | ✅ 已完成 |
+| 扩面 | 其余模块（audit/adverse/qmsmgmt 其余） | 待做 | ⬜ 待做 |

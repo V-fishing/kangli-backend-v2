@@ -1,5 +1,6 @@
 package com.konli.qms.service.archive.impl;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.service.archive.ArchiveService;
 import lombok.RequiredArgsConstructor;
@@ -31,7 +32,7 @@ public class ArchiveServiceImpl implements ArchiveService {
     // ==================== 统一归档查询 ====================
 
     @Override
-    public List<Map<String, Object>> list(String type, String keyword, Integer page, Integer size) {
+    public PageResult<Map<String, Object>> list(String type, String keyword, Integer page, Integer size) {
         String t = type == null ? "" : type.trim().toLowerCase();
         int pageNo = (page == null || page < 1) ? 1 : page;
         int pageSize = (size == null || size < 1) ? 20 : size;
@@ -159,16 +160,22 @@ public class ArchiveServiceImpl implements ArchiveService {
         }
 
         if (unionParts.isEmpty()) {
-            return new ArrayList<>();
+            return new PageResult<>(new ArrayList<>(), 0L, pageNo, pageSize);
         }
 
         String unionSql = String.join(" UNION ALL ", unionParts);
+
+        // 总数(在外层 UNION 上 COUNT)
+        Long total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM (" + unionSql + ") u", args.toArray(), Long.class);
+
         // 排序 + 分页(外层包装)
         String pagedSql = "SELECT * FROM (" + unionSql + ") u ORDER BY archive_date DESC NULLS LAST LIMIT ? OFFSET ?";
-        args.add(pageSize);
-        args.add(offset);
+        List<Object> pageArgs = new ArrayList<>(args);
+        pageArgs.add(pageSize);
+        pageArgs.add(offset);
 
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(pagedSql, args.toArray());
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(pagedSql, pageArgs.toArray());
         List<Map<String, Object>> result = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -181,7 +188,7 @@ public class ArchiveServiceImpl implements ArchiveService {
             m.put("reportHash", row.get("report_hash"));
             result.add(m);
         }
-        return result;
+        return new PageResult<>(result, total == null ? 0L : total, pageNo, pageSize);
     }
 
     // ==================== 留存到期提醒 ====================

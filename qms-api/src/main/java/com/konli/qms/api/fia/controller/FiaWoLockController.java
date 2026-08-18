@@ -8,6 +8,7 @@ import com.konli.qms.service.fia.FiaWoLockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -47,5 +48,29 @@ public class FiaWoLockController {
         CompanyContext.CurrentUser u = CompanyContext.get();
         String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
         return R.ok(fiaWoLockService.listAll(orgId, status, woNo));
+    }
+
+    @PostMapping("/release")
+    @PreAuthorize("hasAuthority('fia.wolock.release')")
+    public R<Void> release(@RequestParam String woNo,
+                           @RequestParam(required = false) String releaseReason,
+                           @RequestParam(required = false) String traceTag) {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        String approverId = u != null ? u.userId() : null;
+        fiaWoLockService.release(orgId, woNo, approverId, releaseReason, traceTag);
+        return R.ok();
+    }
+
+    @PostMapping("/emergency-release")
+    @PreAuthorize("hasAuthority('fia.wolock.emergency')")
+    public R<Void> emergencyRelease(@RequestParam String woNo,
+                                    @RequestParam(required = false) String releaseReason,
+                                    @RequestParam(required = false) String traceTag) {
+        CompanyContext.CurrentUser u = CompanyContext.get();
+        String orgId = u != null && !"all".equals(u.dataScope()) ? u.orgId() : null;
+        String approverId = u != null ? u.userId() : null;
+        fiaWoLockService.emergencyRelease(orgId, woNo, approverId, releaseReason, traceTag);
+        return R.ok();
     }
 }

@@ -61,6 +61,9 @@ public interface TlmToolingService {
     /** 报废单分页查询(支持 关键词/报废单号/状态 过滤)。 */
     PageResult<TlmScrap> scrapPage(String keyword, String scrapNo, String status, int page, int size);
 
+    /** 按工装精确查其 PENDING 报废单(详情页审批渠道用, 不受组织过滤影响)。 */
+    TlmScrap pendingScrapByTool(String toolId);
+
     /** 维修完成: 状态恢复 IN_USE + 触发 FIA 首件检验任务。 */
     void onRepairCompleted(String id);
 

@@ -1578,7 +1578,6 @@ INSERT INTO ops.sys_button VALUES ('019fd5f3-ff71-7de0-a2f1-a5cd0ac1d61d', '019f
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff75-7441-bd4b-a1128a370805', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.fmea.scan-overdue', 'FMEA超期扫描');
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff7a-7416-9c8d-01850f1f03be', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.abnormal.close', '异常关闭');
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff7e-77ae-bc47-4cda913dd571', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.abnormal.escalation-check', '异常升级检查');
-INSERT INTO ops.sys_button VALUES ('019fd5f3-ff84-709a-81fa-931dc0807a66', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.audit.plan.confirm', '审核计划确认');
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff88-7269-a594-4517eed05982', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.audit.plan.start', '审核开始');
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff8e-7914-829b-0e128d00244e', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.audit.nc.close', 'NC关闭');
 INSERT INTO ops.sys_button VALUES ('019fd5f3-ff93-764a-98fb-c83aa53a3213', '019fd5dc-51d8-7a2f-9b21-7369bf2077ae', 'sqm.audit.archive', '审核归档');
