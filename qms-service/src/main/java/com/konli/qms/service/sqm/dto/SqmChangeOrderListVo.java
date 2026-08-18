@@ -20,4 +20,11 @@ public class SqmChangeOrderListVo {
     private String verifyReport;    // 验证报告附件路径
     private String riskFile;        // 风险评估附件路径
     private String riskPreMark;     // 风险等级
+    private String oldPartNo;        // 旧料号
+    private String newPartNo;        // 新料号
+    private String effDate;          // 计划生效日期
+    private String switchDate;       // 新旧切换日期
+    private String impactDesc;       // 影响范围说明
+    private Boolean customerNotify;  // 是否需通知客户
+    private Boolean customerApproved;// 客户是否已批准
 }

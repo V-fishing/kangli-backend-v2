@@ -46,6 +46,27 @@ public class SqmChangeOrder extends BaseEntity {
     @TableField("risk_pre_mark")
     private String riskPreMark;           // 高/中/低
 
+    @TableField("eff_date")
+    private LocalDate effDate;            // 计划生效日期
+
+    @TableField("old_part_no")
+    private String oldPartNo;             // 旧料号(变更前)
+
+    @TableField("new_part_no")
+    private String newPartNo;             // 新料号(变更后)
+
+    @TableField("customer_notify")
+    private Boolean customerNotify;       // 是否需通知客户(PCN)
+
+    @TableField("customer_approved")
+    private Boolean customerApproved;     // 客户是否已批准
+
+    @TableField("impact_desc")
+    private String impactDesc;            // 影响范围说明(客户/产线/在制品/库存)
+
+    @TableField("switch_date")
+    private LocalDate switchDate;         // 新旧切换日期(断点)
+
     @TableField("verify_report")
     private String verifyReport;          // 验证报告附件(评估资料之一)
 

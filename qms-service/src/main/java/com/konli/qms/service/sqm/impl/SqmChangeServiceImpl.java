@@ -133,6 +133,13 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         v.setVerifyReport(o.getVerifyReport());
         v.setRiskFile(o.getRiskFile());
         v.setRiskPreMark(o.getRiskPreMark());
+        v.setOldPartNo(o.getOldPartNo());
+        v.setNewPartNo(o.getNewPartNo());
+        v.setEffDate(o.getEffDate() == null ? null : o.getEffDate().toString());
+        v.setSwitchDate(o.getSwitchDate() == null ? null : o.getSwitchDate().toString());
+        v.setImpactDesc(o.getImpactDesc());
+        v.setCustomerNotify(o.getCustomerNotify());
+        v.setCustomerApproved(o.getCustomerApproved());
         return v;
     }
 
