@@ -46,4 +46,10 @@ public class CreateFiaTaskRequest {
 
     /** 供应商送检信息(供应商/送货单/联系人等),统一归入任务备注,前端拼接后传入 */
     private String remark;
+
+    /** 关联物料变更单 ID(可空)。非空时后端以变更单的 supplier_id/part_no 强制覆盖并置 source=SUPPLIER */
+    private String changeId;
+
+    /** 来源: FACTORY(产线首件)/SUPPLIER(供应商来料首件)/TOOLING(工装首件)，可空由后端按规则推导 */
+    private String source;
 }

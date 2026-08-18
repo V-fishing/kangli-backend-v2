@@ -22,6 +22,8 @@ import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
 import com.konli.qms.domain.tlm.entity.TlmTooling;
 import com.konli.qms.domain.tlm.mapper.TlmToolingMapper;
+import com.konli.qms.domain.sqm.entity.SqmChangeOrder;
+import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
 import com.konli.qms.service.fia.AqlSamplingUtil;
 import com.konli.qms.service.fia.FiaDashboardService;
 import com.konli.qms.service.fia.FiaTaskService;
@@ -56,6 +58,7 @@ public class FiaTaskController {
     private final FiaInspPlanMapper fiaInspPlanMapper;
     private final SqmIncomingLotMapper sqmIncomingLotMapper;
     private final TlmToolingMapper tlmToolingMapper;
+    private final SqmChangeOrderMapper sqmChangeOrderMapper;
 
     /** FIA 看板:今日任务/完成数、合格率、超时数、状态分布、近7天趋势。 */
     @GetMapping("/dashboard")
@@ -98,6 +101,16 @@ public class FiaTaskController {
         result.put("procName", latest.getProcName());
         result.put("message", released ? "首件已合格放行,可启动量产监控" : "首件未放行,量产监控未启动");
         return R.ok(result);
+    }
+
+    /**
+     * 按物料变更单 ID 查询关联的首件任务(变更驱动的供应商来料首件)。
+     * 用于变更单详情弹窗「关联首件任务」区块展示与跳转。
+     */
+    @GetMapping("/by-change")
+    @PreAuthorize("hasAuthority('fia.task.list')")
+    public R<FiaTask> byChange(@RequestParam String changeId) {
+        return R.ok(fiaTaskService.findByChangeId(changeId));
     }
 
     @GetMapping
@@ -194,6 +207,25 @@ public class FiaTaskController {
         task.setIsUrgent(req.getIsUrgent());
         task.setRemark(req.getRemark());
         task.setCategory(req.getCategory());
+        task.setSource(req.getSource());
+
+        // 变更驱动的首件:以服务端变更单值强制绑定 supplier/partNo 并置 source=SUPPLIER(不信任前端覆盖)
+        String changeId = req.getChangeId();
+        if (changeId != null && !changeId.isBlank()) {
+            SqmChangeOrder change = sqmChangeOrderMapper.selectById(changeId);
+            if (change == null) {
+                throw new com.konli.qms.common.exception.BusinessException(400, "关联的物料变更单不存在: " + changeId);
+            }
+            task.setChangeId(changeId);
+            task.setSource("SUPPLIER");
+            if (change.getSupplierId() != null && !change.getSupplierId().isBlank()) {
+                task.setSupplierId(change.getSupplierId());
+            }
+            if (change.getPartNo() != null && !change.getPartNo().isBlank()) {
+                task.setPartNo(change.getPartNo());
+            }
+        }
+
         return R.ok(fiaTaskService.create(task));
     }
 

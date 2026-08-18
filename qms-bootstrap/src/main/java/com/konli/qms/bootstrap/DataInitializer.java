@@ -141,6 +141,7 @@ public class DataInitializer implements CommandLineRunner {
         assignBtn("sqm", "sqm.change.close", "变更关闭");
         assignBtn("sqm", "sqm.change.rollback", "变更回退");
         assignBtn("sqm", "sqm.change.verify-sign", "变更签名验证");
+        assignBtn("sqm", "sqm.change.createFia", "变更创建首件");
         assignBtn("sqm", "sqm.fmea.close", "FMEA闭环");
         assignBtn("sqm", "sqm.fmea.reopen", "FMEA重开");
         assignBtn("sqm", "sqm.fmea.scan-overdue", "FMEA超期扫描");
@@ -291,6 +292,7 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.audit.approve", "审核会签"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.change.list", "变更查询"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.change.create", "变更管理"));
+        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.change.createFia", "变更创建首件"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.trace.list", "追溯查询"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.trace.create", "追溯录入"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.abnormal.list", "异常查询"));
@@ -313,6 +315,7 @@ public class DataInitializer implements CommandLineRunner {
             assignRoleButtonByCode(rc, ensureButton(sqmMenu, "sqm.change.approve", "变更审批"));
             assignRoleButtonByCode(rc, ensureButton(sqmMenu, "sqm.change.close", "变更关闭"));
             assignRoleButtonByCode(rc, ensureButton(sqmMenu, "sqm.change.rollback", "变更回退"));
+            assignRoleButtonByCode(rc, ensureButton(sqmMenu, "sqm.change.createFia", "变更创建首件"));
         }
     }
 

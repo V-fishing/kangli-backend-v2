@@ -132,4 +132,10 @@ public interface FiaTaskService {
 
     /** 该工装是否存在待处理的工装首件任务(用于台账「待首件」强提醒)。 */
     boolean hasPendingToolingFirst(String toolId);
+
+    /**
+     * 按变更单 ID 查询关联的首件任务(变更驱动的供应商来料首件)。
+     * 返回最新一条(按创建时间倒序);无则返回 null。close 门禁据此判定首件是否合格放行。
+     */
+    FiaTask findByChangeId(String changeId);
 }

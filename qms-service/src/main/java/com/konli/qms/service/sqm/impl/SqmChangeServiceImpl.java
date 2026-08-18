@@ -18,11 +18,15 @@ import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import com.konli.qms.service.sqm.SqmAuditService;
 import com.konli.qms.service.sqm.SqmChangeStrictInspectService;
 import com.konli.qms.domain.sqm.entity.SqmChangeStrictInspect;
+import com.konli.qms.domain.fia.entity.FiaTask;
 import com.konli.qms.service.fia.impl.FiaStdVersionService;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.service.notify.NotificationService;
 import com.konli.qms.service.sqm.SqmChangeService;
+import com.konli.qms.service.fia.FiaTaskService;
+import com.konli.qms.domain.spc.entity.SpcSubgroup;
+import com.konli.qms.domain.spc.mapper.SpcSubgroupMapper;
 import com.konli.qms.service.sqm.dto.SqmChangeOrderListVo;
 import com.konli.qms.service.sqm.dto.SqmChangeOrderVo;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +60,8 @@ public class SqmChangeServiceImpl implements SqmChangeService {
     private final FiaStdVersionService fiaStdVersionService;
     private final SqmSupplierMapper sqmSupplierMapper;
     private final NotificationService notificationService;
+    private final FiaTaskService fiaTaskService;
+    private final SpcSubgroupMapper spcSubgroupMapper;
 
     /**
      * 解析当前用户所属组织;当为空/超管哨兵(ROOT)/非法时,回退取默认组织。
@@ -419,10 +425,59 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             throw new BusinessException(404, "变更单不存在");
         }
         DataScopeGuard.ensureOwner(order.getOrgId());
+
+        // 闭环门禁:变更归档前必须完成「首件 FIA 验证 + SPC 连续稳定 + 绑定一致性」校验
+        // (范式A:三方会签已在审批中完成,此处只校验验证结果,不重复人工审核)
+        assertVerificationGate(order);
+
         order.setStatus("已关闭");
         order.setReceiveFrozen(false); // SR-SCM:关闭即解冻收货,恢复正常
         if (sqmChangeOrderMapper.updateById(order) == 0) {
             throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
+        }
+    }
+
+    /**
+     * 变更归档门禁:校验该变更单关联的首件 FIA 已合格放行、对应 SPC 连续稳定,且绑定一致。
+     * 四者绑定锚点 = supplier_id:变更单.supplier_id == 首件.supplier_id。
+     * SPC 经 change_id -> fia_task -> task_id 间接绑定,禁止凭工单/料号模糊匹配。
+     * 任一不满足抛 BusinessException 拒绝归档。
+     */
+    private void assertVerificationGate(SqmChangeOrder order) {
+        String changeId = order.getId();
+        FiaTask fia = fiaTaskService.findByChangeId(changeId);
+        if (fia == null) {
+            throw new BusinessException(400, "该物料变更尚未创建关联首件检验任务(FIA),不可归档。"
+                    + "请通过「创建首件任务」生成首件并完成验证");
+        }
+        // 断言①:首件已合格放行(已完成 + 合格/警告)
+        boolean passed = "已完成".equals(fia.getStatus())
+                && fia.getOverallJudge() != null
+                && ("合格".equals(fia.getOverallJudge()) || "警告".equals(fia.getOverallJudge()));
+        if (!passed) {
+            throw new BusinessException(400, "关联首件检验任务" + fia.getCode() + "尚未合格放行(状态="
+                    + fia.getStatus() + ",判定=" + fia.getOverallJudge() + "),不可归档");
+        }
+        // 断言②:绑定一致性(供应商锚点)
+        if (order.getSupplierId() != null && fia.getSupplierId() != null
+                && !order.getSupplierId().equals(fia.getSupplierId())) {
+            throw new BusinessException(400, "首件供应商与变更单不一致(变更单供应商="
+                    + order.getSupplierId() + ",首件供应商=" + fia.getSupplierId() + "),绑定关系异常,不可归档");
+        }
+        // 断言③:SPC 经 change_id -> fia_task -> task_id 反查,ROUTINE 阶段最近 N 批连续合格且无异常点
+        List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(new LambdaQueryWrapper<SpcSubgroup>()
+                .eq(SpcSubgroup::getTaskId, fia.getId())
+                .eq(SpcSubgroup::getStage, "ROUTINE")
+                .orderByDesc(SpcSubgroup::getSubgroupTime)
+                .last("LIMIT 25"));
+        if (subgroups.isEmpty()) {
+            throw new BusinessException(400, "关联首件" + fia.getCode() + "尚未采集 SPC 量产子组(ROUTINE),不可归档");
+        }
+        boolean stable = subgroups.stream().allMatch(s ->
+                "合格".equals(s.getJudge()) && Boolean.FALSE.equals(s.getIsOutlier()));
+        if (!stable) {
+            throw new BusinessException(400, "SPC 量产子组存在不合格或异常点(最近" + subgroups.size()
+                    + "批未全部连续合格),不可归档");
         }
     }
 

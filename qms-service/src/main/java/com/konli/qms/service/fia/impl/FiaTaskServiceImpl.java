@@ -772,6 +772,15 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         return cnt > 0;
     }
 
+    @Override
+    public FiaTask findByChangeId(String changeId) {
+        if (changeId == null || changeId.isBlank()) return null;
+        return fiaTaskMapper.selectOne(new LambdaQueryWrapper<FiaTask>()
+                .eq(FiaTask::getChangeId, changeId)
+                .orderByDesc(FiaTask::getCreatedAt)
+                .last("LIMIT 1"));
+    }
+
     /** 推送待检通知给检验员/班组长(使用 NotificationService 标准接口)。 */
     private void notifyPending(FiaTask task) {
         String content = String.format("首件检验待检:校验单 %s,工单 %s,产线 %s,工序 %s,SLA %s",

@@ -95,6 +95,10 @@ public class FiaTask extends BaseEntity {
     @TableField("tool_id")
     private String toolId;
 
+    /** 关联物料变更单 ID(可空，仅 source=SUPPLIER 且由变更单驱动创建时填入，建立首件↔变更单直连绑定) */
+    @TableField("change_id")
+    private String changeId;
+
     /** 选中的标准项 ID 列表(非持久化);为空则按标准全量生成检验项 */
     @TableField(exist = false)
     private java.util.List<String> stdItemIds;
