@@ -163,6 +163,12 @@ public class SqmChangeServiceImpl implements SqmChangeService {
                         .orderByAsc(SqmChangeApproval::getSeqOrder));
         resolveOperators(approvals);
         vo.setApprovals(approvals);
+        try {
+            vo.setStrictInspects(sqmChangeStrictInspectService.list(id));
+        } catch (Exception e) {
+            log.warn("加载加严检验记录失败, changeId={}: {}", id, e.getMessage());
+            vo.setStrictInspects(List.of());
+        }
         return vo;
     }
 
