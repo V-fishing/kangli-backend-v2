@@ -52,6 +52,12 @@ public class SqmIncomingLot extends BaseEntity {
     @TableField("po_no")
     private String poNo;
 
+    @TableField("material_barcode")
+    private String materialBarcode;        // 来料条码(MES material_inspection.material_barcode 映射)
+
+    @TableField("material_batch_no")
+    private String materialBatchNo;         // 物料批次号(MES material_inspection.material_batch_no 映射)
+
     @TableField("change_id")
     private String changeId;
 

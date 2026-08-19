@@ -171,7 +171,8 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 break;
             case "material":
             default:
-                sql = "SELECT * FROM qms.material_inspection WHERE material_barcode = ? OR material_batch_no = ? LIMIT 1";
+                // 兼容三类键: 来料条码(material_barcode) / 物料批次号(material_batch_no) / 记录编号(record_no, 即来料批次 lot_no)
+                sql = "SELECT * FROM qms.material_inspection WHERE material_barcode = ? OR material_batch_no = ? OR record_no = ? LIMIT 1";
                 break;
         }
         try {
