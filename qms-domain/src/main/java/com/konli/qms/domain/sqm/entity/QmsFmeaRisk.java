@@ -34,6 +34,18 @@ public class QmsFmeaRisk extends BaseEntity {
     @TableField("failure_mode")
     private String failureMode;
 
+    @TableField("failure_effect")
+    private String failureEffect;         // 失效影响
+
+    @TableField("failure_cause")
+    private String failureCause;          // 失效原因
+
+    @TableField("current_prevent_ctrl")
+    private String currentPreventCtrl;    // 现有预防控制
+
+    @TableField("current_detect_ctrl")
+    private String currentDetectCtrl;     // 现有探测控制
+
     @TableField("severity_s")
     private Short severityS;              // 1~10
 
@@ -45,6 +57,18 @@ public class QmsFmeaRisk extends BaseEntity {
 
     private Short rpn;                    // =S×O×D
 
+    @TableField("rpn_after")
+    private Short rpnAfter;               // 措施实施后重评 RPN(二次 RPN)
+
+    @TableField("reseval_severity")
+    private Short resevalSeverity;        // 措施实施后重评严重度 S(1~10)
+
+    @TableField("reseval_occurrence")
+    private Short resevalOccurrence;      // 措施实施后重评频度 O(1~10)
+
+    @TableField("reseval_detection")
+    private Short resevalDetection;       // 措施实施后重评探测度 D(1~10)
+
     @TableField("risk_level")
     private String riskLevel;             // 高(≥150)/中高(100~149)/中/低
 
@@ -54,6 +78,9 @@ public class QmsFmeaRisk extends BaseEntity {
     private String status;                // 待闭环/进行中/已闭环
 
     private String action;
+
+    @TableField("suggest_measure")
+    private String suggestMeasure;        // 建议措施
 
     private String owner;
 
@@ -71,9 +98,18 @@ public class QmsFmeaRisk extends BaseEntity {
 
     private String evidence;
 
+    @TableField("note")
+    private String note;                  // 闭环备注
+
     @TableField("close_date")
     private LocalDate closeDate;
 
     @TableField("change_order_id")
     private String changeOrderId;         // VARCHAR,非 FK
+
+    @TableField("source_type")
+    private String sourceType;            // 自动触发来源类型(NCM_DEFECT/INCOMING_ABNORMAL)
+
+    @TableField("source_id")
+    private String sourceId;              // 来源业务主键
 }

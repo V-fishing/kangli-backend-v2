@@ -4,14 +4,13 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalMeasure;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalBatchVerify;
-import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.dto.AbnormalRectificationRequest;
 import com.konli.qms.service.ncm.dto.DefectLaunchRequest;
 
 import java.util.List;
 import java.util.Map;
 
-/** 来料异常整改单 + FMEA 高风险项。sqm.abnormal.* */
+/** 来料异常整改单。sqm.abnormal.* */
 public interface SqmAbnormalService {
 
     List<SqmIncomingAbnormal> listAbnormals();
@@ -38,12 +37,4 @@ public interface SqmAbnormalService {
 
     /** 列表级改派责任人(更新 handler_id + 推送被指派人任务中心)。 */
     void reassign(String id, DefectLaunchRequest req);
-
-    // ---- FMEA ----
-
-    List<QmsFmeaRisk> listFmea();
-
-    QmsFmeaRisk createFmea(QmsFmeaRisk risk);
-
-    void closeFmea(String id);
 }

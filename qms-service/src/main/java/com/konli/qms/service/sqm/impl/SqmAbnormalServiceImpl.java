@@ -8,14 +8,12 @@ import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.common.security.DataScopeGuard;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.konli.qms.domain.sqm.entity.QmsFmeaRisk;
 import com.konli.qms.domain.sqm.entity.SqmIncomingAbnormal;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalMeasure;
 import com.konli.qms.domain.sqm.entity.SqmAbnormalBatchVerify;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.entity.SqmSupplierEscalation;
 import com.konli.qms.domain.sqm.entity.SqmIncomingLot;
-import com.konli.qms.domain.sqm.mapper.QmsFmeaRiskMapper;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingAbnormalMapper;
 import com.konli.qms.domain.sqm.mapper.SqmIncomingLotMapper;
 import com.konli.qms.domain.sqm.mapper.SqmAbnormalMeasureMapper;
@@ -54,7 +52,6 @@ import java.util.stream.Collectors;
 public class SqmAbnormalServiceImpl implements SqmAbnormalService {
 
     private final SqmIncomingAbnormalMapper sqmIncomingAbnormalMapper;
-    private final QmsFmeaRiskMapper qmsFmeaRiskMapper;
     private final SqmSupplierEscalationMapper sqmSupplierEscalationMapper;
     private final SqmSupplierMapper sqmSupplierMapper;
     private final SqmIncomingLotMapper sqmIncomingLotMapper;
@@ -391,56 +388,6 @@ public class SqmAbnormalServiceImpl implements SqmAbnormalService {
             return Integer.parseInt(o.toString());
         } catch (Exception e) {
             return 0;
-        }
-    }
-
-    // ---- FMEA ----
-
-    @Override
-    public List<QmsFmeaRisk> listFmea() {
-        return qmsFmeaRiskMapper.selectList(null);
-    }
-
-    @Override
-    @Transactional
-    public QmsFmeaRisk createFmea(QmsFmeaRisk risk) {
-        risk.setRiskNo("FMEA-" + System.currentTimeMillis());
-        // RPN = S × O × D
-        if (risk.getSeverityS() != null && risk.getOccurrenceO() != null && risk.getDetectionD() != null) {
-            short rpn = (short) (risk.getSeverityS() * risk.getOccurrenceO() * risk.getDetectionD());
-            risk.setRpn(rpn);
-            if (rpn >= 100) {
-                risk.setHighRiskFlag(true);
-                if (risk.getRiskLevel() == null || risk.getRiskLevel().isEmpty()) {
-                    risk.setRiskLevel(rpn >= 150 ? "高" : "中高");
-                }
-            } else {
-                risk.setHighRiskFlag(false);
-                if (risk.getRiskLevel() == null || risk.getRiskLevel().isEmpty()) {
-                    risk.setRiskLevel(rpn >= 50 ? "中" : "低");
-                }
-            }
-        }
-        if (risk.getStatus() == null) {
-            risk.setStatus("待闭环");
-        }
-        qmsFmeaRiskMapper.insert(risk);
-        return risk;
-    }
-
-    @Override
-    @Transactional
-    public void closeFmea(String id) {
-        QmsFmeaRisk risk = qmsFmeaRiskMapper.selectById(id);
-        if (risk == null) {
-            throw new BusinessException(404, "FMEA 风险项不存在");
-        }
-        DataScopeGuard.ensureOwner(risk.getOrgId());
-        // 用已加载 risk 更新(带 @Version 乐观锁)
-        risk.setStatus("已闭环");
-        risk.setCloseDate(LocalDate.now());
-        if (qmsFmeaRiskMapper.updateById(risk) == 0) {
-            throw new BusinessException(409, "FMEA 风险项已被他人修改,请刷新后重试");
         }
     }
 

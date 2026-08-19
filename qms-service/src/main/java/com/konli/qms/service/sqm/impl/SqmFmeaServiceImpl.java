@@ -125,10 +125,12 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         risk.setProcess(process);
         risk.setFailureMode(remark);
         risk.setSeverityS(severityValue(severity));
-        // 来源标记写入 failureMode 前缀,便于追溯
-        if (srcType != null) {
-            risk.setFailureMode("[" + srcType + ":" + srcId + "] " + (remark == null ? "" : remark));
-        }
+        // 自动触发补齐 O/D 默认值,保证 RPN 正确体现高风险(严重缺陷 RPN = 8×5×4 = 160)
+        risk.setOccurrenceO((short) 5);
+        risk.setDetectionD((short) 4);
+        // 来源规范化写入 source_type/source_id,便于按来源过滤/跳转
+        risk.setSourceType(srcType);
+        risk.setSourceId(srcId);
         create(risk);
     }
 
@@ -198,6 +200,24 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         if (risk.getDetectionD() != null) {
             existing.setDetectionD(risk.getDetectionD());
         }
+        if (risk.getFailureEffect() != null) {
+            existing.setFailureEffect(risk.getFailureEffect());
+        }
+        if (risk.getFailureCause() != null) {
+            existing.setFailureCause(risk.getFailureCause());
+        }
+        if (risk.getCurrentPreventCtrl() != null) {
+            existing.setCurrentPreventCtrl(risk.getCurrentPreventCtrl());
+        }
+        if (risk.getCurrentDetectCtrl() != null) {
+            existing.setCurrentDetectCtrl(risk.getCurrentDetectCtrl());
+        }
+        if (risk.getSuggestMeasure() != null) {
+            existing.setSuggestMeasure(risk.getSuggestMeasure());
+        }
+        if (risk.getNote() != null) {
+            existing.setNote(risk.getNote());
+        }
         existing.setRpn(Short.valueOf((short) computeRpn(existing)));
         existing.setRiskLevel(riskLevel(existing.getRpn(), toInt(existing.getSeverityS())));
         existing.setHighRiskFlag(isHighRisk(existing.getRpn(), toInt(existing.getSeverityS())));
@@ -215,7 +235,8 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
 
     @Override
     @Transactional
-    public QmsFmeaRisk close(String id, String evidence, String actionNote, boolean recurrenceVerified, String operator) {
+    public QmsFmeaRisk close(String id, String evidence, String actionNote, boolean recurrenceVerified, String operator,
+                             Integer resevalSeverity, Integer resevalOccurrence, Integer resevalDetection) {
         QmsFmeaRisk existing = require(id);
         if ("已闭环".equals(existing.getStatus())) {
             throw new BusinessException(400, "该风险项已闭环，无需重复操作");
@@ -229,11 +250,31 @@ public class SqmFmeaServiceImpl implements SqmFmeaService {
         }
         String fromStatus = existing.getStatus();
         existing.setEvidence(evidence);
+        if (StringUtils.hasText(actionNote)) {
+            existing.setNote(actionNote);
+        }
+        // 措施实施后重评(可选):三项 S/O/D 同时非空才计算二次 RPN
+        String resevalNote = "";
+        if (resevalSeverity != null && resevalOccurrence != null && resevalDetection != null) {
+            int rpnAfter = resevalSeverity * resevalOccurrence * resevalDetection;
+            existing.setRpnAfter((short) rpnAfter);
+            existing.setResevalSeverity(resevalSeverity.shortValue());
+            existing.setResevalOccurrence(resevalOccurrence.shortValue());
+            existing.setResevalDetection(resevalDetection.shortValue());
+            int before = existing.getRpn() == null ? 0 : existing.getRpn();
+            resevalNote = "; 重评S/O/D=" + resevalSeverity + "/" + resevalOccurrence + "/" + resevalDetection
+                    + "; 重评RPN=" + before + "→" + rpnAfter;
+        } else {
+            existing.setRpnAfter(null);
+            existing.setResevalSeverity(null);
+            existing.setResevalOccurrence(null);
+            existing.setResevalDetection(null);
+        }
         existing.setStatus("已闭环");
         existing.setCloseDate(LocalDate.now());
         qmsFmeaRiskMapper.updateById(existing);
         recordTrack(existing.getId(), fromStatus, "已闭环", "通过闭环确认",
-                "证据=" + evidence + (actionNote != null ? "; 说明=" + actionNote : ""));
+                "证据=" + evidence + (actionNote != null ? "; 说明=" + actionNote : "") + resevalNote);
         return existing;
     }
 

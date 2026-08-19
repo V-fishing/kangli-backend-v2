@@ -35,8 +35,10 @@ public interface SqmFmeaService {
     /**
      * 高风险闭环：须满足 SR-PTL-024 —— 已提交证据(evidence 非空)且
      * 已确认"3 个月无复发"(recurrenceVerified=true)，方可将状态置为"已闭环"。
+     * 可选传入措施实施后重评 S/O/D，计算二次 RPN 并记录前后对比(三项同时非空才生效)。
      */
-    QmsFmeaRisk close(String id, String evidence, String actionNote, boolean recurrenceVerified, String operator);
+    QmsFmeaRisk close(String id, String evidence, String actionNote, boolean recurrenceVerified, String operator,
+                      Integer resevalSeverity, Integer resevalOccurrence, Integer resevalDetection);
 
     /** 某风险项的闭环轨迹(按时间升序)。 */
     List<QmsFmeaRiskTrack> tracks(String id);

@@ -298,7 +298,6 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.abnormal.list", "异常查询"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.abnormal.create", "异常管理"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.fmea.list", "FMEA查询"));
-        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.fmea.create", "FMEA管理"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.fmea.edit", "FMEA编辑"));
 
         // 物料变更三方审批角色:授予 sqm 菜单 + 变更查询/提交/审批 按钮

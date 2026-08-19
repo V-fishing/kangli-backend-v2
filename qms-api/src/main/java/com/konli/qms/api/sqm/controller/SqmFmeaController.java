@@ -79,14 +79,29 @@ public class SqmFmeaController {
 
     @PostMapping("/{id}/close")
     @PreAuthorize("hasAuthority('sqm.fmea.close')")
-    @Operation(summary = "高风险闭环(须证据+3个月无复发确认)")
+    @Operation(summary = "高风险闭环(须证据+3个月无复发确认,可选措施重评S/O/D)")
     public R<QmsFmeaRisk> close(@PathVariable String id, @RequestBody Map<String, Object> body) {
         String evidence = body.get("evidence") == null ? null : String.valueOf(body.get("evidence"));
         String note = body.get("note") == null ? null : String.valueOf(body.get("note"));
         boolean recurrenceVerified = Boolean.parseBoolean(String.valueOf(body.get("recurrenceVerified")));
+        Integer resevalSeverity = parseIntOrNull(body.get("resevalSeverity"));
+        Integer resevalOccurrence = parseIntOrNull(body.get("resevalOccurrence"));
+        Integer resevalDetection = parseIntOrNull(body.get("resevalDetection"));
         CompanyContext.CurrentUser u = CompanyContext.get();
         String operator = (u != null && u.username() != null) ? u.username() : "系统";
-        return R.ok(service.close(id, evidence, note, recurrenceVerified, operator));
+        return R.ok(service.close(id, evidence, note, recurrenceVerified, operator,
+                resevalSeverity, resevalOccurrence, resevalDetection));
+    }
+
+    private static Integer parseIntOrNull(Object o) {
+        if (o == null) return null;
+        String s = String.valueOf(o);
+        if (s.isBlank()) return null;
+        try {
+            return Integer.valueOf(s);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     @GetMapping("/{id}/tracks")

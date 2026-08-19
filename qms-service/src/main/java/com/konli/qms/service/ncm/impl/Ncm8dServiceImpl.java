@@ -150,6 +150,10 @@ public class Ncm8dServiceImpl implements Ncm8dService {
                 report.getIssue(), report.getD8No(), report.getSeverity()));
             return report;
         }
+        // flowType 兜底:从缺陷记录/异常单等入口发起 8D 时未显式传类型,统一归为标准流程"8D",避免 flow_type 落库为 NULL
+        if (report.getFlowType() == null || report.getFlowType().isBlank()) {
+            report.setFlowType("8D");
+        }
         report.setD8No("8D-" + System.currentTimeMillis());
         report.setStatus("进行中");
         // 发起时仅指定负责人;团队由负责人在 D1 阶段自行组建并提交审核,故一律从 D1 开始
