@@ -3,13 +3,15 @@ package com.konli.qms.service.spc.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.domain.spc.entity.SpcCapability;
+import com.konli.qms.domain.spc.entity.SpcMeasurement;
 import com.konli.qms.domain.spc.entity.SpcParam;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
 import com.konli.qms.domain.spc.mapper.SpcCapabilityMapper;
+import com.konli.qms.domain.spc.mapper.SpcMeasurementMapper;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.spc.mapper.SpcSubgroupMapper;
 import com.konli.qms.service.spc.SpcCapabilityService;
-import com.konli.qms.service.spc.dto.SpcSupplierCpkVo;
+import com.konli.qms.service.spc.dto.SpcParamCpkVo;
 import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +39,7 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
     private final SpcCapabilityMapper spcCapabilityMapper;
     private final SpcParamMapper spcParamMapper;
     private final SpcSubgroupMapper spcSubgroupMapper;
+    private final SpcMeasurementMapper spcMeasurementMapper;
     private final JdbcTemplate jdbcTemplate;
     private final SqmSupplierPerformanceService sqmSupplierPerformanceService;
 
@@ -164,11 +167,45 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
             throw new BusinessException(400, "无子组数据");
         }
 
-        BigDecimal sum = BigDecimal.ZERO;
-        for (BigDecimal x : xbars) {
-            sum = sum.add(x);
+        // 展开该参数所有子组的原始测量值(计量型),据此计算整体总均值与整体标准差 σ_overall。
+        // 修复此前用"子组均值 xbar 的标准差"当整体 σ 的缺陷:子组均值会把个体差异平滑掉,
+        // 导致 σ_overall 被系统性低估、Ppk/PP 被高估(甚至出现 σ_within > σ_overall 的反直觉结果)。
+        List<String> subgroupIds = subgroups.stream().map(SpcSubgroup::getId).filter(Objects::nonNull).toList();
+        List<BigDecimal> rawValues = subgroupIds.isEmpty() ? Collections.emptyList()
+                : spcMeasurementMapper.selectList(new LambdaQueryWrapper<SpcMeasurement>()
+                        .in(SpcMeasurement::getSubgroupId, subgroupIds))
+                .stream().map(SpcMeasurement::getValue).filter(Objects::nonNull).toList();
+
+        BigDecimal mean;
+        double sigmaOverall;
+        if (!rawValues.isEmpty()) {
+            BigDecimal rawSum = BigDecimal.ZERO;
+            for (BigDecimal v : rawValues) {
+                rawSum = rawSum.add(v);
+            }
+            mean = rawSum.divide(BigDecimal.valueOf(rawValues.size()), 8, RoundingMode.HALF_UP);
+            double m = mean.doubleValue();
+            double sq = 0;
+            for (BigDecimal v : rawValues) {
+                double d = v.doubleValue() - m;
+                sq += d * d;
+            }
+            sigmaOverall = rawValues.size() <= 1 ? 0 : Math.sqrt(sq / (rawValues.size() - 1));
+        } else {
+            // 兜底:历史数据无原始测量值时,回退到子组均值口径(旧逻辑)
+            BigDecimal sum = BigDecimal.ZERO;
+            for (BigDecimal x : xbars) {
+                sum = sum.add(x);
+            }
+            mean = sum.divide(BigDecimal.valueOf(xbars.size()), 6, RoundingMode.HALF_UP);
+            double m = mean.doubleValue();
+            double sq = 0;
+            for (BigDecimal x : xbars) {
+                double d = x.doubleValue() - m;
+                sq += d * d;
+            }
+            sigmaOverall = xbars.size() <= 1 ? 0 : Math.sqrt(sq / (xbars.size() - 1));
         }
-        BigDecimal mean = sum.divide(BigDecimal.valueOf(xbars.size()), 6, RoundingMode.HALF_UP);
 
         int n = (param.getSubgroupSize() == null || param.getSubgroupSize() <= 0) ? 5 : param.getSubgroupSize();
         double d2 = d2Factor(n);
@@ -183,14 +220,6 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
         avgRange = ranges.isEmpty() ? BigDecimal.ZERO : avgRange.divide(BigDecimal.valueOf(ranges.size()), 6, RoundingMode.HALF_UP);
         double sigmaWithin = avgRange.doubleValue() / d2;
 
-        // 样本标准差 sigmaOverall = sqrt( sum((xi-mean)^2) / (count-1) )
-        double sqSum = 0;
-        for (BigDecimal x : xbars) {
-            double diff = x.doubleValue() - mean.doubleValue();
-            sqSum += diff * diff;
-        }
-        double sigmaOverall = xbars.size() <= 1 ? 0 : Math.sqrt(sqSum / (xbars.size() - 1));
-
         BigDecimal usl = param.getSpecUpper();
         BigDecimal lsl = param.getSpecLower();
         int sampleCount = subgroups.size();
@@ -202,7 +231,8 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
         r.sampleCount = sampleCount;
 
         // ---- 诊断:能力为何无法计算(前端据此向用户说明"为什么没有数据") ----
-        if (usl == null || lsl == null) {
+        // 单侧规格(仅下限如 ≥95 或仅上限如 ≤xx)仍可算单侧指数 PPU/PPL;仅当两侧都缺失才无法计算
+        if (usl == null && lsl == null) {
             r.calcNote = "未配置规格上下限(检验标准库 SpecUpper/SpecLower),无法计算过程能力指数";
             r.level = "无法计算";
             return r;
@@ -224,10 +254,14 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
         // 能力指数 Cpk/Ppk(取单侧 min)。Cpk 用所选 σ;Ppk 恒用 overall σ
         BigDecimal cpk = calcIndex(usl, lsl, mean, sigmaForCpk, 4, kVal);
         BigDecimal ppk = calcIndex(usl, lsl, mean, sigmaOverall, 4, kVal);
-        // 过程潜力指数 Cp/Pp(双侧规格宽 / (2kσ),不取单侧)
-        BigDecimal width = usl.subtract(lsl);
-        BigDecimal cp = width.divide(BigDecimal.valueOf(2 * kVal * sigmaWithin), 4, RoundingMode.HALF_UP);
-        BigDecimal pp = width.divide(BigDecimal.valueOf(2 * kVal * sigmaOverall), 4, RoundingMode.HALF_UP);
+        // 过程潜力指数 Cp/Pp(仅双侧规格才有意义;单侧规格无"规格宽度"概念,置 null)
+        BigDecimal cp = null;
+        BigDecimal pp = null;
+        if (usl != null && lsl != null) {
+            BigDecimal width = usl.subtract(lsl);
+            cp = width.divide(BigDecimal.valueOf(2 * kVal * sigmaWithin), 4, RoundingMode.HALF_UP);
+            pp = width.divide(BigDecimal.valueOf(2 * kVal * sigmaOverall), 4, RoundingMode.HALF_UP);
+        }
 
         // SR-SPC-013:样本不足标注 -- <10 上方已拦截;10~24 组标"数据量不足,CPK仅供参考"(仍算);>=25 正常分级
         String level;
@@ -249,29 +283,55 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
         return r;
     }
 
-    /** 看板"跨参数 CPK 对比":对每个 SPC 参数实时计算 CPK(无供应商维度,以参数名作为对比项)。 */
+    /** 看板"跨参数 CPK 对比":以参数维度聚合 CPK。优先取最近一条落库值(与概览/趋势同口径),无落库时实时计算兜底。 */
     @Override
-    public List<SpcSupplierCpkVo> getSupplierCpk() {
+    public List<SpcParamCpkVo> getParamCpk() {
         List<SpcParam> params = spcParamMapper.selectList(null);
-        List<SpcSupplierCpkVo> result = new ArrayList<>();
+        List<SpcParamCpkVo> result = new ArrayList<>();
         for (SpcParam param : params) {
-            CapResult r;
-            try {
-                r = compute(param.getId());
-            } catch (Exception e) {
-                // 无子组/数据不足的参数跳过,不计入对比
+            // 仅计量型(VARIABLE)参数参与 CPK 对比;计数型(ATTRIBUTE,无规格限)不适用
+            if (!"VARIABLE".equalsIgnoreCase(param.getDataType())) {
                 continue;
             }
-            if (r.cpk == null) {
-                continue;
+            SpcParamCpkVo vo = new SpcParamCpkVo();
+            vo.setParamId(param.getId());
+            vo.setParamName(param.getParamName());
+            vo.setProcName(param.getProcName());
+            vo.setSrcWoNo(param.getSrcWoNo());
+
+            // 优先取最近落库值(与概览列表、趋势图同口径,避免实时重算导致两处 CPK 不一致)
+            SpcCapability cap = spcCapabilityMapper.selectOne(
+                    new LambdaQueryWrapper<SpcCapability>()
+                            .eq(SpcCapability::getParamId, param.getId())
+                            .orderByDesc(SpcCapability::getCalcAt)
+                            .last("LIMIT 1"));
+            if (cap != null) {
+                vo.setCpk(cap.getCpk() != null ? cap.getCpk().doubleValue() : null);
+                vo.setLevel(cap.getLevel());
+                vo.setSampleCount(cap.getSampleCount());
+                vo.setCalcNote(cap.getCalcNote());
+            } else {
+                // 无落库记录:实时计算兜底
+                try {
+                    CapResult r = compute(param.getId());
+                    vo.setCpk(r.cpk != null ? r.cpk.doubleValue() : null);
+                    vo.setLevel(r.level);
+                    vo.setSampleCount(r.sampleCount);
+                    vo.setCalcNote(r.calcNote);
+                } catch (Exception e) {
+                    vo.setLevel("无法计算");
+                    vo.setCalcNote(e.getMessage());
+                }
             }
-            SpcSupplierCpkVo vo = new SpcSupplierCpkVo();
-            vo.setSup("");
-            vo.setMat(param.getParamName());
-            vo.setCpk(r.cpk.doubleValue());
-            vo.setLvl(r.level);
             result.add(vo);
         }
+        // 按 CPK 升序(能力最差的排前,便于快速定位风险参数);无 CPK 值的排最后
+        result.sort((a, b) -> {
+            if (a.getCpk() == null && b.getCpk() == null) return 0;
+            if (a.getCpk() == null) return 1;
+            if (b.getCpk() == null) return -1;
+            return Double.compare(a.getCpk(), b.getCpk());
+        });
         return result;
     }
 
@@ -290,15 +350,21 @@ public class SpcCapabilityServiceImpl implements SpcCapabilityService {
     }
 
 
-    /** 计算 min(usl-mean, mean-lsl) / (k * sigma),保留 scale 位小数;无规格限或 sigma=0 返回 null。 */
+    /** 计算能力指数 / (k * sigma),保留 scale 位小数;无规格限或 sigma=0 返回 null。
+     *  双侧规格取 min(usl-mean, mean-lsl);单侧规格仅算对应一侧(≥下限→PPU,≤上限→PPL)。 */
     private BigDecimal calcIndex(BigDecimal usl, BigDecimal lsl, BigDecimal mean, double sigma, int scale, double k) {
-        if (sigma == 0 || usl == null || lsl == null || mean == null) {
+        if (sigma == 0 || mean == null || (usl == null && lsl == null)) {
             return null;
         }
-        double uslMean = usl.doubleValue() - mean.doubleValue();
-        double meanLsl = mean.doubleValue() - lsl.doubleValue();
-        double minDelta = Math.min(uslMean, meanLsl);
-        double val = minDelta / (k * sigma);
+        double delta;
+        if (usl != null && lsl != null) {
+            delta = Math.min(usl.doubleValue() - mean.doubleValue(), mean.doubleValue() - lsl.doubleValue());
+        } else if (usl != null) {
+            delta = usl.doubleValue() - mean.doubleValue();
+        } else {
+            delta = mean.doubleValue() - lsl.doubleValue();
+        }
+        double val = delta / (k * sigma);
         return BigDecimal.valueOf(val).setScale(scale, RoundingMode.HALF_UP);
     }
 

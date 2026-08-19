@@ -32,9 +32,12 @@ public final class FiaChartTypeResolver {
     private FiaChartTypeResolver() {
     }
 
-    /** 按 value_type 给出默认推荐基础图码集合(用户可手动增减)。 */
+    /** 按 value_type 给出默认推荐基础图码集合(用户可手动增减)。
+     *  兼容历史中文枚举值(数值/文本/枚举),避免中文 value_type 被误判为计量型导致文本/外观类错误带入 Xbar 图。 */
     public static List<String> defaultChartTypes(String valueType) {
-        if ("enum".equals(valueType) || "text".equals(valueType)) {
+        String vt = valueType == null ? "" : valueType.trim();
+        if ("enum".equalsIgnoreCase(vt) || "text".equalsIgnoreCase(vt)
+                || "枚举".equals(vt) || "文本".equals(vt)) {
             return List.of("P");
         }
         return List.of("Xbar", "R");

@@ -19,6 +19,7 @@ spring:
     default-schema: ops
     schemas: ops
     baseline-on-migrate: true
+    validate-on-migrate: false          # 临时:db/migration 已重组为 V001~V024 新基线,与库内旧 V01~V230 历史不一致;跳过校验(库 schema 已最新,无 pending migration)
 
 # MinIO 对象存储(stage 后用;前端 .env 已指向 localhost:9000)
 minio:

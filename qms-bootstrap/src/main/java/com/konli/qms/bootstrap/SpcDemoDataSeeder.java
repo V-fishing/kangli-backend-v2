@@ -73,14 +73,19 @@ public class SpcDemoDataSeeder implements ApplicationRunner {
         //    绝不动用户手动创建的 MANUAL 参数、也不动用户由 FIA 首件任务派生的参数,避免重启后用户数据丢失。
         String demoParamIds = "SELECT id FROM ops.spc_param WHERE org_id = ? AND param_name IN "
                 + "('主轴长度','单体重','回流焊炉温','供电电压','锁紧扭矩')";
+        // 只清理本 Seeder 自己产生的演示参数的下游数据(按演示参数 id 精确匹配)。
+        // 绝不能按 org_id 全删:否则会误删用户由 FIA 首件任务派生的参数(如 关键尺寸/性能测试/外观)
+        // 产生的告警、测量值、能力快照、控制限、采集任务、导入日志等真实数据(历史事故:告警列表被清空)。
+        String demoSubgroupIds = "SELECT id FROM ops.spc_subgroup WHERE param_id IN (" + demoParamIds + ")";
+        String demoAlarmIds = "SELECT id FROM ops.spc_alarm WHERE param_id IN (" + demoParamIds + ")";
         String[] deletes = {
-                "DELETE FROM ops.spc_notify_record WHERE org_id = ?",
-                "DELETE FROM ops.spc_alarm WHERE org_id = ?",
-                "DELETE FROM ops.spc_collect_task WHERE org_id = ?",
-                "DELETE FROM ops.spc_import_log WHERE org_id = ?",
-                "DELETE FROM ops.spc_capability WHERE org_id = ?",
-                "DELETE FROM ops.spc_control_limit WHERE org_id = ?",
-                "DELETE FROM ops.spc_measurement WHERE org_id = ?",
+                "DELETE FROM ops.spc_notify_record WHERE alarm_id IN (" + demoAlarmIds + ")",
+                "DELETE FROM ops.spc_alarm WHERE param_id IN (" + demoParamIds + ")",
+                "DELETE FROM ops.spc_collect_task WHERE param_id IN (" + demoParamIds + ")",
+                "DELETE FROM ops.spc_import_log WHERE param_id IN (" + demoParamIds + ")",
+                "DELETE FROM ops.spc_capability WHERE param_id IN (" + demoParamIds + ")",
+                "DELETE FROM ops.spc_control_limit WHERE param_id IN (" + demoParamIds + ")",
+                "DELETE FROM ops.spc_measurement WHERE subgroup_id IN (" + demoSubgroupIds + ")",
                 "DELETE FROM ops.spc_sample_task WHERE param_id IN (" + demoParamIds + ")",
                 "DELETE FROM ops.spc_subgroup WHERE param_id IN (" + demoParamIds + ")",
                 "DELETE FROM ops.spc_param_product WHERE param_id IN (" + demoParamIds + ")",

@@ -3,7 +3,7 @@ package com.konli.qms.api.spc.controller;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.spc.entity.SpcCapability;
 import com.konli.qms.service.spc.SpcCapabilityService;
-import com.konli.qms.service.spc.dto.SpcSupplierCpkVo;
+import com.konli.qms.service.spc.dto.SpcParamCpkVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,10 +44,10 @@ public class SpcCapabilityController {
         return R.ok(spcCapabilityService.trend(paramId, months));
     }
 
-    /** 看板"跨参数 CPK 对比":对每个参数实时计算 CPK(无供应商维度)。 */
-    @GetMapping("/supplier-cpk")
+    /** 看板"跨参数 CPK 对比":以参数维度聚合 CPK(优先取落库值)。 */
+    @GetMapping("/param-cpk")
     @PreAuthorize("hasAuthority('spc.capability.list')")
-    public R<List<SpcSupplierCpkVo>> supplierCpk() {
-        return R.ok(spcCapabilityService.getSupplierCpk());
+    public R<List<SpcParamCpkVo>> paramCpk() {
+        return R.ok(spcCapabilityService.getParamCpk());
     }
 }

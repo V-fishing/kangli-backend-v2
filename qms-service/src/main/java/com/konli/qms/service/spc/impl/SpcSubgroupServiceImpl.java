@@ -330,8 +330,13 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
             hw.eq(SpcSubgroup::getSampleTaskId, sampleTaskId);
         }
         List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(hw);
-        List<Double> values = subgroups.stream()
-                .map(SpcSubgroup::getXbar)
+        // 直方图应基于"原始测量值"而非子组均值 xbar:个体值分布才能与规格限(USL/LSL)对齐,
+        // 均值/整体标准差 σ 也据此计算(与能力分析 compute() 口径一致)。
+        List<String> subgroupIds = subgroups.stream().map(SpcSubgroup::getId).filter(Objects::nonNull).toList();
+        List<Double> values = subgroupIds.isEmpty() ? Collections.emptyList()
+                : spcMeasurementMapper.selectList(new LambdaQueryWrapper<SpcMeasurement>()
+                        .in(SpcMeasurement::getSubgroupId, subgroupIds))
+                .stream().map(SpcMeasurement::getValue)
                 .filter(Objects::nonNull)
                 .map(BigDecimal::doubleValue)
                 .toList();
