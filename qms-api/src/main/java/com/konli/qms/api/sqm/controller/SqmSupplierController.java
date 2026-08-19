@@ -4,6 +4,7 @@ import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.service.sqm.SqmSupplierService;
+import com.konli.qms.service.sqm.dto.SqmSupplierOverviewVo;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -46,6 +47,13 @@ public class SqmSupplierController {
     @PreAuthorize("hasAuthority('sqm.supplier.list')")
     public R<SqmSupplier> get(@PathVariable String id) {
         return R.ok(sqmSupplierService.get(id));
+    }
+
+    /** 供应商详情聚合:基础信息 + 资质/审核/绩效/异常/变更/批次各维度计数。 */
+    @GetMapping("/{id}/overview")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<SqmSupplierOverviewVo> overview(@PathVariable String id) {
+        return R.ok(sqmSupplierService.overview(id));
     }
 
     /** 按 MES 供应商编号(VEN 编号, 如 VEN00417)解析供应商, 供 MES 对接/脚本按 VEN 对齐。 */

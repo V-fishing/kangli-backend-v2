@@ -2,8 +2,10 @@ package com.konli.qms.service.sqm.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.konli.qms.common.exception.BusinessException;
+import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.entity.SqmSupplierCert;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierCertMapper;
+import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.service.sqm.SqmSupplierCertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +24,7 @@ import java.util.List;
 public class SqmSupplierCertServiceImpl implements SqmSupplierCertService {
 
     private final SqmSupplierCertMapper sqmSupplierCertMapper;
+    private final SqmSupplierMapper sqmSupplierMapper;
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -47,6 +50,20 @@ public class SqmSupplierCertServiceImpl implements SqmSupplierCertService {
         }
         if (cert.getCertVersion() == null) {
             cert.setCertVersion(1);
+        }
+        // sqm_supplier_cert.org_id 为 NOT NULL:从供应商回填,避免违反非空约束
+        if (cert.getOrgId() == null && cert.getSupplierId() != null) {
+            SqmSupplier supplier = sqmSupplierMapper.selectById(cert.getSupplierId());
+            if (supplier != null) {
+                cert.setOrgId(supplier.getOrgId());
+            }
+        }
+        // file_url/file_hash 为 NOT NULL:未上传证照时以空串占位
+        if (cert.getFileUrl() == null) {
+            cert.setFileUrl("");
+        }
+        if (cert.getFileHash() == null) {
+            cert.setFileHash("");
         }
         sqmSupplierCertMapper.insert(cert);
         return cert;

@@ -5,7 +5,14 @@ import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
+import com.konli.qms.service.sqm.SqmAbnormalService;
+import com.konli.qms.service.sqm.SqmAuditService;
+import com.konli.qms.service.sqm.SqmChangeService;
+import com.konli.qms.service.sqm.SqmSupplierCertService;
+import com.konli.qms.service.sqm.SqmSupplierPerformanceService;
 import com.konli.qms.service.sqm.SqmSupplierService;
+import com.konli.qms.service.sqm.SqmTraceService;
+import com.konli.qms.service.sqm.dto.SqmSupplierOverviewVo;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -25,6 +32,12 @@ public class SqmSupplierServiceImpl implements SqmSupplierService {
 
     private final SqmSupplierMapper sqmSupplierMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final SqmSupplierCertService sqmSupplierCertService;
+    private final SqmAuditService sqmAuditService;
+    private final SqmSupplierPerformanceService sqmSupplierPerformanceService;
+    private final SqmAbnormalService sqmAbnormalService;
+    private final SqmChangeService sqmChangeService;
+    private final SqmTraceService sqmTraceService;
 
     @Override
     public List<SqmSupplier> list() {
@@ -53,6 +66,23 @@ public class SqmSupplierServiceImpl implements SqmSupplierService {
     @Override
     public SqmSupplier get(String id) {
         return sqmSupplierMapper.selectById(id);
+    }
+
+    @Override
+    public SqmSupplierOverviewVo overview(String id) {
+        SqmSupplier supplier = get(id);
+        if (supplier == null) {
+            throw new BusinessException(404, "供应商不存在");
+        }
+        SqmSupplierOverviewVo vo = new SqmSupplierOverviewVo();
+        vo.setSupplier(supplier);
+        vo.setCertCount(sqmSupplierCertService.list(id).size());
+        vo.setAuditCount(sqmAuditService.listPlansPage(null, null, id, 1, 1).getTotal());
+        vo.setPerformanceCount(sqmSupplierPerformanceService.listPage(id, null, 1, 1).getTotal());
+        vo.setAbnormalCount(sqmAbnormalService.listAbnormalsPage(null, null, null, id, 1, 1).getTotal());
+        vo.setChangeCount(sqmChangeService.listPage(null, null, id, 1, 1).getTotal());
+        vo.setLotCount(sqmTraceService.listLotsPage(null, id, supplier.getOrgId(), 1, 1).getTotal());
+        return vo;
     }
 
     @Override

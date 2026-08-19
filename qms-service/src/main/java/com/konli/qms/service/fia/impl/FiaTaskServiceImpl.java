@@ -278,7 +278,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
 
     private LambdaQueryWrapper<FiaInspStd> stdQuery(String orgId, String partNo, String procName) {
         LambdaQueryWrapper<FiaInspStd> w = new LambdaQueryWrapper<>();
-        w.eq(FiaInspStd::getOrgId, orgId)
+        // orgId 可能为虚拟根(如 "ROOT",非 UUID): 集团管理员视角下跳过 org 过滤,
+        // 退化为跨组织按「物料编码 + 工序」匹配,避免管理员因 org 不匹配而匹配不到标准
+        // (与 searchProduct 的 orgFilter=isValidUuid 范式一致)。
+        boolean orgFilter = isValidUuid(orgId);
+        w.eq(orgFilter, FiaInspStd::getOrgId, orgId)
                 .eq(FiaInspStd::getStatus, "生效")
                 .eq(FiaInspStd::getPartNo, partNo)
                 .eq(FiaInspStd::getIsDeleted, false);
@@ -786,8 +790,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         String content = String.format("首件检验待检:校验单 %s,工单 %s,产线 %s,工序 %s,SLA %s",
                 task.getCode(), task.getWoNo(), task.getLineName(), task.getProcName(),
                 task.getSlaDueAt() != null ? task.getSlaDueAt().toString() : "-");
+        // 显式指定业务归属 org 的 9 参入口: bizNo 留空(bizId 已是单号), link 为前端跳转,
+        // orgId 按任务归属公司隔离(避免走 8 参入口取 currentOrgId 得到哨兵值 ROOT 触发 uuid 异常)
         notificationService.notify("fia", "fia_task_created",
-                "首件检验待检提醒", content, "fia_task", task.getCode(), "/fia/tasks", task.getOrgId());
+                "首件检验待检提醒", content, "fia_task", task.getCode(), null, "/fia/tasks", task.getOrgId());
     }
 
     /** 将前端传入的标识(可能是主键 UUID,也可能是校验单号 code)解析为真实主键;解析失败返回 null */

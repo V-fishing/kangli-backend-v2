@@ -311,7 +311,11 @@ public class NotificationService {
                 + "JOIN ops.sys_role r ON r.id = ur.role_id "
                 + "WHERE r.role_code IN (" + placeholders + ") AND u.status = '启用' AND u.is_deleted = false");
         List<Object> args = new ArrayList<>(roleCodes);
-        if (orgId != null && !orgId.isBlank()) {
+        // 仅当 orgId 为合法 UUID 时才按公司隔离; 哨兵值 "ROOT"(集团根/跨公司管理员)、空或
+        // 其他非 UUID 一律视为全局广播, 否则 u.org_id = <非UUID> 会抛 "invalid input syntax
+        // for type uuid" 异常(在 @Transactional 主流程内会 abort 事务, 导致整单静默回滚)。
+        if (orgId != null && !orgId.isBlank()
+                && orgId.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) {
             sql.append(" AND (u.org_id = ? OR u.org_id IS NULL)");
             args.add(orgId);
         }

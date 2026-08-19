@@ -2,6 +2,7 @@ package com.konli.qms.service.sqm;
 
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
+import com.konli.qms.service.sqm.dto.SqmSupplierOverviewVo;
 
 import java.util.List;
 
@@ -13,6 +14,9 @@ public interface SqmSupplierService {
     PageResult<SqmSupplier> listPage(String keyword, String level, String status, int page, int size);
 
     SqmSupplier get(String id);
+
+    /** 供应商详情聚合:基础信息 + 资质/审核/绩效/异常/变更/批次各维度计数。 */
+    SqmSupplierOverviewVo overview(String id);
 
     /** 按 MES 供应商编号(VEN 编号,如 VEN00417)解析供应商(供 MES 对接/重建脚本对齐供应商)。 */
     SqmSupplier findByVenCode(String venCode);
