@@ -510,7 +510,7 @@ public class DataInitializer implements CommandLineRunner {
                 "INSERT INTO ops.fia_insp_std (org_id, code, material, proc_name, aql, inspect_level, sample_plan, ctq_text, std_version, status, part_no, supplier_id) " +
                         "VALUES (?::uuid, ?, ?, '来料首件', '1.0', 'II', '单次', '关键尺寸/外观 CTQ', 'v1', '生效', ?, ?::uuid) " +
                         "ON CONFLICT (code) DO NOTHING",
-                orgId, stdCode, partNo, partNo, supplierId);
+                orgId, stdCode, partName, partNo, supplierId);
         String stdId = jdbcTemplate.queryForObject(
                 "SELECT id FROM ops.fia_insp_std WHERE org_id = ?::uuid AND code = ? AND is_deleted = false",
                 String.class, orgId, stdCode);

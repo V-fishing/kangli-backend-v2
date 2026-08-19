@@ -19,7 +19,6 @@ import com.konli.qms.service.sqm.SqmAuditService;
 import com.konli.qms.service.sqm.SqmChangeStrictInspectService;
 import com.konli.qms.domain.sqm.entity.SqmChangeStrictInspect;
 import com.konli.qms.domain.fia.entity.FiaTask;
-import com.konli.qms.service.fia.impl.FiaStdVersionService;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
 import com.konli.qms.domain.sqm.mapper.SqmSupplierMapper;
 import com.konli.qms.service.notify.NotificationService;
@@ -57,7 +56,6 @@ public class SqmChangeServiceImpl implements SqmChangeService {
     private final SqmAuditService sqmAuditService;
     private final JdbcTemplate jdbcTemplate;
     private final SqmChangeStrictInspectService sqmChangeStrictInspectService;
-    private final FiaStdVersionService fiaStdVersionService;
     private final SqmSupplierMapper sqmSupplierMapper;
     private final NotificationService notificationService;
     private final FiaTaskService fiaTaskService;
@@ -363,12 +361,9 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             if (sqmChangeOrderMapper.updateById(order) == 0) {
                 throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
             }
-            // 变更批准后联动 FIA 检验标准(旧标准停用 + 新版本草稿,待质量审核后生效)
-            try {
-                fiaStdVersionService.syncVersion(order);
-            } catch (Exception e) {
-                log.warn("变更联动FIA标准失败, changeId={}: {}", order.getId(), e.getMessage(), e);
-            }
+            // 注: 不再于批准时联动 FIA 检验标准升版(syncVersion)。
+            // 标准应在发起变更审核前即已建好且生效;批准时强制停用旧版会抽走首件匹配用的生效标准,
+            // 且生成的空草稿未生效,导致后续首件创建断链。标准升版如需变更,应在 FIA 标准库手动发起并审核生效。
             // 变更→来料加严检验联动:批准后自动创建3批加严检验(独立事务,失败不影响审批)
             try {
                 SqmChangeStrictInspect si = new SqmChangeStrictInspect();
@@ -464,17 +459,20 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             throw new BusinessException(400, "首件供应商与变更单不一致(变更单供应商="
                     + order.getSupplierId() + ",首件供应商=" + fia.getSupplierId() + "),绑定关系异常,不可归档");
         }
-        // 断言③:SPC 经 change_id -> fia_task -> task_id 反查,ROUTINE 阶段最近 N 批连续合格且无异常点
+        // 断言③:SPC 经 change_id -> fia_task -> task_id 反查,该首件任务关联的子组(首件 FIRST / 量产 ROUTINE)最近 N 批连续稳定且无异常点。
+        // 注:SPC 子组 judge 值域为「正常/异常」(WECO 判异写入),「合格」是 FIA 判定用语,此处须对齐 SPC 口径;
+        // 首件子组 stage=FIRST、量产监控 stage=ROUTINE,二者均属该 FIA 任务的验证证据,归档门禁一并采纳。
         List<SpcSubgroup> subgroups = spcSubgroupMapper.selectList(new LambdaQueryWrapper<SpcSubgroup>()
                 .eq(SpcSubgroup::getTaskId, fia.getId())
-                .eq(SpcSubgroup::getStage, "ROUTINE")
+                .in(SpcSubgroup::getStage, "FIRST", "ROUTINE")
                 .orderByDesc(SpcSubgroup::getSubgroupTime)
                 .last("LIMIT 25"));
         if (subgroups.isEmpty()) {
-            throw new BusinessException(400, "关联首件" + fia.getCode() + "尚未采集 SPC 量产子组(ROUTINE),不可归档");
+            throw new BusinessException(400, "关联首件" + fia.getCode() + "尚未采集 SPC 子组(首件/量产),不可归档");
         }
         boolean stable = subgroups.stream().allMatch(s ->
-                "合格".equals(s.getJudge()) && Boolean.FALSE.equals(s.getIsOutlier()));
+                ("正常".equals(s.getJudge()) || "合格".equals(s.getJudge()))
+                        && Boolean.FALSE.equals(s.getIsOutlier()));
         if (!stable) {
             throw new BusinessException(400, "SPC 量产子组存在不合格或异常点(最近" + subgroups.size()
                     + "批未全部连续合格),不可归档");
