@@ -51,8 +51,12 @@ public class DataScopeInterceptor implements InnerInterceptor {
 
     /**
      * 全局配置表(不按分公司/个人过滤)。
+     *
+     * <p>注意:sqm_supplier 曾在此白名单,导致切换组织时供应商档案不按 org_id 过滤;
+     * 该表及其关联表(sqm_supplier_performance/cert/measure/share/grade_rule/escalation)
+     * 均已按分公司落 org_id 且无 NULL 数据,按组织过滤不会丢数据,故已移出白名单。</p>
      */
-    private static final Set<String> GLOBAL_TABLES = Set.of("spc_rule", "sys_dict", "sqm_supplier");
+    private static final Set<String> GLOBAL_TABLES = Set.of("spc_rule", "sys_dict");
 
     /** 组织切换生效组织必须是合法 UUID(由 OrgSwitchFilter 解析保证,此处再校验以防串号)。 */
     private static final Pattern UUID_RE = Pattern.compile(
