@@ -17,4 +17,6 @@ public class SpcHistogramVo {
     private Double sigma;
     /** 与 bins 等长的正态拟合频次(量级与 freq 一致:pdf(bin_i)*total*binWidth)。 */
     private List<Double> normalFreq;
+    /** 直方图数据来源:MEASUREMENT=原始测量值(默认) / XBAR=子组均值回退(无原始测量值时)。 */
+    private String basedOn;
 }

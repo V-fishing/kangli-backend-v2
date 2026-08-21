@@ -1,6 +1,7 @@
 package com.konli.qms.api.tlm.controller;
 
 import com.konli.qms.common.api.R;
+import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.domain.tlm.entity.TlmMaintPlan;
 import com.konli.qms.domain.tlm.entity.TlmMaintRecord;
 import com.konli.qms.domain.tlm.entity.TlmTooling;
@@ -136,7 +137,17 @@ public class TlmToolingController {
     @PostMapping("/tooling/{id}/product")
     @PreAuthorize("hasAuthority('tlm.tooling.edit')")
     public R<TlmToolProduct> relateProduct(@PathVariable String id, @RequestBody TlmToolProduct body) {
-        String orgId = (CompanyContext.get() != null) ? CompanyContext.get().orgId() : null;
+        // 组织归属优先取工装本身 org_id(关联记录属于工装组织);
+        // 超管账号 JWT 中 orgId 为哨兵值 "ROOT", 直接写 uuid 列会报 invalid input syntax(历史 500 根因), 故排除后用上下文兜底。
+        TlmTooling tooling = toolingService.get(id);
+        String orgId = (tooling != null) ? tooling.getOrgId() : null;
+        if (orgId == null || orgId.isBlank() || "ROOT".equals(orgId)) {
+            CompanyContext.CurrentUser u = CompanyContext.get();
+            orgId = (u != null && u.orgId() != null && !"ROOT".equals(u.orgId())) ? u.orgId() : null;
+        }
+        if (orgId == null || orgId.isBlank()) {
+            throw new BusinessException(400, "无法确定组织归属，关联产品失败");
+        }
         TlmToolProduct exist = toolProductMapper.selectOne(new LambdaQueryWrapper<TlmToolProduct>()
                 .eq(TlmToolProduct::getToolId, id).eq(TlmToolProduct::getProductCode, body.getProductCode()).last("LIMIT 1"));
         if (exist != null) {

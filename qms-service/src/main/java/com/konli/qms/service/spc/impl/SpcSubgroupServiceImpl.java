@@ -340,8 +340,21 @@ public class SpcSubgroupServiceImpl implements SpcSubgroupService {
                 .filter(Objects::nonNull)
                 .map(BigDecimal::doubleValue)
                 .toList();
+        // 无原始测量值时回退:用子组均值 xbar 作为直方图数据源。
+        // 场景:手动录入/抽样任务仅提交聚合值(均值/极差)、MES 批量导入子组等,spc_measurement 无行。
+        // 此时直方图分布基于子组均值(比个体值更集中),前端通过 basedOn=XBAR 如实标注,不伪装成原始测量值。
         if (values.isEmpty()) {
-            return vo;
+            values = subgroups.stream()
+                    .map(SpcSubgroup::getXbar)
+                    .filter(Objects::nonNull)
+                    .map(BigDecimal::doubleValue)
+                    .toList();
+            if (values.isEmpty()) {
+                return vo;
+            }
+            vo.setBasedOn("XBAR");
+        } else {
+            vo.setBasedOn("MEASUREMENT");
         }
         // 均值与整体标准差 σ
         double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);

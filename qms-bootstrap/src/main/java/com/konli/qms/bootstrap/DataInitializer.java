@@ -128,6 +128,23 @@ public class DataInitializer implements CommandLineRunner {
         assignBtn("fia", "fia.sign.disposition", "处置路径");
         assignBtn("fia", "fia.wolock.emergency", "工单紧急放行");
         assignBtn("fia", "fia.wolock.release", "工单审批释放");
+        // 完工检验独立模块权限码(直读直写 MES 表;与 V251 Flyway 双保险;对齐 Controller @PreAuthorize)
+        assignBtn("fia", "fia.finish.list", "完工检验查询");
+        assignBtn("fia", "fia.finish.create", "完工检验建单");
+        assignBtn("fia", "fia.finish.edit", "完工检验录入/签核");
+        assignBtn("fia", "fia.finish.delete", "完工检验删除");
+        // 物料检验(来料检验)独立模块权限码(直读直写 MES 表;与 V252 Flyway 双保险;对齐 Controller @PreAuthorize)
+        assignBtn("fia", "fia.material.list", "物料检验查询");
+        assignBtn("fia", "fia.material.create", "物料检验建单");
+        assignBtn("fia", "fia.material.edit", "物料检验录入/签核");
+        assignBtn("fia", "fia.material.delete", "物料检验删除");
+        // 完工检验二级菜单(挂 FIA 首件检验目录;与 V253 Flyway 双保险;物料检验并入列表"物料"分段不单设菜单)
+        String fiaMenuId = queryId("SELECT id FROM ops.sys_menu WHERE menu_code='fia'");
+        if (fiaMenuId != null) {
+            String finishMenuId = ensureChildMenu(fiaMenuId, "fia.finish", "完工检验", "/fia/finish-inspection", "fia/FinishInspectionList", 8);
+            assignRoleMenuByCode("sysadmin", finishMenuId);
+            assignRoleMenuByCode("admin", finishMenuId);
+        }
         assignBtn("ncm", "ncm.record.delete", "记录/过滤方案删除");
         assignBtn("ncm", "ncm.capa.close", "CAPA关闭");
         assignBtn("ncm", "ncm.capa.approve", "CAPA审批");

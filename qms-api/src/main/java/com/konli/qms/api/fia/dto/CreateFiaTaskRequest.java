@@ -52,4 +52,27 @@ public class CreateFiaTaskRequest {
 
     /** 来源: FACTORY(产线首件)/SUPPLIER(供应商来料首件)/TOOLING(工装首件)，可空由后端按规则推导 */
     private String source;
+
+    // ---- 完工检验补收字段(trigger_type='完工检验' 时使用,普通首件忽略) ----
+
+    /** 选中的最近合格首件任务 ID(可空);非空时以该首件的工单号/料号带出生产字段 */
+    private String eligibleFirstArticleId;
+
+    /** 型号规格 */
+    private String modelSpec;
+
+    /** 生产日期(YYYY-MM-DD) */
+    private String productionDate;
+
+    /** 提交数量 */
+    private java.math.BigDecimal submittedQty;
+
+    /** 单位 */
+    private String unit;
+
+    /** 工厂编码 */
+    private String plantCode;
+
+    /** 工厂名称 */
+    private String plantName;
 }

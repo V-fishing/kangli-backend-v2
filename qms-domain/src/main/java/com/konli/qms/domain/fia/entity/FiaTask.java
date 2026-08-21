@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -98,6 +99,34 @@ public class FiaTask extends BaseEntity {
     /** 关联物料变更单 ID(可空，仅 source=SUPPLIER 且由变更单驱动创建时填入，建立首件↔变更单直连绑定) */
     @TableField("change_id")
     private String changeId;
+
+    /** 关联首件任务 ID(可空，仅 trigger_type='完工检验' 时填入，建立完工检验单↔首件 1:1 绑定，放行前须非空) */
+    @TableField("first_article_id")
+    private String firstArticleId;
+
+    /** 型号规格(完工检验补收字段,V248) */
+    @TableField("model_spec")
+    private String modelSpec;
+
+    /** 生产日期(完工检验补收字段,V248) */
+    @TableField("production_date")
+    private LocalDate productionDate;
+
+    /** 提交数量(完工检验补收字段,V248) */
+    @TableField("submitted_qty")
+    private BigDecimal submittedQty;
+
+    /** 单位(完工检验补收字段,V248) */
+    @TableField("unit")
+    private String unit;
+
+    /** 工厂编码(完工检验补收字段,V248) */
+    @TableField("plant_code")
+    private String plantCode;
+
+    /** 工厂名称(完工检验补收字段,V248) */
+    @TableField("plant_name")
+    private String plantName;
 
     /** 选中的标准项 ID 列表(非持久化);为空则按标准全量生成检验项 */
     @TableField(exist = false)

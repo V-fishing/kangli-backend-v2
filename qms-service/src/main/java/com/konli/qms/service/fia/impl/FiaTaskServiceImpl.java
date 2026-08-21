@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
+import com.konli.qms.service.fia.dto.CompletionGateResult;
+import com.konli.qms.service.fia.dto.EligibleFirstArticleVO;
 import com.konli.qms.domain.fia.entity.FiaApproval;
 import com.konli.qms.domain.fia.entity.FiaArchivedReport;
 import com.konli.qms.domain.fia.entity.FiaInspItem;
@@ -23,9 +25,11 @@ import com.konli.qms.domain.fia.mapper.FiaTaskMapper;
 import com.konli.qms.service.fia.dto.ProductSearchResult;
 import com.konli.qms.service.fia.dto.ProductTreeNode;
 import com.konli.qms.service.fia.dto.TaskStdItemVo;
+import com.konli.qms.domain.spc.entity.SpcAlarm;
 import com.konli.qms.domain.spc.entity.SpcParam;
 import com.konli.qms.domain.spc.entity.SpcSpecStandard;
 import com.konli.qms.domain.spc.entity.SpcSubgroup;
+import com.konli.qms.domain.spc.mapper.SpcAlarmMapper;
 import com.konli.qms.domain.spc.mapper.SpcParamMapper;
 import com.konli.qms.domain.spc.mapper.SpcSpecStandardMapper;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
@@ -111,6 +115,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final SqmTraceService sqmTraceService;
     private final NotificationService notificationService;
     private final TlmToolingMapper tlmToolingMapper;
+    private final SpcAlarmMapper spcAlarmMapper;
 
     @Override
         public List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType) {
@@ -947,9 +952,13 @@ public class FiaTaskServiceImpl implements FiaTaskService {
             throw new BusinessException(400, "首件任务不存在");
         }
         FiaTask task = fiaTaskMapper.selectById(realId);
-        // 按 source 校验 disposition 枚举
+        // 按 source / trigger_type 校验 disposition 枚举
         Set<String> allowed;
-        if ("SUPPLIER".equals(task.getSource())) {
+        if (FINISH_TRIGGER_TYPE.equals(task.getTriggerType())) {
+            // 完工检验处置白名单: 合格入库 / 退货 / 返工 / 让步接收 / 紧急放行
+            allowed = Set.of(FINISH_DISPOSITION_ACCEPT, FactoryDisposition.RETURN, FactoryDisposition.REWORK,
+                    FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY);
+        } else if ("SUPPLIER".equals(task.getSource())) {
             allowed = Set.of(SupplierDisposition.ACCEPT, FactoryDisposition.RETURN, FactoryDisposition.CONCESSION, SupplierDisposition.SORT);
         } else {
             allowed = Set.of(FactoryDisposition.RETURN, FactoryDisposition.REWORK, FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY, FactoryDisposition.EXEMPTION);
@@ -990,6 +999,12 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     }
 
     private static final Set<String> APPROVAL_DISPOSITIONS = Set.of(FactoryDisposition.CONCESSION, FactoryDisposition.EMERGENCY, FactoryDisposition.EXEMPTION);
+
+    /** 完工检验触发类型(复用 ops.fia_task,以 trigger_type 区分普通首件) */
+    private static final String FINISH_TRIGGER_TYPE = "完工检验";
+
+    /** 完工检验可放行处置 */
+    private static final String FINISH_DISPOSITION_ACCEPT = "合格入库";
 
     /**
      * 审批通过后的放行:归档 + 首件CTQ数据写入SPC基准(仅判定合格时同步)。
@@ -1260,23 +1275,26 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         }
         // FIA->SPC 联动(一):任务完成即由首件检验项派生 SPC 参数并绑定产品(幂等),
         // 保证签字通过后即可进入 SPC 数据采集;无论合格与否均生成,异常只 log 不阻断主流程。
-        try {
-            spcParamService.ensureFromFiaTask(task.getId());
-        } catch (Exception e) {
-            log.warn("FIA->SPC 参数生成失败, taskId={}: {}", task.getId(), e.getMessage(), e);
-        }
-        // FIA->SPC 联动(二):仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
-        if (InspResult.PASS.equals(task.getOverallJudge())) {
+        // 完工检验单(trigger_type='完工检验')不走 SPC/来料联动,改由 releaseFinishInspection 同步 MES 成品表。
+        if (!FINISH_TRIGGER_TYPE.equals(task.getTriggerType())) {
             try {
-                syncToSpc(task);
+                spcParamService.ensureFromFiaTask(task.getId());
             } catch (Exception e) {
-                log.warn("FIA->SPC 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+                log.warn("FIA->SPC 参数生成失败, taskId={}: {}", task.getId(), e.getMessage(), e);
             }
-            // FIA->来料追溯 联动:合格免审直录物料表(同产品幂等复用,不重复录入)
-            try {
-                syncToTrace(task, logSeq + 5);
-            } catch (Exception e) {
-                log.warn("FIA->来料追溯 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+            // FIA->SPC 联动(二):仅合格时同步 CTQ 数值到 SPC,异常只 log 不阻断主流程
+            if (InspResult.PASS.equals(task.getOverallJudge())) {
+                try {
+                    syncToSpc(task);
+                } catch (Exception e) {
+                    log.warn("FIA->SPC 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+                }
+                // FIA->来料追溯 联动:合格免审直录物料表(同产品幂等复用,不重复录入)
+                try {
+                    syncToTrace(task, logSeq + 5);
+                } catch (Exception e) {
+                    log.warn("FIA->来料追溯 联动失败, taskId={}: {}", task.getId(), e.getMessage(), e);
+                }
             }
         }
         // SR-FIA-024:合格完成 -> 自动解锁工单;SR-FIA-022:不合格 -> 强化锁定(首件不合格)
@@ -1890,7 +1908,11 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         return o == null ? "" : String.valueOf(o);
     }
 
-    /** 判断字符串是否为合法 UUID(org_id 列为 uuid 类型,非法值直接查会 500) */
+    // ---- 完工检验已独立为 qms.finished_goods_inspection 直写模块(FiaFinishInspectionServiceImpl),
+    // 本类不再保留 trigger_type='完工检验' 相关逻辑(listFinishCandidates / listEligibleFirstArticles /
+    // checkCompletionGate / bindFirstArticle / releaseFinishInspection / syncFinishToTrace /
+    // deriveTraceRelations / fillProductionFields 及其 FINISH_* 常量)。存量数据作废不迁移。 ----
+
     private static boolean isValidUuid(String s) {
         if (s == null || s.isBlank()) return false;
         try {

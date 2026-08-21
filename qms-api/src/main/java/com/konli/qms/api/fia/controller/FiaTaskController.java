@@ -186,7 +186,8 @@ public class FiaTaskController {
     @PreAuthorize("hasAuthority('fia.task.create')")
     @com.konli.qms.common.audit.Auditable(module = "FIA", action = "CREATE", recordExpr = "#result.data.id", detailExpr = "'首件任务:' + #req.woNo")
     public R<FiaTask> create(@Valid @RequestBody CreateFiaTaskRequest req) {
-        // 工单号为空时由后端自动生成
+        // 工单号(生产订单号): 普通首件必填,后端不再自动生成(已由前端下拉选 MES 生产订单号);
+        // 来料(woNo=lotNo)与工装(内部自动生成)仍可能为空,此处保留兜底。
         String woNo = (req.getWoNo() == null || req.getWoNo().isBlank())
                 ? fiaTaskService.generateWoNo(req.getOrgId())
                 : req.getWoNo();
@@ -225,6 +226,9 @@ public class FiaTaskController {
                 task.setPartNo(change.getPartNo());
             }
         }
+
+        // 完工检验已独立为 qms.finished_goods_inspection 直写模块(FiaFinishInspectionController),
+        // 此处不再处理 trigger_type='完工检验' 的分支。
 
         return R.ok(fiaTaskService.create(task));
     }
