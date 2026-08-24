@@ -316,6 +316,9 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.abnormal.create", "异常管理"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.fmea.list", "FMEA查询"));
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.fmea.edit", "FMEA编辑"));
+        // MES 绑定父子级(完工检验「更多▾」内快捷绑定, 直写 critical_material_binding, 即时生效)。
+        // 不再挂独立菜单页, 仅保留按钮码供 @PreAuthorize(sqm.binding.*) 使用。
+        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.binding.create", "绑定父子级"));
 
         // 物料变更三方审批角色:授予 sqm 菜单 + 变更查询/提交/审批 按钮
         // (采购 purchaser / 研发 rd / 质量 sqe)。每次启动幂等补权,使其可参与依次签字。
