@@ -36,6 +36,27 @@ public class MaterialInspectionCreateRequest {
     /** 检验类别(来料/委外等) */
     private String inspectionCategory;
 
+    /** 采购订单号(来料收货溯源) */
+    private String purchaseOrder;
+
+    /** 入库单号(来料收货溯源) */
+    private String inboundNo;
+
+    /** 到货日期(YYYY-MM-DD,来料收货溯源) */
+    private String arrivalDate;
+
+    /** 收货单号(来料收货溯源) */
+    private String receivingNo;
+
+    /** PO 行号(来料收货溯源) */
+    private String poLineNo;
+
+    /** 收货行号(来料收货溯源) */
+    private String receivingLineNo;
+
+    /** 保质期天数(来料收货溯源) */
+    private String shelfLifeDays;
+
     /** 数量单位(按物料带出) */
     private String unit;
 

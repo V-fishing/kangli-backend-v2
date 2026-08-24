@@ -183,8 +183,10 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                         + " (record_no, material_code, material_name, spec_model, material_batch_no,"
                         + "  material_barcode, supplier_name, supplier_code, material_category,"
                         + "  inspection_category, unit, is_customer_supplied, is_urgent,"
-                        + "  plant_code, plant_name, remark, is_valid, is_deleted, created_by, updated_by, created_at, updated_at)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', '0', ?, ?, ?, ?)",
+                        + "  plant_code, plant_name, remark, purchase_order, inbound_no, arrival_date,"
+                        + "  receiving_no, po_line_no, receiving_line_no, shelf_life_days,"
+                        + "  is_valid, is_deleted, created_by, updated_by, created_at, updated_at)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', '0', ?, ?, ?, ?)",
                 recordNo,
                 req.getMaterialCode(),
                 blankToNull(req.getMaterialName()),
@@ -201,6 +203,13 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                 blankToNull(req.getPlantCode()),
                 blankToNull(req.getPlantName()),
                 blankToNull(req.getRemark()),
+                blankToNull(req.getPurchaseOrder()),
+                blankToNull(req.getInboundNo()),
+                blankToNull(req.getArrivalDate()),
+                blankToNull(req.getReceivingNo()),
+                blankToNull(req.getPoLineNo()),
+                blankToNull(req.getReceivingLineNo()),
+                blankToNull(req.getShelfLifeDays()),
                 user, user, now, now);
         log.info("[MATERIAL] 新建物料检验单 material_code={}, supplier_name={}, record_no={}",
                 req.getMaterialCode(), req.getSupplierName(), recordNo);
@@ -223,6 +232,13 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                         + "  inspection_end_date = COALESCE(?, inspection_end_date),"
                         + "  defect_desc = COALESCE(?, defect_desc),"
                         + "  handling_method = COALESCE(?, handling_method),"
+                        + "  purchase_order = COALESCE(?, purchase_order),"
+                        + "  inbound_no = COALESCE(?, inbound_no),"
+                        + "  arrival_date = COALESCE(?, arrival_date),"
+                        + "  receiving_no = COALESCE(?, receiving_no),"
+                        + "  po_line_no = COALESCE(?, po_line_no),"
+                        + "  receiving_line_no = COALESCE(?, receiving_line_no),"
+                        + "  shelf_life_days = COALESCE(?, shelf_life_days),"
                         + "  updated_by = ?, updated_at = now()"
                         + " WHERE record_no = ? AND is_deleted = '0'",
                 blankToNull(req.getInspector()),
@@ -234,6 +250,13 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                 blankToNull(req.getInspectionEndDate()),
                 blankToNull(req.getDefectDesc()),
                 blankToNull(req.getHandlingMethod()),
+                blankToNull(req.getPurchaseOrder()),
+                blankToNull(req.getInboundNo()),
+                blankToNull(req.getArrivalDate()),
+                blankToNull(req.getReceivingNo()),
+                blankToNull(req.getPoLineNo()),
+                blankToNull(req.getReceivingLineNo()),
+                blankToNull(req.getShelfLifeDays()),
                 currentUserId(), id);
         log.info("[MATERIAL] 保存检验汇总 material_code={}, result={}",
                 exist.getMaterialCode(), req.getInspectionResult());
@@ -248,6 +271,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                         + "  reviewer = COALESCE(?, reviewer), review_date = COALESCE(?, review_date),"
                         + "  unqualified_review = COALESCE(?, unqualified_review),"
                         + "  unqualified_final_status = COALESCE(?, unqualified_final_status),"
+                        + "  unqualified_review_no = COALESCE(?, unqualified_review_no),"
                         + "  judge = COALESCE(?, judge), submitter = COALESCE(?, submitter),"
                         + "  submit_date = COALESCE(?, submit_date), reinspect_remark = COALESCE(?, reinspect_remark),"
                         + "  signature_user = COALESCE(?, signature_user), signature_time = COALESCE(?, signature_time),"
@@ -263,6 +287,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
                 blankToNull(req.getReviewDate()),
                 blankToNull(req.getUnqualifiedReview()),
                 blankToNull(req.getUnqualifiedFinalStatus()),
+                blankToNull(req.getUnqualifiedReviewNo()),
                 blankToNull(req.getJudge()),
                 blankToNull(req.getSubmitter()),
                 blankToNull(req.getSubmitDate()),

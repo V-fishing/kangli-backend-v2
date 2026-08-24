@@ -40,6 +40,27 @@ public class MaterialInspectionUpdateRequest {
     /** 处理方式(退货/让步接收/挑选等) */
     private String handlingMethod;
 
+    /** 采购订单号(来料收货溯源,编辑可改) */
+    private String purchaseOrder;
+
+    /** 入库单号(来料收货溯源,编辑可改) */
+    private String inboundNo;
+
+    /** 到货日期(YYYY-MM-DD,来料收货溯源,编辑可改) */
+    private String arrivalDate;
+
+    /** 收货单号(来料收货溯源,编辑可改) */
+    private String receivingNo;
+
+    /** PO 行号(来料收货溯源,编辑可改) */
+    private String poLineNo;
+
+    /** 收货行号(来料收货溯源,编辑可改) */
+    private String receivingLineNo;
+
+    /** 保质期天数(来料收货溯源,编辑可改) */
+    private String shelfLifeDays;
+
     // ---- signoff 阶段 ----
     /** 送检数 */
     private BigDecimal submittedQty;
@@ -67,6 +88,9 @@ public class MaterialInspectionUpdateRequest {
 
     /** 不合格最终处理状态 */
     private String unqualifiedFinalStatus;
+
+    /** 不合格评审号(不合格处理阶段补录) */
+    private String unqualifiedReviewNo;
 
     /** 判定人 */
     private String judge;
