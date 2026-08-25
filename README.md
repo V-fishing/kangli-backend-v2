@@ -31,8 +31,17 @@ Java 21 · Spring Boot 3.3.5 · MyBatis-Plus 3.5.9 · MapStruct 1.5.5 · Postgre
 | `ncm` | 不合格品管理 | 缺陷字典 / 缺陷记录 / 8D / 鱼骨图 / CAPA / 纠正措施 / 预警升级 / BI 报表 / 日报配置 / 过滤方案 |
 | `sqm` | 供应商质量 | 供应商 / 评级 / 绩效 / 审计 / 变更 / FMEA / 追溯 / 异常 / 分析 / 证书 / 共享 / 升级 / 测量 / SQE 验证 |
 | `archive` | 归档 | 检验记录归档与查询 |
+| `cs` | 客户服务 | 工单 / 反馈 |
+| `tlm` | 工装管理 | 工装台账 / 维保 / 异常 |
+| `qmsmgmt` | QMS 管理 | 质量体系管理 |
+| `notify` | 通知中心 | 站内信 / 通知渠道配置 |
+| `approval` | 审批中心 | 统一审批 / 会签 / 签批 |
+| `kpi` | KPI | 指标看板 |
+| `system` | 系统管理 | 审计日志 / 系统配置 |
+| `my` | 个人中心 | 我的任务 / 待办 |
+| `common` | 通用 | 文件上传(MinIO) / 通用接口 |
 
-数据库 schema 由 Flyway 管理,基线迁移 `V01__schema_uop_global.sql` ~ `V16__fmea_risk_track.sql` 共 16 个脚本,schema 名 `ops`,遵循代码规范(`org_id` / UUID 主键 / `ops.*` 表前缀)。
+数据库 schema 由 Flyway 管理,迁移脚本 `V001__baseline_foundation.sql` ~ `V254__sqm_change_approver_id.sql` 共 46 个(另有 `staging/` 存放导入用 staging 表),schema 名 `ops`,遵循代码规范(`org_id` / UUID 主键 / `ops.*` 表前缀)。
 
 ## 关键基础设施(qms-common)
 
@@ -42,6 +51,7 @@ Java 21 · Spring Boot 3.3.5 · MyBatis-Plus 3.5.9 · MapStruct 1.5.5 · Postgre
 - **`SecurityConfig` + `JwtAuthenticationFilter`**:无状态 JWT。每请求经 `PermissionLoader` 加载权限码(Redis 缓存 30min)为 authorities,供 `@PreAuthorize("hasAuthority('xxx')")` 校验;`@EnableMethodSecurity` 已开启。
 - **`DataScopeInterceptor`**:MyBatis-Plus InnerInterceptor,非管理员用户的 SELECT 自动追加 `org_id = '<dataScope>'`(应用级 SQL 改写,非 PG RLS);管理员(`dataScope=all`)不过滤。
 - **`AuditMetaObjectHandler`**:自动填充审计字段。
+- **`ObjectStorageService`**:统一文件上传(MinIO),`upload(prefix, file)` 返回 objectKey,通用上传端点 `POST /api/v1/files/upload`、下载 `GET /files/download?path=objectKey`。
 
 ## 运行
 
@@ -73,7 +83,7 @@ java -jar qms-bootstrap/target/qms-bootstrap-1.0.0-SNAPSHOT.jar
 - 健康检查:http://localhost:8080/actuator/health
 - Swagger UI:http://localhost:8080/swagger-ui.html
 
-启动后 Flyway 自动校验/执行迁移(38 个迁移, schema `ops`),`DataInitializer` 预置种子数据。运行日志见 `boot.log`(手动重定向)与 `logs/qms.log`。
+启动后 Flyway 自动校验/执行迁移(46 个迁移, schema `ops`),`DataInitializer` 预置种子数据(含各模块权限码 `sys_menu` / `sys_role_button`)。运行日志见 `boot.log`(手动重定向)与 `logs/qms.log`。
 
 ### 种子账号(密码均为 `123456`)
 - 集团管理员:`admin`(`dataScope=all`,跨公司全量)
@@ -97,7 +107,7 @@ mvn -pl qms-service test
 
 ## 前端对接
 
-前端 dev 跑在 `localhost:5173`,Vite 代理 `/api` -> `localhost:8080`(**不剥离前缀,直接透传**)。因此后端 Controller 统一使用 `/api/v1/{module}/...` 形式的 `@RequestMapping`,与前端 `src/api/modules/*.ts` 的路径一致。
+前端 dev 跑在 `localhost:5174`,Vite 代理 `/api` -> `localhost:8080`(**不剥离前缀,直接透传**)。因此后端 Controller 统一使用 `/api/v1/{module}/...` 形式的 `@RequestMapping`,与前端 `src/api/modules/*.ts` 的路径一致。
 
 契约按代码规范:`R<T>={code,msg,data}`,前端 `request.ts` 统一处理 JWT 注入、`X-Trace-Id`、业务码、401 跳登录。
 
