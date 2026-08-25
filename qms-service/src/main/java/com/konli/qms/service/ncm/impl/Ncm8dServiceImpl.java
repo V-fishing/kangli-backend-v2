@@ -546,10 +546,14 @@ public class Ncm8dServiceImpl implements Ncm8dService {
         if (password == null || password.isBlank() || !passwordEncoder.matches(password, signUser.getPasswordHash())) {
             throw new BusinessException(400, "签名口令错误,电子签名校验未通过");
         }
-        // 若审核配置指定了签批人,仅该用户可签(其余人即使口令正确也无权限)
+        // 若审核配置指定了签批人(支持多人,逗号分隔 userId/用户名,OR 语义:任一命中即可签),
+        // 仅被指定的用户可签(其余人即使口令正确也无权限)。
         String signer = approvalConfigService.signerOf(report.getOrgId(), stageCode);
-        if (signer != null && !signer.isBlank() && !signer.trim().equalsIgnoreCase(cur.username().trim())) {
-            throw new BusinessException(400, "本阶段需由【" + signer + "】签批,当前用户无签名权限");
+        if (signer != null && !signer.isBlank()) {
+            boolean hit = isAmongSigners(signer, cur.userId(), cur.username());
+            if (!hit) {
+                throw new BusinessException(400, "本阶段需由指定签批人签批,当前用户无签名权限");
+            }
         }
         String signerName = cur.username();
 
@@ -620,6 +624,23 @@ public class Ncm8dServiceImpl implements Ncm8dService {
             // 非 JSON 内容(如历史纯文本)视为未填写 5Why
         }
         return 0;
+    }
+
+    /**
+     * 判断当前用户是否在被指定的签批人列表中(OR 语义:任一命中即可签)。
+     * signer 字段支持逗号分隔的多人(userId 或 username 均可,兼容历史单 username 数据)。
+     */
+    private boolean isAmongSigners(String signer, String userId, String username) {
+        if (signer == null || signer.isBlank()) return false;
+        String uId = userId == null ? "" : userId.trim();
+        String uName = username == null ? "" : username.trim();
+        for (String s : signer.split(",")) {
+            String t = s.trim();
+            if (t.isEmpty()) continue;
+            if (!uId.isEmpty() && t.equalsIgnoreCase(uId)) return true;
+            if (!uName.isEmpty() && t.equalsIgnoreCase(uName)) return true;
+        }
+        return false;
     }
 
     /** D4 阶段完成时,严重度≥7(severity=高)自动发起 CAPA 并回写关联。 */

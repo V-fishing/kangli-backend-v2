@@ -102,7 +102,7 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
                                 .or().eq(Qms8dApprovalConfig::getOrgId, "ROOT"))
                         .eq(Qms8dApprovalConfig::getNeedApproval, true));
         Set<String> myStages = configs.stream()
-                .filter(c -> userId.equals(c.getSigner()))
+                .filter(c -> isAmongSigners(c.getSigner(), userId, u.username()))
                 .map(Qms8dApprovalConfig::getStageCode)
                 .collect(Collectors.toSet());
         if (!myStages.isEmpty()) {
@@ -261,5 +261,22 @@ public class ApprovalCenterServiceImpl implements ApprovalCenterService {
             // 角色解析失败不阻断审批中心
         }
         return roles;
+    }
+
+    /**
+     * 判断当前用户是否在被指定的签批人列表中(OR 语义:任一命中即可签)。
+     * signer 字段支持逗号分隔的多人(userId 或 username 均可,兼容历史单 username 数据)。
+     */
+    private boolean isAmongSigners(String signer, String userId, String username) {
+        if (signer == null || signer.isBlank()) return false;
+        String uId = userId == null ? "" : userId.trim();
+        String uName = username == null ? "" : username.trim();
+        for (String s : signer.split(",")) {
+            String t = s.trim();
+            if (t.isEmpty()) continue;
+            if (!uId.isEmpty() && t.equalsIgnoreCase(uId)) return true;
+            if (!uName.isEmpty() && t.equalsIgnoreCase(uName)) return true;
+        }
+        return false;
     }
 }
