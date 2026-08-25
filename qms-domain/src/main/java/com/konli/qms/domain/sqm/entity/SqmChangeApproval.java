@@ -48,4 +48,8 @@ public class SqmChangeApproval {
 
     @TableField("esign_id")
     private String esignId;
+
+    /** 指定审批人 user_id 逗号串(OR 语义任一可签);为空=有权限者均可签(兼容历史)。 */
+    @TableField("approver_id")
+    private String approverId;
 }

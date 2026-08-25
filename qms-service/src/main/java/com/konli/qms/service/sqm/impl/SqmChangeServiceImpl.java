@@ -16,7 +16,9 @@ import com.konli.qms.domain.sqm.mapper.SqmChangeOrderMapper;
 import com.konli.qms.domain.uop.entity.SysUser;
 import com.konli.qms.domain.uop.mapper.SysUserMapper;
 import com.konli.qms.service.sqm.SqmAuditService;
+import com.konli.qms.service.sqm.SqmAuditApprovalCfgService;
 import com.konli.qms.service.sqm.SqmChangeStrictInspectService;
+import com.konli.qms.service.sqm.dto.AuditorDef;
 import com.konli.qms.domain.sqm.entity.SqmChangeStrictInspect;
 import com.konli.qms.domain.fia.entity.FiaTask;
 import com.konli.qms.domain.sqm.entity.SqmSupplier;
@@ -37,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -54,6 +57,7 @@ public class SqmChangeServiceImpl implements SqmChangeService {
     private final SysUserMapper sysUserMapper;
     private final PasswordEncoder passwordEncoder;
     private final SqmAuditService sqmAuditService;
+    private final SqmAuditApprovalCfgService approvalCfgService;
     private final JdbcTemplate jdbcTemplate;
     private final SqmChangeStrictInspectService sqmChangeStrictInspectService;
     private final SqmSupplierMapper sqmSupplierMapper;
@@ -235,23 +239,50 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             order.setStrictFlag(true);
         }
         sqmChangeOrderMapper.insert(order);
-        // 预建三方依次签字会签记录:采购(seq=1) -> 研发(seq=2) -> 质量(seq=3,一票否决)
-        String[][] roles = {
-                {"purchase", "采购", "1"},
-                {"rd", "研发", "2"},
-                {"quality", "质量", "3"}};
-        for (String[] role : roles) {
+        // 审批节点从「审核配置(物料变更审核)」动态读取:每个配置项生成一个会签节点,
+        // 审批人(approverId=userIds 逗号串, OR 语义任一可签) + 一票否决(veto)由配置驱动。
+        seedChangeApprovals(order);
+        return order;
+    }
+
+    /** 从「审核配置 › 物料变更审核」读取审批节点并写入 sqm_change_approval。
+     *  配置缺失/无审批人时不预建节点(审批中心可后续按配置补齐)。role 需 ASCII 且带 seq 后缀保证唯一。 */
+    private void seedChangeApprovals(SqmChangeOrder order) {
+        List<AuditorDef> auditors = null;
+        try {
+            auditors = approvalCfgService.resolve("物料变更审核");
+        } catch (Exception e) {
+            log.warn("[SQM] 读取物料变更审核配置失败: {}", e.getMessage());
+        }
+        if (auditors == null || auditors.isEmpty()) return;
+        int seq = 0;
+        for (AuditorDef m : auditors) {
+            String base = (m.getRole() == null || m.getRole().isBlank())
+                    ? asciiRole(m.getLabel(), seq) : m.getRole();
+            String role = base + "_" + seq;
+            String approverId;
+            if (m.getUserIds() != null && !m.getUserIds().isEmpty()) {
+                approverId = String.join(",", m.getUserIds());
+            } else {
+                approverId = m.getUserId();
+            }
             SqmChangeApproval ap = new SqmChangeApproval();
             ap.setOrgId(order.getOrgId());
             ap.setChangeId(order.getId());
-            ap.setApprovalRole(role[0]);
-            ap.setRoleLabel(role[1]);
+            ap.setApprovalRole(role);
+            ap.setRoleLabel(m.getLabel() == null || m.getLabel().isBlank() ? role : m.getLabel());
             ap.setStatus("pending");
-            ap.setHasVeto("quality".equals(role[0]));
-            ap.setSeqOrder(Integer.parseInt(role[2]));
+            ap.setHasVeto(m.isVeto());
+            ap.setSeqOrder(seq);
+            ap.setApproverId((approverId == null || approverId.isBlank()) ? null : approverId);
             sqmChangeApprovalMapper.insert(ap);
+            seq++;
         }
-        return order;
+    }
+
+    private String asciiRole(String label, int seq) {
+        String ascii = (label == null ? "" : label).replaceAll("[^A-Za-z0-9]", "").toLowerCase();
+        return ascii.isEmpty() ? ("node" + seq) : ascii;
     }
 
     @Override
@@ -317,45 +348,51 @@ public class SqmChangeServiceImpl implements SqmChangeService {
         }
         DataScopeGuard.ensureOwner(order.getOrgId());
 
-        // 强制串行:当前必须由 seqOrder 最小且未审批的节点处理(采购 -> 研发 -> 质量)
+        // 任意可签:三方(采购/研发/质量)不限定顺序,任一待审节点可随时签。
+        // 每个角色仅签一次;任一驳回即终止,全部通过即批准。
         List<SqmChangeApproval> all = sqmChangeApprovalMapper.selectList(
                 new LambdaQueryWrapper<SqmChangeApproval>()
                         .eq(SqmChangeApproval::getChangeId, id)
                         .orderByAsc(SqmChangeApproval::getSeqOrder));
-        SqmChangeApproval expected = all.stream()
+        SqmChangeApproval target = all.stream()
                 .filter(a -> "pending".equals(a.getStatus()))
-                .min(Comparator.comparingInt(a -> a.getSeqOrder() == null ? 99 : a.getSeqOrder()))
+                .filter(a -> a.getApprovalRole().equals(approvalRole))
+                .findFirst()
                 .orElse(null);
-        if (expected == null) {
-            throw new BusinessException(400, "无待审批节点");
+        if (target == null) {
+            throw new BusinessException(400, "该角色【" + roleLabel(approvalRole) + "】无待审批节点(已签或不存在)");
         }
-        if (!expected.getApprovalRole().equals(approvalRole)) {
-            throw new BusinessException(400,
-                    "请按 采购→研发→质量 顺序审批:当前应由【" + expected.getRoleLabel() + "】审批");
+        // 指定审批人门禁:节点绑定了 approver_id 时,当前登录人必须命中其一(OR 语义),
+        // 否则越权签字风险;approver_id 为空(历史/未绑定)时退化为「有权限者均可签」以兼容旧数据。
+        if (target.getApproverId() != null && !target.getApproverId().isBlank()) {
+            CompanyContext.CurrentUser cur = CompanyContext.get();
+            String curId = (cur != null && cur.userId() != null) ? cur.userId() : null;
+            boolean allowed = curId != null && Arrays.stream(target.getApproverId().split(","))
+                    .map(String::trim).anyMatch(approverId -> approverId.equals(curId));
+            if (!allowed) {
+                throw new BusinessException(403, "仅指定审批人可对该节点会签,您无权审批此节点");
+            }
         }
 
         // 更新当前会签记录
-        expected.setStatus(approved ? "done" : "rejected");
-        expected.setOperator(currentOperator());
-        expected.setOperateDate(LocalDateTime.now());
-        expected.setOpinion(opinion);
-        sqmChangeApprovalMapper.updateById(expected);
+        target.setStatus(approved ? "done" : "rejected");
+        target.setOperator(currentOperator());
+        target.setOperateDate(LocalDateTime.now());
+        target.setOpinion(opinion);
+        sqmChangeApprovalMapper.updateById(target);
 
-        // 任一驳回 -> 立即终止(质量一票否决在末位自然生效)
+        // 任一驳回 -> 立即终止
         if (!approved) {
             order.setStatus("已驳回");
             if (sqmChangeOrderMapper.updateById(order) == 0) {
                 throw new BusinessException(409, "变更单已被他人修改,请刷新后重试");
             }
-            notifyRejected(order, expected.getRoleLabel());
+            notifyRejected(order, target.getRoleLabel());
             return;
         }
 
         // 全部通过 -> 已批准
-        List<SqmChangeApproval> fresh = sqmChangeApprovalMapper.selectList(
-                new LambdaQueryWrapper<SqmChangeApproval>()
-                        .eq(SqmChangeApproval::getChangeId, id));
-        boolean allDone = fresh.stream().allMatch(a -> "done".equals(a.getStatus()));
+        boolean allDone = all.stream().allMatch(a -> "done".equals(a.getStatus()));
         if (allDone) {
             order.setStatus("已批准");
             if (sqmChangeOrderMapper.updateById(order) == 0) {
@@ -378,13 +415,12 @@ public class SqmChangeServiceImpl implements SqmChangeService {
             } catch (Exception ignored) {}
             notifyApproved(order);
         } else {
-            // 通知下一位审批人
-            SqmChangeApproval next = fresh.stream()
+            // 仍有未签角色 -> 通知所有待签角色(任意顺序, 均可继续签)
+            List<SqmChangeApproval> pending = all.stream()
                     .filter(a -> "pending".equals(a.getStatus()))
-                    .min(Comparator.comparingInt(a -> a.getSeqOrder() == null ? 99 : a.getSeqOrder()))
-                    .orElse(null);
-            if (next != null) {
-                notifyNext(order, next.getApprovalRole());
+                    .toList();
+            for (SqmChangeApproval p : pending) {
+                notifyNext(order, p.getApprovalRole());
             }
         }
     }
@@ -527,17 +563,17 @@ public class SqmChangeServiceImpl implements SqmChangeService {
     private void notifySubmitted(SqmChangeOrder order) {
         String title = "物料变更待审批";
         String content = String.format(
-                "供应商【%s】发起物料变更《%s》(单号 %s,料号 %s)。请按 采购→研发→质量 顺序审批。",
+                "供应商【%s】发起物料变更《%s》(单号 %s,料号 %s)。请采购/研发/质量三方审批(任意顺序)。",
                 supplierName(order.getSupplierId()), order.getTitle(),
                 order.getChangeNo(), order.getPartNo());
         notificationService.notify("sqm", "sqm_change_submitted",
                 title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change", order.getOrgId());
     }
 
-    /** 通知下一位审批人。 */
+    /** 通知待审批人。 */
     private void notifyNext(SqmChangeOrder order, String role) {
         String title = "物料变更待您审批";
-        String content = String.format("《%s》(单号 %s) 前序审批已通过,现轮到【%s】审批。",
+        String content = String.format("《%s》(单号 %s) 尚待【%s】审批(三方任意顺序)。",
                 order.getTitle(), order.getChangeNo(), roleLabel(role));
         notificationService.notifyRoles(List.of(roleCode(role)),
                 title, content, "sqm_change", order.getId(), order.getChangeNo(), "/sqm/change", null, order.getOrgId());

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 开发环境种子数据(幂等):公司 + 用户 + 角色/菜单/按钮/权限分配 + 额外权限按钮。
@@ -40,6 +41,7 @@ public class DataInitializer implements CommandLineRunner {
         seedSqmPerms();
         seedPatlPerms();
         seedTlmPerms();
+        seedBusinessRolePerms();
         // 追溯树演示数据已禁用: 脏演示树改由 rebuild_trace_trees.ps1 按真实流程(MES 对齐)重建。
         // 仅保留带 VEN 编号的样例供应商主数据种子, 供重建脚本按 VEN 对齐供应商。
         seedSqmSampleSupplier();
@@ -319,6 +321,11 @@ public class DataInitializer implements CommandLineRunner {
         // MES 绑定父子级(完工检验「更多▾」内快捷绑定, 直写 critical_material_binding, 即时生效)。
         // 不再挂独立菜单页, 仅保留按钮码供 @PreAuthorize(sqm.binding.*) 使用。
         assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.binding.create", "绑定父子级"));
+        // 补齐 sqm.binding.* 全家族(部分 Controller 仍 @PreAuthorize sqm.binding.delete/edit/list),
+        // 必须先注册进 sys_button, 否则权限配置页无法展示、角色也永远拿不到这些码 → 调用即 403。
+        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.binding.list", "绑定查询"));
+        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.binding.edit", "绑定编辑"));
+        assignRoleButtonByCode("sysadmin", ensureButton(sqmMenu, "sqm.binding.delete", "绑定删除"));
 
         // 物料变更三方审批角色:授予 sqm 菜单 + 变更查询/提交/审批 按钮
         // (采购 purchaser / 研发 rd / 质量 sqe)。每次启动幂等补权,使其可参与依次签字。
@@ -379,6 +386,87 @@ public class DataInitializer implements CommandLineRunner {
         assignRoleButtonByCode("sysadmin", ensureButton(maintMenu, "tlm.maint.record.delete", "保养记录删除"));
         // 报废按钮 1
         assignRoleButtonByCode("sysadmin", ensureButton(toolingMenu, "tlm.scrap.approve", "报废审批"));
+    }
+
+    /**
+     * 业务角色权限补齐:使各业务角色(operator/purchaser/rd/sqe/qmanager/inspector/qe/shiftleader)
+     * 在其本职模块内不再报"无权限"。
+     *
+     * <p>根因:seedRbac 仅给 sysadmin 与分公司 admin/qmanager/rd 全量,其余业务角色几乎零授权;
+     * 而前端 perm.has 控显、后端 @PreAuthorize 控接口,角色缺码即 403。本方法按"角色→本职模块"
+     * 映射,幂等补齐每个角色本职模块的按钮码(+ 对应菜单),仅排除超管专属系统配置码,保证
+     * "勾了菜单/按钮就能用"。跨模块码不授予(最小权限)。</p>
+     */
+    private void seedBusinessRolePerms() {
+        // 角色 -> 本职模块前缀(第一段)。与 seedRbac 角色定位一致。
+        Map<String, List<String>> roleMods = Map.of(
+                "operator",    List.of("approval", "cs", "fia", "my", "ncm", "patl", "qms-mgmt", "spc", "sqm", "system", "tlm"),
+                "purchaser",   List.of("sqm"),
+                "rd",          List.of("ncm", "spc", "sqm", "system"),
+                "sqe",         List.of("approval", "cs", "fia", "my", "qms-mgmt", "sqm", "tlm"),
+                "qmanager",    List.of("ncm", "sqm", "system", "tlm"),
+                "inspector",   List.of("ncm"),
+                "qe",          List.of("spc", "ncm", "sqm"),
+                "shiftleader", List.of("fia", "tlm"));
+        // 超管专属系统配置码(任何业务角色都不授予)
+        Set<String> btnDeny = Set.of(
+                "system.menu.create", "system.menu.delete", "system.menu.list",
+                "system.role.assign", "system.role.create", "system.role.delete", "system.role.list",
+                "system.delegation.manage",
+                "system.notify.center", "system.notify.config",
+                "system.audit-config", "system.audit.list",
+                "system.org.create", "system.org.delete",
+                "system.user.create", "system.user.delete",
+                "approval.center.pending", "my.task.list");
+        Set<String> denyMenus = Set.of("system.menu");
+        // 收集每个角色需要授予的按钮 id(本职模块前缀 & 非 deny)
+        Map<String, List<String>> toGrant = new java.util.HashMap<>();
+        List<Map<String, Object>> allBtns = jdbcTemplate.queryForList(
+                "SELECT id, btn_code, menu_id FROM ops.sys_button WHERE btn_code IS NOT NULL AND btn_code <> ''");
+        for (Map<String, Object> row : allBtns) {
+            String code = (String) row.get("btn_code");
+            if (btnDeny.contains(code)) continue;
+            String mod = code.contains(".") ? code.substring(0, code.indexOf('.')) : code;
+            // 注意: Postgres 驱动把 uuid 列返回为 java.util.UUID, 必须 toString() 成标准 UUID 字符串,
+            // 否则传入 ?::uuid 时 JDBC 拿到 UUID 对象会 ClassCastException。
+            String btnId = row.get("id") == null ? null : row.get("id").toString();
+            for (var en : roleMods.entrySet()) {
+                if (en.getValue().contains(mod)) {
+                    toGrant.computeIfAbsent(en.getKey(), k -> new java.util.ArrayList<>())
+                            .add(btnId);
+                }
+            }
+        }
+        for (var en : toGrant.entrySet()) {
+            for (String btnId : en.getValue()) {
+                assignRoleButtonByCode(en.getKey(), btnId);
+            }
+        }
+        // 同步授予这些按钮所属菜单(排除 system.menu),使页面可见且 grantMenuListCodes 行为一致。
+        for (String roleCode : roleMods.keySet()) {
+            List<String> menuIds = jdbcTemplate.queryForList(
+                    "SELECT DISTINCT b.menu_id FROM ops.sys_role_button rb " +
+                    "JOIN ops.sys_role r ON r.id = rb.role_id " +
+                    "JOIN ops.sys_button b ON b.id = rb.button_id " +
+                    "WHERE r.role_code = ? AND b.menu_id IS NOT NULL", String.class, roleCode);
+            for (String mid : menuIds) {
+                String menuCode = queryId("SELECT menu_code FROM ops.sys_menu WHERE id=?::uuid", mid);
+                if (menuCode != null && denyMenus.contains(menuCode)) continue;
+                assignRoleMenuByCode(roleCode, mid);
+            }
+        }
+        // 回收: 业务角色不应持有超管专属系统配置码(历史种子/手动授权可能残留)。
+        // sysadmin 与分公司 admin 不在此列, 保留其系统管理权限。
+        for (String roleCode : roleMods.keySet()) {
+            for (String deny : btnDeny) {
+                String btnId = queryId("SELECT id FROM ops.sys_button WHERE btn_code=?", deny);
+                if (btnId == null) continue;
+                jdbcTemplate.update(
+                        "DELETE FROM ops.sys_role_button rb USING ops.sys_role r " +
+                        "WHERE rb.role_id = r.id AND rb.button_id = ?::uuid AND r.role_code = ?",
+                        btnId, roleCode);
+            }
+        }
     }
 
     // ==================== SQM 来料追溯种子(4.4 全链路追溯树) ====================
