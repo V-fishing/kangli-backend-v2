@@ -89,14 +89,20 @@ public class SpcAlarmController {
         return R.ok((Qms8dReport) ncmDefectRecordService.launch8dFromDefect(def.getId(), new DefectLaunchRequest()));
     }
 
-    /** 查询该 SPC 告警已关联的 8D 报告(未发起则返回 null),用于详情弹窗跳转。 */
+    /** 查询该 SPC 告警已关联的 8D 报告(未发起则返回 null),用于详情弹窗跳转。
+     *  8D 的 sourceRefId 指向缺陷记录(而非告警),故先按告警 code 找到 SPC 来源缺陷记录,再反查 8D。 */
     @GetMapping("/{id}/8d")
     @PreAuthorize("hasAuthority('spc.alarm.list')")
     public R<Qms8dReport> linked8d(@PathVariable String id) {
         SpcAlarm alarm = spcAlarmService.list().stream().filter(a -> a.getId().equals(id)).findFirst().orElse(null);
         if (alarm == null) return R.fail(404, "告警不存在");
-        Qms8dReport linked = ncm8dService.findBySourceRef("SPC报警",
-            alarm.getCode() != null ? alarm.getCode() : alarm.getId().replace("-", ""));
-        return R.ok(linked);
+        String alarmCode = alarm.getCode() != null ? alarm.getCode() : alarm.getId();
+        NcmDefectRecord def = ncmDefectRecordService.list().stream()
+            .filter(d -> "SPC报警".equals(d.getSource())
+                && d.getRemark() != null
+                && d.getRemark().contains(alarmCode))
+            .findFirst().orElse(null);
+        if (def == null) return R.ok(null);
+        return R.ok(ncm8dService.findBySourceRef("不良记录", def.getId()));
     }
 }

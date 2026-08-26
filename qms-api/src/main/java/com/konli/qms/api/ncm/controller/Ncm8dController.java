@@ -115,9 +115,11 @@ public class Ncm8dController {
         return R.ok();
     }
 
-    /** 8D 阶段审核配置:读取当前公司的“哪些阶段需审核人签名及指定签批人”。 */
+    /** 8D 阶段审核配置:读取当前公司的“哪些阶段需审核人签名及指定签批人”。
+     *  读接口放宽为 ncm.8d.list:签批人/推进人打开 8D 详情需读取配置以渲染签批表单,
+     *  仅配置管理员(system.audit-config)可写。 */
     @GetMapping("/approval-config")
-    @PreAuthorize("hasAuthority('system.audit-config')")
+    @PreAuthorize("hasAuthority('ncm.8d.list')")
     public R<List<Qms8dApprovalConfig>> approvalConfig() {
         return R.ok(ncm8dApprovalConfigService.getConfig());
     }

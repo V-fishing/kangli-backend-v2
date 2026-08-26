@@ -723,10 +723,13 @@ public class Ncm8dServiceImpl implements Ncm8dService {
     @Override
     public Qms8dReport findBySourceRef(String source, String sourceRefId) {
         if (source == null || source.isBlank() || sourceRefId == null || sourceRefId.isBlank()) return null;
+        // source_ref_id 可能存无连字符 UUID(create 时 ASSIGN_UUID 生成 32 位)或带连字符(从 uuid 列读回),
+        // 用 REPLACE 去连字符做格式无关匹配,避免同一条记录因格式差异查不到。
+        String normalized = sourceRefId.replace("-", "");
         return qms8dReportMapper.selectOne(
             new LambdaQueryWrapper<Qms8dReport>()
                 .eq(Qms8dReport::getSource, source)
-                .eq(Qms8dReport::getSourceRefId, sourceRefId)
+                .apply("REPLACE(source_ref_id, '-', '') = {0}", normalized)
                 .orderByDesc(Qms8dReport::getCreatedAt)
                 .last("LIMIT 1"));
     }
