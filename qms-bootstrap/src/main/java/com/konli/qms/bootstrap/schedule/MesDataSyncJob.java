@@ -1,13 +1,18 @@
 package com.konli.qms.bootstrap.schedule;
 
+import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * MES → QMS 主数据同步定时任务。
+ * MES → QMS 主数据同步任务(每日 02:00 定时 + 应用启动触发)。
  *
  * <p>把 MES 落地宽表 {@code qms.material_inspection} 中的真实供应商与来料不良记录,
  * 同步进 QMS 自有主数据/业务表, 供「供应商档案」「来料异常」「来料批次」页面展示:</p>
@@ -30,13 +35,15 @@ import org.springframework.stereotype.Component;
 public class MesDataSyncJob {
 
     private final JdbcTemplate jdbcTemplate;
+    private final Environment environment;
 
     /** MES 落地宽表所在 schema(与 qms.mes.schema 配置保持一致, 禁止硬编码)。 */
     @Value("${qms.mes.schema:qms}")
     private String mesSchema;
 
-    public MesDataSyncJob(JdbcTemplate jdbcTemplate) {
+    public MesDataSyncJob(JdbcTemplate jdbcTemplate, Environment environment) {
         this.jdbcTemplate = jdbcTemplate;
+        this.environment = environment;
     }
 
     /** 每日 02:00 同步(早于 RepeatEscalationJob 的 03:00, 保证升级扫描前数据已就绪)。 */
@@ -51,6 +58,15 @@ public class MesDataSyncJob {
         } catch (Exception e) {
             log.error("MES 同步任务异常(不阻断): {}", e.getMessage(), e);
         }
+    }
+
+    /** 应用启动即同步一次(除每日 02:00 定时外), 保证 pull 后启动即可见供应商/来料异常/来料批次数据。异步执行, 不阻塞启动。 */
+    @EventListener(ApplicationReadyEvent.class)
+    public void runOnStartup() {
+        if (environment.acceptsProfiles(Profiles.of("test"))) {
+            return;
+        }
+        CompletableFuture.runAsync(this::syncAll);
     }
 
     /** 步骤 1: MES 供应商去重 → ops.sqm_supplier。返回新增条数。 */
