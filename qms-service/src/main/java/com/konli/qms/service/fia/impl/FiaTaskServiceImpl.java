@@ -57,6 +57,7 @@ import com.konli.qms.service.spc.SpcSubgroupService;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -116,6 +117,10 @@ public class FiaTaskServiceImpl implements FiaTaskService {
     private final NotificationService notificationService;
     private final TlmToolingMapper tlmToolingMapper;
     private final SpcAlarmMapper spcAlarmMapper;
+
+    /** MES 落地宽表所在 schema(与 QMS 自身的 ops 不同);由 qms.mes.schema 配置,禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}")
+    private String mesSchema;
 
     @Override
         public List<FiaTask> list(String orgId, String status, String woNo, String productName, String partNo, String procName, String triggerType) {
@@ -409,7 +414,7 @@ public class FiaTaskServiceImpl implements FiaTaskService {
      */
     private SqmSupplier resolveSupplierByMaterialCode(String materialCode) {
         if (materialCode == null || materialCode.isBlank()) return null;
-        String sql = "SELECT s.id, s.org_id, s.name FROM qms.material_inspection mi "
+        String sql = "SELECT s.id, s.org_id, s.name FROM " + mesSchema + ".material_inspection mi "
                 + "JOIN ops.sqm_supplier s ON s.ven_code = mi.supplier_code "
                 + "WHERE mi.is_deleted='0' AND mi.material_code = ? LIMIT 1";
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, materialCode);
@@ -440,13 +445,13 @@ public class FiaTaskServiceImpl implements FiaTaskService {
         // 三源表为 MES 同步的全局追溯数据,按 material_code 唯一关联,不按 org_id 过滤(与 SqmTraceServiceImpl 源表查询一致)
 
         // 1) 来料 material_inspection：material_code + material_name
-        String sqlIncoming = "SELECT mi.material_name AS name FROM qms.material_inspection mi"
+        String sqlIncoming = "SELECT mi.material_name AS name FROM " + mesSchema + ".material_inspection mi"
                 + " WHERE mi.is_deleted='0' AND mi.material_code = ?";
         // 2) 成品/半成品 finished_goods_inspection：material_code + product_name + category
-        String sqlFinished = "SELECT fi.product_name AS name, fi.category AS cat FROM qms.finished_goods_inspection fi"
+        String sqlFinished = "SELECT fi.product_name AS name, fi.category AS cat FROM " + mesSchema + ".finished_goods_inspection fi"
                 + " WHERE fi.is_deleted='0' AND fi.category IN ('成品','半成品') AND fi.material_code = ?";
         // 3) 关键件 critical_material_binding：material_code（取关联产品名，无独立名称列时回退料号）
-        String sqlCritical = "SELECT cb.product_barcode AS name FROM qms.critical_material_binding cb"
+        String sqlCritical = "SELECT cb.product_barcode AS name FROM " + mesSchema + ".critical_material_binding cb"
                 + " WHERE cb.is_deleted='0' AND cb.material_code = ?";
 
         Object[] argsIn = new Object[]{materialCode};

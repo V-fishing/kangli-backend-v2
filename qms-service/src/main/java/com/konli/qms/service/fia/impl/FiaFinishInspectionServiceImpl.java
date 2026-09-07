@@ -11,6 +11,7 @@ import com.konli.qms.service.fia.dto.EligibleFirstArticleVO;
 import com.konli.qms.service.fia.dto.FinishInspectionVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -33,7 +34,9 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
 
     private final JdbcTemplate jdbcTemplate;
 
-    private static final String TABLE = "qms.finished_goods_inspection";
+    /** MES 落地宽表全名(schema 由 qms.mes.schema 配置, 默认 qms),禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}.finished_goods_inspection")
+    private String table;
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
@@ -80,7 +83,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
     @Override
     public List<String> listMesProductionOrders(String orgId, String keyword) {
         StringBuilder sql = new StringBuilder(
-                "SELECT DISTINCT production_order_no FROM " + TABLE
+                "SELECT DISTINCT production_order_no FROM " + table
                         + " WHERE is_deleted = '0' AND production_order_no IS NOT NULL AND production_order_no <> ''");
         List<Object> args = new ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
@@ -125,9 +128,9 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
         int offset = (page - 1) * size;
 
         Long total = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + where, Long.class, args.toArray());
+                "SELECT count(*) FROM " + table + where, Long.class, args.toArray());
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM " + TABLE + where + " ORDER BY created_at DESC NULLS LAST LIMIT ? OFFSET ?",
+                "SELECT * FROM " + table + where + " ORDER BY created_at DESC NULLS LAST LIMIT ? OFFSET ?",
                 append(args, size, offset).toArray());
 
         List<FinishInspectionVO> list = new ArrayList<>();
@@ -142,7 +145,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
     @Override
     public FinishInspectionVO get(String id) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM " + TABLE + " WHERE report_no = ? AND is_deleted = '0' LIMIT 1", id);
+                "SELECT * FROM " + table + " WHERE report_no = ? AND is_deleted = '0' LIMIT 1", id);
         if (rows.isEmpty()) {
             throw new BusinessException(404, "完工检验记录不存在: " + id);
         }
@@ -168,7 +171,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
         String reportNo = genReportNo(req.getProductionOrderNo());
 
         jdbcTemplate.update(
-                "INSERT INTO " + TABLE
+                "INSERT INTO " + table
                         + " (report_no, production_order_no, material_code, product_name, model_spec,"
                         + "  prod_batch_or_sn, production_date, category, is_urgent, is_entrusted,"
                         + "  plant_code, plant_name, unit, is_valid, is_deleted, created_by, updated_by, created_at, updated_at)"
@@ -198,7 +201,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
     public void updateInspection(String id, FinishInspectionUpdateRequest req) {
         FinishInspectionVO exist = get(id);
         jdbcTemplate.update(
-                "UPDATE " + TABLE
+                "UPDATE " + table
                         + " SET inspector_name = COALESCE(?, inspector_name),"
                         + "  inspection_result = COALESCE(?, inspection_result),"
                         + "  inspection_request_no = COALESCE(?, inspection_request_no),"
@@ -224,7 +227,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
     public void updateSignoff(String id, FinishInspectionUpdateRequest req) {
         get(id); // 存在性校验
         jdbcTemplate.update(
-                "UPDATE " + TABLE
+                "UPDATE " + table
                         + " SET submitted_qty = ?, inspected_qty = ?, qualified_qty = ?, unqualified_qty = ?, unit = ?,"
                         + "  qc_review = COALESCE(?, qc_review), qc_reviewer = ?, qc_review_time = ?,"
                         + "  mgr_approval = COALESCE(?, mgr_approval), mgr_representative = ?,"
@@ -252,7 +255,7 @@ public class FiaFinishInspectionServiceImpl implements FiaFinishInspectionServic
     public void softDelete(String id) {
         FinishInspectionVO exist = get(id);
         jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
+                "UPDATE " + table + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
                         + " WHERE report_no = ? AND is_deleted = '0'",
                 currentUserId(), id);
         log.info("[FINISH] 软删完工检验单 production_order_no={}", exist.getProductionOrderNo());

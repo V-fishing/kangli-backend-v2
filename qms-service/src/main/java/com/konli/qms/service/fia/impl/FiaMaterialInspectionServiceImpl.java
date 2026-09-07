@@ -10,6 +10,7 @@ import com.konli.qms.service.fia.dto.MaterialInspectionUpdateRequest;
 import com.konli.qms.service.fia.dto.MaterialInspectionVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -32,7 +33,9 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
 
     private final JdbcTemplate jdbcTemplate;
 
-    private static final String TABLE = "qms.material_inspection";
+    /** MES 落地宽表全名(schema 由 qms.mes.schema 配置, 默认 qms),禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}.material_inspection")
+    private String table;
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
@@ -57,7 +60,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                     "SELECT material_name, spec_model, unit, supplier_name, supplier_code"
-                            + " FROM " + TABLE
+                            + " FROM " + table
                             + " WHERE is_deleted = '0' AND material_code = ?"
                             + " ORDER BY updated_at DESC NULLS LAST LIMIT 1",
                     partNo);
@@ -87,7 +90,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
     @Override
     public List<String> listMesMaterialCodes(String orgId, String keyword) {
         StringBuilder sql = new StringBuilder(
-                "SELECT DISTINCT material_code FROM " + TABLE
+                "SELECT DISTINCT material_code FROM " + table
                         + " WHERE is_deleted = '0' AND material_code IS NOT NULL AND material_code <> ''");
         List<Object> args = new ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
@@ -140,9 +143,9 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
         int offset = (page - 1) * size;
 
         Long total = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + where, Long.class, args.toArray());
+                "SELECT count(*) FROM " + table + where, Long.class, args.toArray());
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM " + TABLE + where + " ORDER BY created_at DESC NULLS LAST LIMIT ? OFFSET ?",
+                "SELECT * FROM " + table + where + " ORDER BY created_at DESC NULLS LAST LIMIT ? OFFSET ?",
                 append(args, size, offset).toArray());
 
         List<MaterialInspectionVO> list = new ArrayList<>();
@@ -157,7 +160,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
     @Override
     public MaterialInspectionVO get(String id) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM " + TABLE + " WHERE record_no = ? AND is_deleted = '0' LIMIT 1", id);
+                "SELECT * FROM " + table + " WHERE record_no = ? AND is_deleted = '0' LIMIT 1", id);
         if (rows.isEmpty()) {
             throw new BusinessException(404, "物料检验记录不存在: " + id);
         }
@@ -179,7 +182,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
         String recordNo = genRecordNo(req.getMaterialCode());
 
         jdbcTemplate.update(
-                "INSERT INTO " + TABLE
+                "INSERT INTO " + table
                         + " (record_no, material_code, material_name, spec_model, material_batch_no,"
                         + "  material_barcode, supplier_name, supplier_code, material_category,"
                         + "  inspection_category, unit, is_customer_supplied, is_urgent,"
@@ -222,7 +225,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
     public void updateInspection(String id, MaterialInspectionUpdateRequest req) {
         MaterialInspectionVO exist = get(id);
         jdbcTemplate.update(
-                "UPDATE " + TABLE
+                "UPDATE " + table
                         + " SET inspector = COALESCE(?, inspector),"
                         + "  inspection_result = COALESCE(?, inspection_result),"
                         + "  inspection_request_no = COALESCE(?, inspection_request_no),"
@@ -266,7 +269,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
     public void updateSignoff(String id, MaterialInspectionUpdateRequest req) {
         get(id); // 存在性校验
         jdbcTemplate.update(
-                "UPDATE " + TABLE
+                "UPDATE " + table
                         + " SET submitted_qty = ?, qualified_qty = ?, unqualified_qty = ?, loss_qty = ?, unit = ?,"
                         + "  reviewer = COALESCE(?, reviewer), review_date = COALESCE(?, review_date),"
                         + "  unqualified_review = COALESCE(?, unqualified_review),"
@@ -304,7 +307,7 @@ public class FiaMaterialInspectionServiceImpl implements FiaMaterialInspectionSe
     public void softDelete(String id) {
         MaterialInspectionVO exist = get(id);
         jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
+                "UPDATE " + table + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
                         + " WHERE record_no = ? AND is_deleted = '0'",
                 currentUserId(), id);
         log.info("[MATERIAL] 软删物料检验单 material_code={}", exist.getMaterialCode());

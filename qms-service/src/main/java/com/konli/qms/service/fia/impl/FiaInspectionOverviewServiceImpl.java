@@ -5,6 +5,7 @@ import com.konli.qms.service.fia.FiaInspectionOverviewService;
 import com.konli.qms.service.fia.dto.MergedInspectionVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -24,8 +25,11 @@ public class FiaInspectionOverviewServiceImpl implements FiaInspectionOverviewSe
 
     private final JdbcTemplate jdbcTemplate;
 
-    private static final String FINISH_TABLE = "qms.finished_goods_inspection";
-    private static final String MATERIAL_TABLE = "qms.material_inspection";
+    /** MES 落地宽表全名(schema 由 qms.mes.schema 配置, 默认 qms),禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}.finished_goods_inspection")
+    private String finishTable;
+    @Value("${qms.mes.schema:qms}.material_inspection")
+    private String materialTable;
 
     @Override
     public PageResult<MergedInspectionVO> page(int page, int size, String materialCode, String keyword) {
@@ -58,12 +62,12 @@ public class FiaInspectionOverviewServiceImpl implements FiaInspectionOverviewSe
                 + " production_order_no, material_code, product_name, NULL AS material_name,"
                 + " NULL AS supplier_name, NULL AS material_batch_no, category, inspection_result,"
                 + " signature_user, qc_reviewer, NULL AS reviewer, inspected_qty, created_at"
-                + " FROM " + FINISH_TABLE + " WHERE " + finishWhere;
+                + " FROM " + finishTable + " WHERE " + finishWhere;
         String materialSql = "SELECT 'material' AS src_type, record_no AS row_id, NULL AS report_no, record_no,"
                 + " NULL AS production_order_no, material_code, NULL AS product_name, material_name,"
                 + " supplier_name, material_batch_no, NULL AS category, inspection_result,"
                 + " signature_user, NULL AS qc_reviewer, reviewer, submitted_qty, created_at"
-                + " FROM " + MATERIAL_TABLE + " WHERE " + materialWhere;
+                + " FROM " + materialTable + " WHERE " + materialWhere;
         String merged = "SELECT * FROM (" + finishSql + " UNION ALL " + materialSql + ") m";
 
         Long total = jdbcTemplate.queryForObject(

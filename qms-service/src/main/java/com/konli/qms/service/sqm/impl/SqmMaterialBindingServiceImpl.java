@@ -7,6 +7,7 @@ import com.konli.qms.service.sqm.SqmMaterialBindingService;
 import com.konli.qms.service.sqm.dto.MaterialBindingCreateRequest;
 import com.konli.qms.service.sqm.dto.MaterialBindingUpdateRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,7 +26,13 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService {
 
-    private static final String TABLE = "qms.critical_material_binding";
+    /** MES 落地宽表所在 schema(与 QMS 自身的 ops 不同);由 qms.mes.schema 配置,禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}")
+    private String mesSchema;
+
+    /** MES 落地宽表全名(schema 由 qms.mes.schema 配置, 默认 qms),禁止硬编码。 */
+    @Value("${qms.mes.schema:qms}.critical_material_binding")
+    private String table;
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -62,9 +69,9 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
         }
 
         Long total = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM " + TABLE + where, Long.class, args.toArray());
+                "SELECT COUNT(*) FROM " + table + where, Long.class, args.toArray());
         int offset = (page - 1) * size;
-        String dataSql = "SELECT * FROM " + TABLE + where
+        String dataSql = "SELECT * FROM " + table + where
                 + " ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST"
                 + " LIMIT ? OFFSET ?";
         List<Object> dataArgs = new ArrayList<>(args);
@@ -100,7 +107,8 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
         List<Map<String, Object>> out = new ArrayList<>();
         StringBuilder sql = new StringBuilder(
                 "SELECT prod_batch_or_sn AS barcode, material_code AS code, product_name AS name,"
-                        + " production_order_no AS work_order_no, category FROM qms.finished_goods_inspection WHERE 1=1");
+                        + " production_order_no AS work_order_no, category FROM " + mesSchema
+                        + ".finished_goods_inspection WHERE 1=1");
         List<Object> args = new ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
             sql.append(" AND (prod_batch_or_sn ILIKE ? OR material_code ILIKE ? OR product_name ILIKE ?)");
@@ -131,7 +139,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
         List<Map<String, Object>> out = new ArrayList<>();
         StringBuilder sql = new StringBuilder(
                 "SELECT material_barcode AS barcode, material_code AS code, material_name AS name,"
-                        + " spec_model AS spec FROM qms.material_inspection WHERE 1=1");
+                        + " spec_model AS spec FROM " + mesSchema + ".material_inspection WHERE 1=1");
         List<Object> args = new ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
             sql.append(" AND (material_barcode ILIKE ? OR material_code ILIKE ? OR material_name ILIKE ?)");
@@ -171,7 +179,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
         }
         // 幂等: 同定位键已存在(未软删)则不允许重复插入
         Integer cnt = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM " + TABLE
+                "SELECT COUNT(*) FROM " + table
                         + " WHERE product_barcode = ? AND material_barcode = ? AND category = ? AND is_deleted = '0'",
                 Integer.class, req.getProductBarcode(), req.getMaterialBarcode(), req.getCategory());
         if (cnt != null && cnt > 0) {
@@ -195,7 +203,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
                 trimToNull(req.getRemark()), trimToNull(req.getPlantCode()), trimToNull(req.getPlantName()),
                 user, user
         };
-        jdbcTemplate.update("INSERT INTO " + TABLE + " (" + cols + ") VALUES (" + vals + ")", params);
+        jdbcTemplate.update("INSERT INTO " + table + " (" + cols + ") VALUES (" + vals + ")", params);
         return fetchRow(req.getProductBarcode(), req.getMaterialBarcode(), req.getCategory());
     }
 
@@ -232,7 +240,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
         params.add(productBarcode);
         params.add(materialBarcode);
         params.add(category);
-        jdbcTemplate.update("UPDATE " + TABLE + " SET " + String.join(", ", sets)
+        jdbcTemplate.update("UPDATE " + table + " SET " + String.join(", ", sets)
                 + " WHERE product_barcode = ? AND material_barcode = ? AND category = ? AND is_deleted = '0'",
                 params.toArray());
         return fetchRow(productBarcode, materialBarcode,
@@ -243,7 +251,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
     @Transactional
     public void deactivate(String productBarcode, String materialBarcode, String category) {
         int n = jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET is_active = '0', deactivate_operator = ?, deactivate_time = now(),"
+                "UPDATE " + table + " SET is_active = '0', deactivate_operator = ?, deactivate_time = now(),"
                         + " updated_by = ?, updated_at = now()"
                         + " WHERE product_barcode = ? AND material_barcode = ? AND category = ? AND is_deleted = '0'",
                 currentUserId(), currentUserId(), productBarcode, materialBarcode, category);
@@ -256,7 +264,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
     @Transactional
     public void delete(String productBarcode, String materialBarcode, String category) {
         int n = jdbcTemplate.update(
-                "UPDATE " + TABLE + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
+                "UPDATE " + table + " SET is_deleted = '1', updated_by = ?, updated_at = now()"
                         + " WHERE product_barcode = ? AND material_barcode = ? AND category = ? AND is_deleted = '0'",
                 currentUserId(), productBarcode, materialBarcode, category);
         if (n == 0) {
@@ -266,7 +274,7 @@ public class SqmMaterialBindingServiceImpl implements SqmMaterialBindingService 
 
     private Map<String, Object> fetchRow(String productBarcode, String materialBarcode, String category) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT * FROM " + TABLE
+                "SELECT * FROM " + table
                         + " WHERE product_barcode = ? AND material_barcode = ? AND category = ? AND is_deleted = '0'",
                 productBarcode, materialBarcode, category);
         return rows.isEmpty() ? null : rows.get(0);
