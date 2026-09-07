@@ -1,5 +1,7 @@
 package com.konli.qms.service.sqm;
 
+import com.konli.qms.common.api.PageResult;
+
 import java.util.List;
 import java.util.Map;
 
@@ -35,4 +37,18 @@ public interface SqmAnalysisService {
 
     /** 交付率×合格率散点:返回 [{supplierId,supplierName,level,deliveryRate,incomingPassRate,lotCount}] */
     List<Map<String, Object>> deliveryVsPass(String level, String keyword);
+
+    // ==================== 物料看板:三聚合 ====================
+
+    /** 物料合格率分布:五档分桶,keyOnly=true 仅关键物料;返回 [{bucket,label,count,materials:[{partNo,partName,passRate,totalCount,failCount}]}] */
+    List<Map<String, Object>> materialPassRateDist(boolean keyOnly, String startYm, String endYm);
+
+    /** 重点物料合格率趋势:按月多线,keyOnly=true 仅关键物料,partNos 追加对比;返回 [{period,partNo,partName,passRate}] */
+    List<Map<String, Object>> materialPassRateTrend(boolean keyOnly, List<String> partNos, String startYm, String endYm);
+
+    /** 物料劣化预警:对比最新月与上一月合格率,跌破95%警戒线或环比降幅>=2pp 预警、>=5pp 严重;分页返回 PageResult<{partNo,partName,prevRate,curRate,dropPp,level,reason}>,按严重优先+降幅降序 */
+    PageResult<Map<String, Object>> materialDeterioration(boolean keyOnly, String startYm, String endYm, int page, int size);
+
+    /** 物料搜索:按 partNo/partName 模糊匹配去重,返回 [{partNo, partName}],供看板追加对比下拉远程搜索 */
+    List<Map<String, Object>> materialSearch(String keyword, int limit);
 }

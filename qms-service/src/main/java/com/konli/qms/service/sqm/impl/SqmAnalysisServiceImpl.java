@@ -1,5 +1,6 @@
 package com.konli.qms.service.sqm.impl;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.exception.BusinessException;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.service.sqm.SqmAnalysisService;
@@ -318,35 +319,54 @@ public class SqmAnalysisServiceImpl implements SqmAnalysisService {
         }
         if (targets.isEmpty()) return new ArrayList<>();
 
-        // 取每个目标供应商每月绩效合格率
+        // 一次 SQL 批量查目标供应商在月份范围内的实时合格率(替代逐供应商 calcRealtimePassRate)
+        // 以实时聚合(来料表)为准:绩效表可能在无来料月份生成 rate(历史遗留/生成逻辑问题),不可作为"有来料"依据
+        Map<String, Map<String, Object>> realtimeBySupplier = new LinkedHashMap<>();
+        StringBuilder rs = new StringBuilder();
+        rs.append("SELECT supplier_id, to_char(incoming_date,'YYYY-MM') AS ym, ");
+        rs.append("COUNT(*) AS total, COUNT(CASE WHEN iqc_pass = true THEN 1 END) AS pass ");
+        rs.append("FROM ops.sqm_incoming_lot WHERE is_deleted = false AND supplier_id IN (");
+        int idx = 0;
+        for (String sid : targets) {
+            if (idx++ > 0) rs.append(",");
+            rs.append("'").append(sid.replace("'", "''")).append("'");
+        }
+        rs.append(") AND to_char(incoming_date,'YYYY-MM') >= '").append(from).append("' ");
+        rs.append("AND to_char(incoming_date,'YYYY-MM') <= '").append(to).append("' ");
+        rs.append(orgFilter()).append(" GROUP BY supplier_id, ym");
+        for (Map<String, Object> r : jdbcTemplate.queryForList(rs.toString())) {
+            String sid = String.valueOf(r.get("supplier_id"));
+            String ym = String.valueOf(r.get("ym"));
+            long total = toLong(r.get("total"));
+            long pass = toLong(r.get("pass"));
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("rate", passRate(pass, total));
+            m.put("total", total);
+            realtimeBySupplier.computeIfAbsent(sid, k -> new LinkedHashMap<>()).put(ym, m);
+        }
+
+        // 组装:每个目标供应商每月绩效合格率,缺月用实时聚合兜底
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String sid : targets) {
             Map<String, Object> sup = suppliers.stream()
                     .filter(s -> String.valueOf(s.get("id")).equals(sid)).findFirst().orElse(null);
             if (sup == null) continue;
             String sname = String.valueOf(sup.get("name"));
-            // 绩效期
-            StringBuilder ps = new StringBuilder();
-            ps.append("SELECT period, incoming_pass_rate FROM ops.sqm_supplier_performance ");
-            ps.append("WHERE supplier_id = '").append(sid).append("' ");
-            ps.append("AND period >= '").append(from).append("' AND period <= '").append(to).append("' ");
-            ps.append(orgFilter("sqm_supplier_performance")).append(" ORDER BY period ASC");
-            Map<String, BigDecimal> perfMap = new LinkedHashMap<>();
-            for (Map<String, Object> r : jdbcTemplate.queryForList(ps.toString())) {
-                perfMap.put(String.valueOf(r.get("period")), toBigDecimal(r.get("incoming_pass_rate")));
-            }
-            // 遍历月份区间
+            Map<String, Object> realtimeMap = realtimeBySupplier.getOrDefault(sid, new LinkedHashMap<>());
+            // 遍历月份区间:只返回有实际来料的月份(实时聚合来料表有记录),缺月跳过
+            // 避免前端把 null 当 0% 渲染,也避免绩效表在无来料月份生成的 rate 造成假 0%
             YearMonth cursor = YearMonth.parse(from);
             YearMonth end = YearMonth.parse(to);
             while (!cursor.isAfter(end)) {
                 String ym = cursor.toString();
-                BigDecimal rate = perfMap.get(ym);
-                if (rate == null) rate = calcRealtimePassRate(sid, ym); // 兜底
+                Object realtime = realtimeMap.get(ym);
+                if (realtime == null) { cursor = cursor.plusMonths(1); continue; } // 该月无实际来料
                 Map<String, Object> point = new LinkedHashMap<>();
                 point.put("period", ym);
                 point.put("supplierId", sid);
                 point.put("supplierName", sname);
-                point.put("passRate", rate);
+                point.put("passRate", ((Map<?, ?>) realtime).get("rate"));
+                point.put("total", ((Map<?, ?>) realtime).get("total"));
                 rows.add(point);
                 cursor = cursor.plusMonths(1);
             }
@@ -472,7 +492,267 @@ public class SqmAnalysisServiceImpl implements SqmAnalysisService {
         return result;
     }
 
+    // ==================== 物料看板:三聚合 ====================
+
+    @Override
+    public List<Map<String, Object>> materialPassRateDist(boolean keyOnly, String startYm, String endYm) {
+        StringBuilder sql = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+        sql.append("SELECT part_no AS part_no, part_name AS part_name, ");
+        sql.append("COUNT(*) AS total, COUNT(CASE WHEN iqc_pass = true THEN 1 END) AS pass ");
+        sql.append("FROM ops.sqm_incoming_lot WHERE is_deleted = false ");
+        if (keyOnly) {
+            sql.append("AND is_key_part = true ");
+        }
+        appendYmFilter(sql, args, startYm, endYm);
+        sql.append(orgFilter());
+        sql.append("GROUP BY part_no, part_name");
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql.toString(), args.toArray());
+
+        Map<String, List<Map<String, Object>>> bucketMaterials = new LinkedHashMap<>();
+        for (String[] b : PASS_BUCKETS) bucketMaterials.put(b[0], new ArrayList<>());
+        for (Map<String, Object> r : rows) {
+            long total = toLong(r.get("total"));
+            long pass = toLong(r.get("pass"));
+            BigDecimal rate = passRate(pass, total);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("partNo", r.get("part_no"));
+            item.put("partName", r.get("part_name"));
+            item.put("passRate", rate);
+            item.put("totalCount", total);
+            item.put("failCount", total - pass);
+            bucketMaterials.get(bucketOf(rate)).add(item);
+        }
+        List<Map<String, Object>> result = new ArrayList<>(PASS_BUCKETS.length);
+        for (String[] b : PASS_BUCKETS) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("bucket", b[0]);
+            item.put("label", b[1]);
+            List<Map<String, Object>> list = bucketMaterials.get(b[0]);
+            item.put("count", list.size());
+            item.put("materials", list);
+            result.add(item);
+        }
+        return result;
+    }
+
+    @Override
+    public List<Map<String, Object>> materialPassRateTrend(boolean keyOnly, List<String> partNos, String startYm, String endYm) {
+        String from = (startYm != null && !startYm.isBlank()) ? safeYm(startYm) : YearMonth.now().minusMonths(11).toString();
+        String to = (endYm != null && !endYm.isBlank()) ? safeYm(endYm) : YearMonth.now().toString();
+        boolean hasPartNos = partNos != null && !partNos.isEmpty();
+        // 明确指定对比物料时拉全量(含非关键物料),否则按 keyOnly 过滤
+        List<Map<String, Object>> rows = materialMonthlyRates(hasPartNos ? false : keyOnly, from, to);
+
+        // 目标物料集合 = 默认集合(关键物料或合格率最低 8 个) + 追加对比物料
+        Set<String> targets = new LinkedHashSet<>();
+        if (keyOnly) {
+            // 默认:全部关键物料(rows 可能为全量,按 is_key_part 过滤)
+            for (Map<String, Object> r : rows) {
+                if (toLong(r.get("is_key_part")) == 1) targets.add(String.valueOf(r.get("part_no")));
+            }
+        } else {
+            // 默认:合格率最低的 8 个物料(避免线条过多,聚焦问题物料)
+            Map<String, long[]> agg = new LinkedHashMap<>();
+            for (Map<String, Object> r : rows) {
+                String pn = String.valueOf(r.get("part_no"));
+                long[] v = agg.computeIfAbsent(pn, k -> new long[2]);
+                v[0] += toLong(r.get("total"));
+                v[1] += toLong(r.get("pass"));
+            }
+            agg.entrySet().stream()
+                    .sorted((a, b) -> passRate(a.getValue()[1], a.getValue()[0])
+                            .compareTo(passRate(b.getValue()[1], b.getValue()[0])))
+                    .limit(8)
+                    .forEach(e -> targets.add(e.getKey()));
+        }
+        // 追加对比物料(含非关键物料)
+        if (hasPartNos) {
+            for (String p : partNos) {
+                if (p != null && !p.isBlank()) targets.add(p);
+            }
+        }
+        if (targets.isEmpty()) return new ArrayList<>();
+
+        // 物料名称
+        Map<String, String> names = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            names.putIfAbsent(String.valueOf(r.get("part_no")), String.valueOf(r.get("part_name")));
+        }
+        // 月度聚合: partNo -> ym -> [total, pass]
+        Map<String, Map<String, long[]>> monthly = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            String pn = String.valueOf(r.get("part_no"));
+            String ym = String.valueOf(r.get("ym"));
+            long[] v = monthly.computeIfAbsent(pn, k -> new LinkedHashMap<>()).computeIfAbsent(ym, k -> new long[2]);
+            v[0] += toLong(r.get("total"));
+            v[1] += toLong(r.get("pass"));
+        }
+        // 遍历月份区间,缺月补 null
+        List<Map<String, Object>> result = new ArrayList<>();
+        YearMonth cursor = YearMonth.parse(from);
+        YearMonth end = YearMonth.parse(to);
+        while (!cursor.isAfter(end)) {
+            String ym = cursor.toString();
+            for (String pn : targets) {
+                Map<String, Object> point = new LinkedHashMap<>();
+                point.put("period", ym);
+                point.put("partNo", pn);
+                point.put("partName", names.getOrDefault(pn, pn));
+                long[] v = monthly.getOrDefault(pn, new LinkedHashMap<>()).get(ym);
+                point.put("passRate", v == null ? null : passRate(v[1], v[0]));
+                result.add(point);
+            }
+            cursor = cursor.plusMonths(1);
+        }
+        return result;
+    }
+
+    @Override
+    public PageResult<Map<String, Object>> materialDeterioration(boolean keyOnly, String startYm, String endYm, int page, int size) {
+        // "本月"严格取筛选截止月(默认当前月);物料在该月无来货则无"本月合格率/环比"可言,不参与劣化预警
+        String curYm = (endYm != null && !endYm.isBlank()) ? safeYm(endYm) : YearMonth.now().toString();
+        List<Map<String, Object>> rows = materialMonthlyRates(keyOnly, startYm, endYm);
+        // partNo -> ym -> [total, pass]
+        Map<String, Map<String, long[]>> monthly = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            String pn = String.valueOf(r.get("part_no"));
+            String ym = String.valueOf(r.get("ym"));
+            long[] v = monthly.computeIfAbsent(pn, k -> new LinkedHashMap<>()).computeIfAbsent(ym, k -> new long[2]);
+            v[0] += toLong(r.get("total"));
+            v[1] += toLong(r.get("pass"));
+        }
+        Map<String, String> names = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            names.putIfAbsent(String.valueOf(r.get("part_no")), String.valueOf(r.get("part_name")));
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map.Entry<String, Map<String, long[]>> e : monthly.entrySet()) {
+            String pn = e.getKey();
+            Map<String, long[]> byYm = e.getValue();
+            // 本月必须有来货,否则无"本月合格率"与"环比降幅"可言
+            long[] cur = byYm.get(curYm);
+            if (cur == null) continue;
+            BigDecimal curRate = passRate(cur[1], cur[0]);
+            // 上月 = 截止月前最近一个有来货的月份
+            BigDecimal prevRate = null;
+            BigDecimal dropPp = null;
+            List<String> yms = new ArrayList<>(byYm.keySet());
+            yms.sort(String::compareTo);
+            for (int i = yms.size() - 1; i >= 0; i--) {
+                if (yms.get(i).compareTo(curYm) < 0) {
+                    long[] prev = byYm.get(yms.get(i));
+                    prevRate = passRate(prev[1], prev[0]);
+                    dropPp = prevRate.subtract(curRate);
+                    break;
+                }
+            }
+            // 判定:跌破 95% 警戒线或环比降幅 >=5pp 严重;环比降幅 >=2pp 预警
+            String level = null;
+            String reason = null;
+            boolean severe = curRate.doubleValue() < 95;
+            if (severe) {
+                reason = "最新月合格率 " + curRate + "% 跌破 95% 警戒线";
+            }
+            if (dropPp != null && dropPp.doubleValue() >= 5) {
+                severe = true;
+                reason = "环比下降 " + dropPp + "pp";
+            }
+            if (severe) {
+                level = "严重";
+            } else if (dropPp != null && dropPp.doubleValue() >= 2) {
+                level = "预警";
+                reason = "环比下降 " + dropPp + "pp";
+            }
+            if (level == null) continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("partNo", pn);
+            item.put("partName", names.getOrDefault(pn, pn));
+            item.put("prevRate", prevRate);
+            item.put("curRate", curRate);
+            item.put("dropPp", dropPp);
+            item.put("level", level);
+            item.put("reason", reason);
+            result.add(item);
+        }
+        // 排序:严重优先,dropPp 降序
+        result.sort((a, b) -> {
+            int la = "严重".equals(a.get("level")) ? 0 : 1;
+            int lb = "严重".equals(b.get("level")) ? 0 : 1;
+            if (la != lb) return la - lb;
+            BigDecimal da = (BigDecimal) a.get("dropPp");
+            BigDecimal db = (BigDecimal) b.get("dropPp");
+            if (da == null && db == null) return 0;
+            if (da == null) return 1;
+            if (db == null) return -1;
+            return db.compareTo(da);
+        });
+        // 内存分页:page/size 1-based,越界返回空页
+        int from = (page - 1) * size;
+        if (from >= result.size()) {
+            return new PageResult<>(new ArrayList<>(), result.size(), page, size);
+        }
+        int to = Math.min(from + size, result.size());
+        return new PageResult<>(new ArrayList<>(result.subList(from, to)), result.size(), page, size);
+    }
+
+    @Override
+    public List<Map<String, Object>> materialSearch(String keyword, int limit) {
+        StringBuilder sql = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+        sql.append("SELECT part_no AS part_no, part_name AS part_name ");
+        sql.append("FROM ops.sqm_incoming_lot WHERE is_deleted = false ");
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append("AND (part_no ILIKE ? OR part_name ILIKE ?) ");
+            String like = "%" + keyword.replace("'", "''") + "%";
+            args.add(like);
+            args.add(like);
+        }
+        sql.append(orgFilter());
+        sql.append("GROUP BY part_no, part_name ORDER BY part_no LIMIT ?");
+        args.add(limit > 0 ? Math.min(limit, 50) : 20);
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql.toString(), args.toArray());
+        // 转 camelCase,对齐前端 MaterialSearchItem(partNo/partName)
+        List<Map<String, Object>> result = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("partNo", r.get("part_no"));
+            item.put("partName", r.get("part_name"));
+            result.add(item);
+        }
+        return result;
+    }
+
     // ==================== 看板私有辅助 ====================
+
+    /** 物料月度合格率聚合:一次 SQL 拉取,返回 [{part_no, part_name, ym, total, pass}] */
+    private List<Map<String, Object>> materialMonthlyRates(boolean keyOnly, String startYm, String endYm) {
+        StringBuilder sql = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+        sql.append("SELECT part_no AS part_no, part_name AS part_name, to_char(incoming_date,'YYYY-MM') AS ym, ");
+        sql.append("COUNT(*) AS total, COUNT(CASE WHEN iqc_pass = true THEN 1 END) AS pass, ");
+        sql.append("MAX(CASE WHEN is_key_part THEN 1 ELSE 0 END) AS is_key_part ");
+        sql.append("FROM ops.sqm_incoming_lot WHERE is_deleted = false ");
+        if (keyOnly) {
+            sql.append("AND is_key_part = true ");
+        }
+        appendYmFilter(sql, args, startYm, endYm);
+        sql.append(orgFilter());
+        sql.append("GROUP BY part_no, part_name, ym");
+        return jdbcTemplate.queryForList(sql.toString(), args.toArray());
+    }
+
+    /** YYYY-MM 月份范围过滤(参数绑定,ym 经 safeYm 清洗) */
+    private void appendYmFilter(StringBuilder sql, List<Object> args, String startYm, String endYm) {
+        if (startYm != null && !startYm.isBlank()) {
+            sql.append("AND to_char(incoming_date,'YYYY-MM') >= ? ");
+            args.add(safeYm(startYm));
+        }
+        if (endYm != null && !endYm.isBlank()) {
+            sql.append("AND to_char(incoming_date,'YYYY-MM') <= ? ");
+            args.add(safeYm(endYm));
+        }
+    }
 
     private List<Map<String, Object>> emptyDist() {
         List<Map<String, Object>> result = new ArrayList<>(PASS_BUCKETS.length);

@@ -53,3 +53,6 @@ qms:
   jwt:
     secret: konli-qms-local-default-secret-change-me-32bytes   # 不入库;本地兜底默认值,dev/prod 见 application-*.yml
     expiry: 28800   # 秒,8 小时(避免使用中因 30 分钟过期被强制退出)
+  # MES 落地宽表所在 schema(与 QMS 自身的 ops 不同);换库/换环境只改这里,不改动代码
+  mes:
+    schema: qms

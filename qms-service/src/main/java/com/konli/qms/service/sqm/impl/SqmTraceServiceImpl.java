@@ -25,6 +25,7 @@ import com.konli.qms.domain.sqm.mapper.SqmTraceRawDetailMapper;
 import com.konli.qms.common.security.CompanyContext;
 import com.konli.qms.service.sqm.SqmTraceService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -60,6 +61,13 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private final SqmKeyPartSnMapper sqmKeyPartSnMapper;
     private final JdbcTemplate jdbcTemplate;
     private final com.konli.qms.service.support.OrgIdResolver orgIdResolver;
+
+    /**
+     * MES 落地宽表( material_inspection / finished_goods_inspection / critical_material_binding )所在 schema。
+     * QMS 自身表固定在 ops;MES 表是外部导入的,库名/schema 名会随环境变化,故走配置,禁止再硬编码。
+     */
+    @Value("${qms.mes.schema:qms}")
+    private String mesSchema;
 
     @Override
     public void saveRelation(String parentBarcode, String childBarcode, String relationType, String orgId) {
@@ -159,20 +167,20 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         String sql;
         switch (sourceType) {
             case "finished":
-                sql = "SELECT * FROM qms.finished_goods_inspection WHERE category='成品' AND prod_batch_or_sn = ? LIMIT 1";
+                sql = "SELECT * FROM " + mesSchema + ".finished_goods_inspection WHERE category='成品' AND prod_batch_or_sn = ? LIMIT 1";
                 break;
             case "semi":
-                sql = "SELECT * FROM qms.finished_goods_inspection WHERE category='半成品' AND prod_batch_or_sn = ? LIMIT 1";
+                sql = "SELECT * FROM " + mesSchema + ".finished_goods_inspection WHERE category='半成品' AND prod_batch_or_sn = ? LIMIT 1";
                 break;
             case "critical":
                 // 绑定表节点可能以 material_barcode(被装子件) / product_barcode(父产品) / work_order_no(工单) / product_material_no(料号聚合) 任一身份命中,
                 // 全部 OR 覆盖, 避免子件节点用自身 material_barcode 查不到导致详情为空。
-                sql = "SELECT * FROM qms.critical_material_binding WHERE product_barcode = ? OR work_order_no = ? OR material_barcode = ? OR product_material_no = ? LIMIT 1";
+                sql = "SELECT * FROM " + mesSchema + ".critical_material_binding WHERE product_barcode = ? OR work_order_no = ? OR material_barcode = ? OR product_material_no = ? LIMIT 1";
                 break;
             case "material":
             default:
                 // 兼容三类键: 来料条码(material_barcode) / 物料批次号(material_batch_no) / 记录编号(record_no, 即来料批次 lot_no)
-                sql = "SELECT * FROM qms.material_inspection WHERE material_barcode = ? OR material_batch_no = ? OR record_no = ? LIMIT 1";
+                sql = "SELECT * FROM " + mesSchema + ".material_inspection WHERE material_barcode = ? OR material_batch_no = ? OR record_no = ? LIMIT 1";
                 break;
         }
         try {
@@ -271,17 +279,17 @@ public class SqmTraceServiceImpl implements SqmTraceService {
                 " 'material_inspection' AS source_table, material_name AS name, material_code AS code," +
                 " material_batch_no AS batch_no, material_barcode AS barcode, submitted_qty AS qty, unit AS unit," +
                 " inspection_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
-                " FROM qms.material_inspection";
+                " FROM " + mesSchema + ".material_inspection";
         String semiPart =
                 "SELECT 'semi' AS biz_type, prod_batch_or_sn AS biz_key, 'finished_goods_inspection' AS source_table," +
                 " product_name AS name, material_code AS code, prod_batch_or_sn AS batch_no, prod_batch_or_sn AS barcode," +
                 " inspected_qty AS qty, unit AS unit, production_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
-                " FROM qms.finished_goods_inspection WHERE category='半成品'";
+                " FROM " + mesSchema + ".finished_goods_inspection WHERE category='半成品'";
         String finishedPart =
                 "SELECT 'finished' AS biz_type, prod_batch_or_sn AS biz_key, 'finished_goods_inspection' AS source_table," +
                 " product_name AS name, material_code AS code, prod_batch_or_sn AS batch_no, prod_batch_or_sn AS barcode," +
                 " inspected_qty AS qty, unit AS unit, production_date AS node_date, plant_code AS plant_code, plant_name AS plant_name" +
-                " FROM qms.finished_goods_inspection WHERE category='成品'";
+                " FROM " + mesSchema + ".finished_goods_inspection WHERE category='成品'";
         String unionSql = materialPart + " UNION ALL " + semiPart + " UNION ALL " + finishedPart;
 
         // 外层过滤: 来源类型 + 关键字(统一列名)
@@ -339,13 +347,13 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private String sourceBaseSql(String type) {
         switch (type) {
             case "material":
-                return "qms.material_inspection";
+                return mesSchema + ".material_inspection";
             case "semi":
-                return "qms.finished_goods_inspection WHERE category='半成品'";
+                return mesSchema + ".finished_goods_inspection WHERE category='半成品'";
             case "finished":
-                return "qms.finished_goods_inspection WHERE category='成品'";
+                return mesSchema + ".finished_goods_inspection WHERE category='成品'";
             default:
-                return "qms.material_inspection";
+                return mesSchema + ".material_inspection";
         }
     }
 
@@ -360,7 +368,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         if (keyword == null || keyword.trim().isEmpty()) return out;
         String kwq = "%" + keyword.trim() + "%";
         jdbcTemplate.query(
-                "SELECT DISTINCT material_barcode FROM qms.critical_material_binding"
+                "SELECT DISTINCT material_barcode FROM " + mesSchema + ".critical_material_binding"
                         + " WHERE product_barcode ILIKE ? OR material_barcode ILIKE ?",
                 rs -> {
                     String v = rs.getString(1);
@@ -1476,7 +1484,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         String vSql = useNameFallback
                 ? "(CASE WHEN " + colV + " IS NULL OR " + colV + " = '' THEN material_name ELSE " + colV + " END) AS v"
                 : colV + " AS v";
-        String sql = "SELECT DISTINCT " + colK + " AS k, " + vSql + " FROM qms.critical_material_binding"
+        String sql = "SELECT DISTINCT " + colK + " AS k, " + vSql + " FROM " + mesSchema + ".critical_material_binding"
                 + " WHERE " + colK + " IN (" + in + ")";
         if (!useNameFallback) {
             sql += " AND " + colV + " IS NOT NULL AND " + colV + " <> ''";
@@ -1521,26 +1529,26 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         Map<String, TraceNodeTreeVO> map = new LinkedHashMap<>();
         if (barcodes.isEmpty()) return map;
         // 成品/半成品表: category 直接决定 成品/半成品
-        fillDistinct(map, "qms.finished_goods_inspection", "prod_batch_or_sn", barcodes, false, false, false);
+        fillDistinct(map, mesSchema + ".finished_goods_inspection", "prod_batch_or_sn", barcodes, false, false, false);
         Set<String> rest = new LinkedHashSet<>(barcodes);
         rest.removeAll(map.keySet());
         // 绑定表 product_material_no 聚合节点: 产品料号(用 product_name 作名称, 此列在绑定表即自身名)
-        fillDistinct(map, "qms.critical_material_binding", "product_material_no", rest, true, false, false);
+        fillDistinct(map, mesSchema + ".critical_material_binding", "product_material_no", rest, true, false, false);
         rest.removeAll(map.keySet());
         // 绑定表 material_barcode: 优先于 product_barcode! 一个条码在绑定表里可能既是"被装件"(material_barcode)
         // 又是"装配者"(product_barcode)。被装件身份(category=半成品/来料)才是它在父产品构成里的真实角色,
         // 必须先取, 否则会被 product_barcode 步取到它装配的某个子件行(可能 category=来料)而误标类型/错名。
-        fillDistinct(map, "qms.critical_material_binding", "material_barcode", rest, false, false, true);
+        fillDistinct(map, mesSchema + ".critical_material_binding", "material_barcode", rest, false, false, true);
         rest.removeAll(map.keySet());
         // 绑定表 product_barcode: 兜底(主表无此条码、且未作为被装件出现时). 该行列的 product_name 是"父产品名",
         // 非自身名, bindingFallback=true 让名称取 material_name/自身。
-        fillDistinct(map, "qms.critical_material_binding", "product_barcode", rest, false, false, true);
+        fillDistinct(map, mesSchema + ".critical_material_binding", "product_barcode", rest, false, false, true);
         rest.removeAll(map.keySet());
         // 物料表 material_barcode: 兜底(绑定表也无此条码时), 来料(无 category 列, 默认 material)
-        fillDistinct(map, "qms.material_inspection", "material_barcode", rest, false, true, false);
+        fillDistinct(map, mesSchema + ".material_inspection", "material_barcode", rest, false, true, false);
         rest.removeAll(map.keySet());
         // 物料批次
-        fillDistinct(map, "qms.material_inspection", "material_batch_no", rest, false, true, false);
+        fillDistinct(map, mesSchema + ".material_inspection", "material_batch_no", rest, false, true, false);
         rest.removeAll(map.keySet());
         // 源表缺失 material_barcode 的子件: 上游/下游邻居以 material_name 作合成 key 兜底进入 rest,
         // 此处按 material_name 从绑定表查 material_barcode 为空的行, 生成节点并标注 noBarcode=true(不编造条码)。
@@ -1553,7 +1561,7 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     private void fillByNameFallback(Map<String, TraceNodeTreeVO> map, Set<String> names) {
         if (names.isEmpty()) return;
         String in = inPlaceholders(names.size());
-        String sql = "SELECT DISTINCT ON (material_name) * FROM qms.critical_material_binding"
+        String sql = "SELECT DISTINCT ON (material_name) * FROM " + mesSchema + ".critical_material_binding"
                 + " WHERE material_name IN (" + in + ") AND (material_barcode IS NULL OR material_barcode = '')";
         jdbcTemplate.query(sql, rs -> {
             Map<String, Object> row = new LinkedHashMap<>();
@@ -1691,12 +1699,12 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         Set<String> seeds = new LinkedHashSet<>();
         try {
             seeds.addAll(jdbcTemplate.queryForList(
-                    "SELECT prod_batch_or_sn FROM qms.finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
+                    "SELECT prod_batch_or_sn FROM " + mesSchema + ".finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
                     String.class, batchNo, batchNo));
         } catch (EmptyResultDataAccessException ignored) {}
         try {
             seeds.addAll(jdbcTemplate.queryForList(
-                    "SELECT material_barcode FROM qms.material_inspection WHERE material_batch_no = ? OR material_barcode = ?",
+                    "SELECT material_barcode FROM " + mesSchema + ".material_inspection WHERE material_batch_no = ? OR material_barcode = ?",
                     String.class, batchNo, batchNo));
         } catch (EmptyResultDataAccessException ignored) {}
         if (seeds.isEmpty()) {
@@ -1712,20 +1720,20 @@ public class SqmTraceServiceImpl implements SqmTraceService {
     @Override
     public List<String> listProductionOrders(String orgId, String keyword, Integer limit) {
         // 工装派工 / 不良登记等场景的"工单号"下拉数据源:
-        // 真实生产工单号来自 MES 落地宽表(analyze2026.finished_goods_inspection.production_order_no
-        // 与 analyze2026.critical_material_binding.work_order_no),二者并集去重。
+        // 真实生产工单号来自 MES 落地宽表({mesSchema}.finished_goods_inspection.production_order_no
+        // 与 {mesSchema}.critical_material_binding.work_order_no),二者并集去重;schema 由 qms.mes.schema 配置。
         // ops.sqm_trace_node 为废表(无数据),不可作为数据源。MES 宽表无 org_id,故不做组织隔离。
         // keyword 可选(前缀/包含匹配,防前端一次性渲染 2.8 万条 DOM 卡死);limit 默认 200 上限保护。
         int top = (limit == null || limit <= 0) ? 200 : Math.min(limit, 500);
         StringBuilder sql = new StringBuilder("SELECT DISTINCT wo FROM (")
-                .append("SELECT production_order_no AS wo FROM analyze2026.finished_goods_inspection ")
+                .append("SELECT production_order_no AS wo FROM ").append(mesSchema).append(".finished_goods_inspection ")
                 .append("WHERE production_order_no IS NOT NULL AND production_order_no <> '' ");
         List<Object> args = new java.util.ArrayList<>();
         if (keyword != null && !keyword.isBlank()) {
             sql.append("AND production_order_no ILIKE ? ");
             args.add("%" + keyword.trim() + "%");
         }
-        sql.append("UNION SELECT work_order_no AS wo FROM analyze2026.critical_material_binding ")
+        sql.append("UNION SELECT work_order_no AS wo FROM ").append(mesSchema).append(".critical_material_binding ")
                 .append("WHERE work_order_no IS NOT NULL AND work_order_no <> '' ");
         if (keyword != null && !keyword.isBlank()) {
             sql.append("AND work_order_no ILIKE ? ");
@@ -1750,12 +1758,12 @@ public class SqmTraceServiceImpl implements SqmTraceService {
         Set<String> seeds = new LinkedHashSet<>();
         try {
             seeds.addAll(jdbcTemplate.queryForList(
-                    "SELECT material_barcode FROM qms.material_inspection WHERE material_batch_no = ? OR record_no = ?",
+                    "SELECT material_barcode FROM " + mesSchema + ".material_inspection WHERE material_batch_no = ? OR record_no = ?",
                     String.class, lotNo, lotNo));
         } catch (EmptyResultDataAccessException ignored) {}
         try {
             seeds.addAll(jdbcTemplate.queryForList(
-                    "SELECT prod_batch_or_sn FROM qms.finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
+                    "SELECT prod_batch_or_sn FROM " + mesSchema + ".finished_goods_inspection WHERE prod_batch_or_sn = ? OR production_order_no = ?",
                     String.class, lotNo, lotNo));
         } catch (EmptyResultDataAccessException ignored) {}
         if (seeds.isEmpty()) {

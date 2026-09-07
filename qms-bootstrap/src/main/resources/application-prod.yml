@@ -36,6 +36,9 @@ qms:
   jwt:
     secret: ${QMS_JWT_SECRET}             # 生产必须通过环境变量注入(未设则启动失败)
     expiry: 28800
+  # MES 宽表 schema(生产按实际导入库调整,可用 QMS_MES_SCHEMA 环境变量覆盖)
+  mes:
+    schema: ${QMS_MES_SCHEMA:qms}
 
 logging:
   level:

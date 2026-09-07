@@ -1,5 +1,6 @@
 package com.konli.qms.api.sqm.controller;
 
+import com.konli.qms.common.api.PageResult;
 import com.konli.qms.common.api.R;
 import com.konli.qms.service.sqm.SqmAnalysisService;
 import lombok.RequiredArgsConstructor;
@@ -112,5 +113,49 @@ public class SqmAnalysisController {
             @RequestParam(required = false) String level,
             @RequestParam(required = false) String keyword) {
         return R.ok(sqmAnalysisService.deliveryVsPass(level, keyword));
+    }
+
+    // ==================== 物料看板:三聚合 ====================
+
+    /** 物料合格率分布:五档分桶,keyOnly=true 仅关键物料 */
+    @GetMapping("/material/pass-rate-dist")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> materialPassRateDist(
+            @RequestParam(required = false, defaultValue = "true") boolean keyOnly,
+            @RequestParam(required = false) String startYm,
+            @RequestParam(required = false) String endYm) {
+        return R.ok(sqmAnalysisService.materialPassRateDist(keyOnly, startYm, endYm));
+    }
+
+    /** 重点物料合格率趋势:keyOnly 仅关键物料,partNos 追加对比 */
+    @GetMapping("/material/pass-rate-trend")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> materialPassRateTrend(
+            @RequestParam(required = false, defaultValue = "true") boolean keyOnly,
+            @RequestParam(required = false) List<String> partNos,
+            @RequestParam(required = false) String startYm,
+            @RequestParam(required = false) String endYm) {
+        return R.ok(sqmAnalysisService.materialPassRateTrend(keyOnly, partNos, startYm, endYm));
+    }
+
+    /** 物料搜索:按 partNo/partName 模糊匹配去重,供看板追加对比下拉远程搜索 */
+    @GetMapping("/material/search")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<List<Map<String, Object>>> materialSearch(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false, defaultValue = "20") int limit) {
+        return R.ok(sqmAnalysisService.materialSearch(keyword, limit));
+    }
+
+    /** 物料劣化预警:跌破95%警戒线或环比降幅>=2pp 预警、>=5pp 严重;分页返回 */
+    @GetMapping("/material/deterioration")
+    @PreAuthorize("hasAuthority('sqm.supplier.list')")
+    public R<PageResult<Map<String, Object>>> materialDeterioration(
+            @RequestParam(required = false, defaultValue = "true") boolean keyOnly,
+            @RequestParam(required = false) String startYm,
+            @RequestParam(required = false) String endYm,
+            @RequestParam(required = false, defaultValue = "1") int page,
+            @RequestParam(required = false, defaultValue = "20") int size) {
+        return R.ok(sqmAnalysisService.materialDeterioration(keyOnly, startYm, endYm, page, size));
     }
 }

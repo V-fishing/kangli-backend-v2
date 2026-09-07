@@ -32,6 +32,9 @@ minio:
 qms:
   jwt:
     secret: konli-qms-dev-default-secret-change-me-please-32bytes
+  # MES 宽表 schema(可用 QMS_MES_SCHEMA 环境变量覆盖)
+  mes:
+    schema: ${QMS_MES_SCHEMA:qms}
 
 logging:
   level:
